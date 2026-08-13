@@ -57,6 +57,9 @@ wxString web_base_url()
 
 } // namespace
 
+const char* PluginWebDialog::bridge_js() { return ORCA_BRIDGE_JS; }
+wxString    PluginWebDialog::base_url() { return web_base_url(); }
+
 PluginWebDialog::PluginWebDialog(wxWindow*          parent,
                                  const wxString&    title,
                                  const std::string& html,

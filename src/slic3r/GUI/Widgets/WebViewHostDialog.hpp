@@ -53,6 +53,11 @@ public:
     static std::string theme_user_script();
     static std::string plugin_defaults_user_script();
 
+    // JS that re-themes an already-loaded document in place, for hosts that outlive
+    // a theme change. A dialog is closed and reopened, so it never needed this; a
+    // docked pane stays up across the switch.
+    static std::string theme_apply_js();
+
 protected:
     wxWebView* browser() const { return m_browser; }
 

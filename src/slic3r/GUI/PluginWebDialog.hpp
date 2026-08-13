@@ -24,6 +24,12 @@ namespace Slic3r { namespace GUI {
 class PluginWebDialog : public Slic3r::GUI::WebViewHostDialog
 {
 public:
+    // The page-side contract for plugin HTML, shared with the docked pane
+    // (PluginWebPanel). A plugin's page has to behave the same in a floating
+    // window and a dock, so neither host may own these outright.
+    static const char* bridge_js();      // window.orca
+    static wxString    base_url();       // file:// base for SetPage
+
     using MessageHandler = std::function<void(const nlohmann::json& data)>;
     using SubmitHandler  = std::function<void(const nlohmann::json& data)>;
     using CloseHandler   = std::function<void()>;

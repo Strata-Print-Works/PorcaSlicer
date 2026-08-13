@@ -87,6 +87,8 @@ std::string WebViewHostDialog::theme_user_script()
         "if(document.documentElement)document.documentElement.setAttribute('data-orca-theme',theme);");
 }
 
+std::string WebViewHostDialog::theme_apply_js() { return host_theme_apply_js(); }
+
 std::string WebViewHostDialog::plugin_defaults_user_script()
 {
     std::string css;
