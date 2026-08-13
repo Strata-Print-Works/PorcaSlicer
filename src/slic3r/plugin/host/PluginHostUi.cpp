@@ -360,6 +360,58 @@ py::object ui_create_window(const std::string& html, const std::string& title, i
     return py::cast(UiWindowHandle{new_id});
 }
 
+// Plugins are loaded about a second before the main frame is built, so a panel
+// asked for from a capability's on_load has nothing to dock into yet. Hold the
+// request until the plater exists rather than failing it. Idle-driven: the first
+// idle event is already past frame construction, and unlike a timer it costs
+// nothing while waiting.
+// --------------------------------------------------------------------------
+class PlaterReadyHook : public wxEvtHandler
+{
+public:
+    using Ready = std::function<void(GUI::Plater*)>;
+
+    // Runs `fn` immediately if the plater is already up, else on the first idle
+    // after it appears. MAIN-THREAD ONLY.
+    static void run(Ready fn)
+    {
+        if (GUI::Plater* plater = GUI::wxGetApp().plater()) {
+            fn(plater);
+            return;
+        }
+        new PlaterReadyHook(std::move(fn)); // owns itself until it fires
+    }
+
+private:
+    // A runaway guard, not a deadline: idle fires freely once the loop is up, so
+    // this is only reached if the plater never arrives at all.
+    static constexpr int MAX_IDLES = 2000;
+
+    explicit PlaterReadyHook(Ready fn) : m_fn(std::move(fn))
+    {
+        wxTheApp->Bind(wxEVT_IDLE, &PlaterReadyHook::on_idle, this);
+    }
+
+    void on_idle(wxIdleEvent& evt)
+    {
+        evt.Skip();
+        GUI::Plater* plater = GUI::wxGetApp().plater();
+        if (plater == nullptr && ++m_idles < MAX_IDLES)
+            return;
+
+        wxTheApp->Unbind(wxEVT_IDLE, &PlaterReadyHook::on_idle, this);
+        if (plater != nullptr)
+            m_fn(plater);
+        else
+            BOOST_LOG_TRIVIAL(error) << "orca.host.ui: gave up waiting for the plater";
+        // Not `delete this` here: the handler is still on the stack of its own event.
+        wxTheApp->CallAfter([this]() { delete this; });
+    }
+
+    Ready m_fn;
+    int   m_idles{0};
+};
+
 // orca.host.ui.create_docked_panel
 // --------------------------------------------------------------------------
 py::object ui_create_docked_panel(const std::string& html, const std::string& title, const std::string& side,
@@ -405,15 +457,23 @@ py::object ui_create_docked_panel(const std::string& html, const std::string& ti
         }
         auto on_destroyed = [new_id]() { UiRegistry::instance().remove(new_id); };
 
-        auto* panel = GUI::PluginWebPanel::create_docked(GUI::wxGetApp().plater(), wxString::FromUTF8(title),
-                                                         html, side, w, std::move(msg_adapter),
-                                                         std::move(on_close), std::move(on_destroyed));
-        if (panel == nullptr) {
-            // No plater to dock into; drop the reservation so is_open() reports the truth.
-            UiRegistry::instance().remove(new_id);
-            return;
-        }
-        UiRegistry::instance().bind(new_id, panel, plugin_key);
+        PlaterReadyHook::run([new_id, plugin_key, html, title, side, w, msg_adapter = std::move(msg_adapter),
+                              on_close = std::move(on_close),
+                              on_destroyed = std::move(on_destroyed)](GUI::Plater* plater) mutable {
+            // Torn down while waiting for the plater.
+            if (!UiRegistry::instance().is_open(new_id))
+                return;
+
+            auto* panel = GUI::PluginWebPanel::create_docked(plater, wxString::FromUTF8(title), html, side, w,
+                                                             std::move(msg_adapter), std::move(on_close),
+                                                             std::move(on_destroyed));
+            if (panel == nullptr) {
+                // Nothing to dock into; drop the reservation so is_open() reports the truth.
+                UiRegistry::instance().remove(new_id);
+                return;
+            }
+            UiRegistry::instance().bind(new_id, panel, plugin_key);
+        });
     });
 
     return py::cast(UiWindowHandle{new_id});
@@ -563,7 +623,8 @@ void PluginHostUi::RegisterBindings(pybind11::module_& host)
            py::arg("on_close") = py::none(),
            "Dock an HTML panel into the plater workspace and return a UiWindow. side is "
            "\"left\"|\"right\"|\"top\"|\"bottom\"; width is the initial size along that axis in pixels. "
-           "The user can resize it, drag it to another edge, or float it. The page uses the same "
+           "Safe to call from a capability's on_load: the panel waits for the plater to exist "
+           "rather than failing. The user can resize it, drag it to another edge, or float it. The page uses the same "
            "window.orca bridge as create_window(), except that submit() is delivered to on_message "
            "(a docked pane has no modal result). Closing the pane fires on_close.");
 
