@@ -6,6 +6,7 @@
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 
+#include <libslic3r/AppConfig.hpp>
 #include <libslic3r/Utils.hpp>
 
 #include <boost/filesystem.hpp>
@@ -14,6 +15,7 @@
 #include <wx/aui/aui.h>
 #include <wx/sizer.h>
 
+#include <algorithm>
 #include <utility>
 
 namespace Slic3r { namespace GUI {
@@ -38,28 +40,84 @@ std::string next_pane_name()
     return "orca-plugin-pane-" + std::to_string(++counter);
 }
 
-wxAuiPaneInfo pane_info(const std::string& name, const wxString& caption, const std::string& side, int width)
+bool is_vertical_dock(const std::string& side) { return side == "top" || side == "bottom"; }
+
+wxAuiPaneInfo pane_info(const std::string& name, const wxString& caption, const std::string& side, int size)
 {
     wxAuiPaneInfo info;
     info.Name(wxString::FromUTF8(name)).Caption(caption).CloseButton(true).MaximizeButton(false).PaneBorder(false);
 
-    // Sized along the docking axis; the cross-axis figure is ignored for a docked
-    // pane and only matters if the user floats it.
+    // Sized along the docking axis; the cross-axis figure only matters once the
+    // user floats the pane.
     const int em = wxGetApp().em_unit();
-    if (side == "bottom" || side == "top") {
+    if (is_vertical_dock(side)) {
         (side == "top") ? info.Top() : info.Bottom();
-        info.BestSize(wxSize(60 * em, width));
+        info.BestSize(wxSize(60 * em, size));
     } else {
         (side == "left") ? info.Left() : info.Right();
-        info.BestSize(wxSize(width, 60 * em));
+        info.BestSize(wxSize(size, 60 * em));
     }
     return info;
+}
+
+// The pane's extent along its docking axis — the only dimension the user controls
+// on a docked pane, and so the only one worth remembering.
+int dock_axis_size(const wxAuiPaneInfo& pane)
+{
+    const bool vertical = pane.dock_direction == wxAUI_DOCK_TOP || pane.dock_direction == wxAUI_DOCK_BOTTOM;
+    return vertical ? pane.rect.GetHeight() : pane.rect.GetWidth();
+}
+
+// Panel sizes live in app_config rather than the AUI perspective: panes are added
+// at runtime, long after the plater has restored its layout, so SavePerspective
+// records them and LoadPerspective then skips them as unknown.
+const char* PANEL_SIZES_KEY = "plugin_panel_sizes";
+
+// Wide enough to stay usable, narrow enough that a stale config can't wedge the
+// pane over the plate.
+constexpr int MIN_DOCK_SIZE = 180;
+constexpr int MAX_DOCK_SIZE = 1400;
+
+int saved_size(const std::string& key)
+{
+    const std::string raw = wxGetApp().app_config->get(PANEL_SIZES_KEY);
+    if (raw.empty() || key.empty())
+        return 0;
+    try {
+        const nlohmann::json sizes = nlohmann::json::parse(raw);
+        const auto           it    = sizes.find(key);
+        if (it == sizes.end() || !it->is_number_integer())
+            return 0;
+        const int size = it->get<int>();
+        return (size >= MIN_DOCK_SIZE && size <= MAX_DOCK_SIZE) ? size : 0;
+    } catch (const std::exception&) {
+        return 0; // A corrupt entry costs the remembered size, nothing more.
+    }
+}
+
+void store_size(const std::string& key, int size)
+{
+    if (key.empty())
+        return;
+    nlohmann::json sizes = nlohmann::json::object();
+    try {
+        const std::string raw = wxGetApp().app_config->get(PANEL_SIZES_KEY);
+        if (!raw.empty())
+            sizes = nlohmann::json::parse(raw);
+        if (!sizes.is_object())
+            sizes = nlohmann::json::object();
+    } catch (const std::exception&) {
+        sizes = nlohmann::json::object();
+    }
+    sizes[key] = size;
+    wxGetApp().app_config->set(PANEL_SIZES_KEY, sizes.dump());
 }
 
 } // namespace
 
 PluginWebPanel* PluginWebPanel::create_docked(wxWindow*          host,
                                               const wxString&    caption,
+                                              const std::string& key,
                                               const std::string& html,
                                               const std::string& side,
                                               int                width,
@@ -75,7 +133,7 @@ PluginWebPanel* PluginWebPanel::create_docked(wxWindow*          host,
         return nullptr;
     }
 
-    auto* panel = new PluginWebPanel(host, html, std::move(on_message), std::move(on_close),
+    auto* panel = new PluginWebPanel(host, key, html, std::move(on_message), std::move(on_close),
                                      std::move(on_destroyed));
     if (!panel->create_webview()) {
         // No on_destroyed yet from the caller's point of view: the panel never docked.
@@ -84,17 +142,34 @@ PluginWebPanel* PluginWebPanel::create_docked(wxWindow*          host,
         return nullptr;
     }
 
-    mgr->AddPane(panel, pane_info(next_pane_name(), caption, side, width));
+    const int remembered = saved_size(key);
+    const int size       = std::clamp(remembered > 0 ? remembered : width, MIN_DOCK_SIZE, MAX_DOCK_SIZE);
+    const bool vertical  = is_vertical_dock(side);
+
+    mgr->AddPane(panel, pane_info(next_pane_name(), caption, side, size));
+
+    // wxAUI sizes a new dock from the pane's MINIMUM, not its best size, and a
+    // webview reports a tiny best size — so the pane arrives as a sliver. Pin the
+    // minimum for one layout pass to force the width, then relax it so the user
+    // can still drag the pane narrower than it opened.
+    wxAuiPaneInfo& pane = mgr->GetPane(panel);
+    pane.MinSize(vertical ? wxSize(-1, size) : wxSize(size, -1));
     mgr->Update();
+    pane.MinSize(vertical ? wxSize(-1, MIN_DOCK_SIZE) : wxSize(MIN_DOCK_SIZE, -1));
+    mgr->Update();
+
+    panel->m_docked_size = size;
     return panel;
 }
 
 PluginWebPanel::PluginWebPanel(wxWindow*          parent,
+                               const std::string& key,
                                const std::string& html,
                                MessageHandler     on_message,
                                CloseHandler       on_close,
                                CloseHandler       on_destroyed)
     : wxPanel(parent, wxID_ANY)
+    , m_key(key)
     , m_html(html)
     , m_host(parent)
     , m_on_message(std::move(on_message))
@@ -109,6 +184,31 @@ PluginWebPanel::PluginWebPanel(wxWindow*          parent,
     // plugin believing its panel is still open. Handled on the managed window, where
     // wxAuiManager delivers manager events, and filtered to this pane.
     m_host->Bind(wxEVT_AUI_PANE_CLOSE, &PluginWebPanel::on_pane_close, this);
+
+    // Track the size the user drags the pane to, the way the plater tracks its
+    // sidebar: there is no resize-finished event, so idle is where it is noticed.
+    Bind(wxEVT_IDLE, &PluginWebPanel::on_idle, this);
+}
+
+void PluginWebPanel::on_idle(wxIdleEvent& evt)
+{
+    evt.Skip();
+    wxAuiManager* mgr = wxAuiManager::GetManager(this);
+    if (mgr == nullptr)
+        return;
+    wxAuiPaneInfo& pane = mgr->GetPane(this);
+    if (!pane.IsOk() || !pane.IsShown() || !pane.IsDocked())
+        return;
+
+    const int size = dock_axis_size(pane);
+    if (size <= 0 || size == m_docked_size)
+        return;
+    m_docked_size = size;
+
+    // Keep best_size in step so a later re-layout does not undo the drag.
+    const bool vertical = pane.dock_direction == wxAUI_DOCK_TOP || pane.dock_direction == wxAUI_DOCK_BOTTOM;
+    pane.BestSize(vertical ? wxSize(pane.best_size.GetWidth(), size) : wxSize(size, pane.best_size.GetHeight()));
+    store_size(m_key, size);
 }
 
 bool PluginWebPanel::create_webview()

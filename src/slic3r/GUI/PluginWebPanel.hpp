@@ -38,8 +38,11 @@ public:
     // on_close fires on a user- or page-initiated close (the pane's X, or
     // window.orca.close()); on_destroyed runs from the destructor on every path and
     // must touch host-side state only (no Python).
+    // `key` identifies the pane across sessions so the size the user drags it to
+    // is what it opens at next time; `width` is only the first-run default.
     static PluginWebPanel* create_docked(wxWindow*          host,
                                          const wxString&    caption,
+                                         const std::string& key,
                                          const std::string& html,
                                          const std::string& side,
                                          int                width,
@@ -59,6 +62,7 @@ public:
 
 private:
     PluginWebPanel(wxWindow*          parent,
+                   const std::string& key,
                    const std::string& html,
                    MessageHandler     on_message,
                    CloseHandler       on_close,
@@ -70,14 +74,17 @@ private:
     void on_script_message_event(wxWebViewEvent& event);
     void on_webview_recreated(wxCommandEvent& event);
     void on_pane_close(wxAuiManagerEvent& event);
+    void on_idle(wxIdleEvent& event);
     void load_plugin_content();
     void close_and_destroy();
     void fire_close();
     void detach_from_manager();
 
+    std::string    m_key;
     std::string    m_html;
     wxWebView*     m_browser{nullptr};
     wxWindow*      m_host{nullptr};
+    int            m_docked_size{0};
     bool           m_content_loaded{false};
     bool           m_open{true};
     bool           m_close_fired{false};

@@ -3,6 +3,7 @@
 #include "slic3r/plugin/PluginAuditManager.hpp"
 #include "slic3r/plugin/PythonInterpreter.hpp" // PythonGILState
 #include "slic3r/plugin/PluginFsUtils.hpp"   // json_to_py / py_to_json
+#include "slic3r/plugin/PluginUiThread.hpp"  // run_on_ui_blocking
 
 #include <slic3r/GUI/GUI_App.hpp>
 #include <slic3r/GUI/MainFrame.hpp>
@@ -175,42 +176,6 @@ private:
     std::unordered_map<int, std::string> m_owners;
     int                                  m_next_id{1};
 };
-
-// --------------------------------------------------------------------------
-// Run a (pure C++/wx) callable on the main/UI thread, blocking the caller until
-// it completes, with the GIL released across the wait. If already on the main
-// thread, run inline (also with the GIL released so other Python threads run).
-// --------------------------------------------------------------------------
-template<typename Fn>
-auto run_on_ui_blocking(Fn&& fn) -> std::invoke_result_t<Fn&>
-{
-    using R = std::invoke_result_t<Fn&>;
-    if (wxTheApp == nullptr)
-        throw std::runtime_error("OrcaSlicer application is not initialized");
-
-    if (wxIsMainThread()) {
-        py::gil_scoped_release nogil;
-        return fn();
-    }
-
-    std::promise<R> prom;
-    std::future<R>  fut = prom.get_future();
-
-    py::gil_scoped_release nogil;
-    GUI::wxGetApp().CallAfter([&prom, &fn]() {
-        try {
-            if constexpr (std::is_void_v<R>) {
-                fn();
-                prom.set_value();
-            } else {
-                prom.set_value(fn());
-            }
-        } catch (...) {
-            prom.set_exception(std::current_exception());
-        }
-    });
-    return fut.get();
-}
 
 wxWindow* ui_parent()
 {
@@ -464,8 +429,12 @@ py::object ui_create_docked_panel(const std::string& html, const std::string& ti
             if (!UiRegistry::instance().is_open(new_id))
                 return;
 
-            auto* panel = GUI::PluginWebPanel::create_docked(plater, wxString::FromUTF8(title), html, side, w,
-                                                             std::move(msg_adapter), std::move(on_close),
+            // Stable across sessions so the pane reopens at the size the user left
+            // it: the plugin plus its own title for the panel, not the runtime id.
+            const std::string size_key = plugin_key + "/" + title;
+
+            auto* panel = GUI::PluginWebPanel::create_docked(plater, wxString::FromUTF8(title), size_key, html,
+                                                             side, w, std::move(msg_adapter), std::move(on_close),
                                                              std::move(on_destroyed));
             if (panel == nullptr) {
                 // Nothing to dock into; drop the reservation so is_open() reports the truth.
