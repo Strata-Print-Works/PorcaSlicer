@@ -8,6 +8,7 @@ namespace Slic3r::host_bindings {
 
 void register_geometry(pybind11::module_& host); // PluginHostGeometry.cpp
 void register_mesh(pybind11::module_& host);     // PluginHostMesh.cpp
+void register_measure(pybind11::module_& host);  // PluginHostMeasure.cpp
 void register_presets(pybind11::module_& host);  // PluginHostPresets.cpp
 void register_model(pybind11::module_& host);    // PluginHostModel.cpp
 void register_app(pybind11::module_& host);      // PluginHostApp.cpp
