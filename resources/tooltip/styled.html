@@ -5,6 +5,22 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
         <link rel="stylesheet" href="./main.css" />
         <script src="./main.js"></script>
+        <style>
+            /* An action appended to the wiki text, so it is set apart from it rather
+               than reading as one more line of the article. */
+            a.orca-ask {
+                display: block;
+                margin-top: 1.2em;
+                padding-top: 0.6em;
+                border-top: 1px solid rgba(255, 255, 255, 0.15);
+                font-size: 0.9em;
+                color: #4DB6AC;
+                text-decoration: none;
+            }
+            a.orca-ask:hover {
+                text-decoration: underline;
+            }
+        </style>
     </head>
     <body style="background-color: #313B3E;">
         <div class="container markdown-body" id="contents"></div>
@@ -15,6 +31,19 @@
             document.title = height.toFixed()
         })
         resizeOberver.observe(document.querySelector('#contents'))
+        // The title is this page's only channel back into C++ (MarkdownTip::OnTitleChanged),
+        // which the observer above already uses for the height. The counter is what makes a
+        // second click on the same link a different title, and so a second event; the
+        // observer overwriting the title afterwards is harmless, C++ has read it by then.
+        // Delegated because #contents is replaced wholesale on every tip.
+        let askSeq = 0
+        document.addEventListener('click', (event) => {
+            const link = event.target.closest ? event.target.closest('a.orca-ask') : null
+            if (!link) return
+            event.preventDefault()
+            if (link.dataset.key)
+                document.title = 'ask:' + link.dataset.key + ':' + (++askSeq)
+        })
         window.showMarkdownFile = function (file) {
             $.get(file, function( data ) {
                 window.showMarkdown(encodeURIComponent(data));

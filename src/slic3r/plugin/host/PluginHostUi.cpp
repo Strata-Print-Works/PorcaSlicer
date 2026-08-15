@@ -7,6 +7,7 @@
 
 #include <slic3r/GUI/GUI_App.hpp>
 #include <slic3r/GUI/MainFrame.hpp>
+#include <slic3r/GUI/MarkdownTip.hpp>
 #include <slic3r/GUI/MsgDialog.hpp>
 #include <slic3r/GUI/PluginProgressDialog.hpp>
 #include <slic3r/GUI/PluginWebDialog.hpp>
@@ -539,6 +540,41 @@ void progress_close(int id)
     });
 }
 
+// --------------------------------------------------------------------------
+// orca.host.ui.on_setting_ask
+// --------------------------------------------------------------------------
+// The setting popover has a single ask link, so a single slot; this records who
+// filled it so unload can empty it again. Registration is marshaled to the UI
+// thread, which is also where the teardown below and MarkdownTip itself run, so
+// the slot needs no lock of its own.
+std::string ask_owner;
+
+void ui_on_setting_ask(py::object callback)
+{
+    CallablePtr       holder     = make_holder(std::move(callback));
+    const std::string plugin_key = PluginAuditManager::instance().current_plugin();
+
+    run_on_ui_blocking([&]() {
+        if (!holder) {
+            ask_owner.clear();
+            GUI::MarkdownTip::SetAskHandler({});
+            return;
+        }
+        ask_owner = plugin_key;
+        GUI::MarkdownTip::SetAskHandler([holder](std::string key) {
+            PythonGILState gil;
+            if (!gil)
+                return;
+            try {
+                holder->fn(std::move(key));
+            } catch (py::error_already_set& e) {
+                BOOST_LOG_TRIVIAL(error) << "orca.host.ui on_setting_ask handler raised: " << e.what();
+                PyErr_Clear();
+            }
+        });
+    });
+}
+
 } // namespace
 
 void PluginHostUi::RegisterBindings(pybind11::module_& host)
@@ -633,6 +669,12 @@ void PluginHostUi::RegisterBindings(pybind11::module_& host)
     ui.def("create_progress_dialog", &ui_create_progress_dialog, py::arg("title"), py::arg("message"),
            py::arg("maximum") = 100, py::arg("style") = wxPD_APP_MODAL | wxPD_AUTO_HIDE,
            "Create a native progress dialog and return a ProgressDialog handle.");
+
+    ui.def("on_setting_ask", &ui_on_setting_ask, py::arg("callback"),
+           "Register callback(setting_key) for the \"ask the copilot\" link in the settings tooltip, or "
+           "None to unregister. There is one registration for the whole app: registering replaces any "
+           "previous one, and unloading the plugin drops it. The callback runs on the UI thread with the "
+           "GIL held, so keep it short — hand slow work to a thread and answer from there.");
 }
 
 void PluginHostUi::close_windows_for_plugin(const std::string& plugin_key)
@@ -641,6 +683,11 @@ void PluginHostUi::close_windows_for_plugin(const std::string& plugin_key)
         return;
 
     auto teardown = [plugin_key]() {
+        // Left in place, the handler would call into a module that is being finalized.
+        if (ask_owner == plugin_key) {
+            ask_owner.clear();
+            GUI::MarkdownTip::SetAskHandler({});
+        }
         // Destroy() bypasses wxEVT_CLOSE, so the plugin's on_close is not fired on
         // forced teardown (intended); the resource destructor still cleans the registry.
         for (auto* window : UiRegistry::instance().take_for_plugin(plugin_key)) {

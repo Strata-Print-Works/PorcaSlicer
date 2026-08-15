@@ -267,6 +267,23 @@ void MarkdownTip::OnLoaded(wxWebViewEvent& event)
 {
 }
 
+// Set by the plugin host, so that the tip itself carries no dependency on plugins.
+static std::function<void(std::string)> ask_handler;
+
+// The page decides what goes in the title, so only something shaped like a setting
+// key is ever passed on: this ends up in a plugin, not in our own hands.
+static bool is_setting_key(std::string const &key)
+{
+    if (key.empty())
+        return false;
+    for (char c : key)
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'))
+            return false;
+    return true;
+}
+
+void MarkdownTip::SetAskHandler(std::function<void(std::string)> handler) { ask_handler = std::move(handler); }
+
 void MarkdownTip::OnTitleChanged(wxWebViewEvent& event)
 {
     if (!_pendingScript.empty()) {
@@ -274,10 +291,27 @@ void MarkdownTip::OnTitleChanged(wxWebViewEvent& event)
         _pendingScript.clear();
         return;
     }
+    // The page reports a click on its "ask the copilot" link as "ask:<key>:<n>", the
+    // title being the only channel it has back here (resources/tooltip/styled.html).
+    // The counter only exists so that clicking the same link twice is two titles.
+    const wxString title = event.GetString();
+    if (title.StartsWith("ask:")) {
+        const std::string message = into_u8(title);
+        const size_t      last    = message.rfind(':');
+        const std::string key     = last > 4 ? message.substr(4, last - 4) : std::string();
+        if (is_setting_key(key)) {
+            // The tip would otherwise sit over the panel the click is meant to reach.
+            _hide = true;
+            this->Hide();
+            if (ask_handler)
+                ask_handler(key);
+        }
+        return;
+    }
 #ifdef __linux__
     wxString str = "0";
 #else
-    wxString str = event.GetString();
+    wxString str = title;
 #endif
     double height = 0;
     if (str.ToDouble(&height)) {

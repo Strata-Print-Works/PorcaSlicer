@@ -5,6 +5,9 @@
 #include <wx/timer.h>
 #include <wx/webview.h>
 
+#include <functional>
+#include <string>
+
 
 namespace Slic3r { namespace GUI {
 
@@ -24,6 +27,11 @@ public:
     static wxWindow* AttachTo(wxWindow * parent);
 
     static wxWindow* DetachFrom(wxWindow * parent);
+
+    // Called with the setting key when the tip's page reports a click on its
+    // "ask the copilot" link, on the UI thread. One handler at a time; pass {}
+    // to clear it, which the owner must do before it goes away.
+    static void SetAskHandler(std::function<void(std::string)> handler);
 
 private:
     static MarkdownTip* markdownTip(bool create = true);
