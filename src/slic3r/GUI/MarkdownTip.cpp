@@ -297,9 +297,9 @@ MarkdownTip* MarkdownTip::markdownTip(bool create)
 
 bool MarkdownTip::ShowTip(std::string const& tip, std::string const & tooltip, wxPoint pos)
 {
-#ifdef NDEBUG
-    return false;
-#endif
+    // Upstream returns false here under NDEBUG, so this popover has never been
+    // reachable in a release build — which is why the tooltip content it reads
+    // was left unwritten. The content exists now, so let it through.
     return markdownTip()->ShowTip(pos, tip, tooltip);
 }
 
