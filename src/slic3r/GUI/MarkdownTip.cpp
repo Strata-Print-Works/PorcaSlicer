@@ -16,6 +16,19 @@ namespace Slic3r { namespace GUI {
 // Fixed width; the height follows the rendered content (see OnTitleChanged).
 static const int TIP_WIDTH = 400;
 
+// How long the tip waits before deciding the pointer has really gone, and — since
+// OnTimer re-checks by restarting — how often it looks again while the pointer is
+// still on its way. It is short on purpose: what buys the pointer time to reach the
+// tip is the region it is allowed to be in (PointerInPlay), not the length of this
+// wait, so a tip abandoned over the 3D view is still gone within a third of a second.
+static const int HIDE_DELAY = 300;
+
+// Slack around that region. The tip stands 8px clear of the row (the `gap` in Place),
+// and a hand crossing that gap does not travel in a straight line — it overshoots the
+// row it started on by a few pixels either way. Half a row's height covers the drift
+// while leaving the rows above and below out of it.
+static const int TRAVEL_SLACK = 16;
+
 // Usable bounds of whichever display holds `at`. The rect matters, not just its
 // size: a second monitor — or the menu bar on the first — puts the origin well
 // away from zero, and clamping against a bare size lands the tip in the wrong place.
@@ -137,20 +150,59 @@ wxPoint MarkdownTip::Place(wxSize const &size) const
     return {x, y};
 }
 
+// Whether the pointer is somewhere that still counts as on its way to the tip, which
+// it has to be able to reach: the tip carries a link at its foot, and the pointer only
+// gets there by leaving the label it hovered. Three places count.
+//
+//   - the tip itself, where the pointer was heading;
+//   - the row the tip belongs to. The anchor spans the whole panel, so walking right
+//     from the label across the fields and the revert icons never leaves it;
+//   - the gap between the two, which belongs to neither rect. Only the columns
+//     strictly between them: over the panel's own columns the row is all that counts,
+//     or a tall tip would keep itself alive while the pointer worked further down the
+//     same page.
+//
+// Anywhere else — another panel, the 3D view — is a departure and the tip goes.
+bool MarkdownTip::PointerInPlay() const
+{
+    if (!IsShown())
+        return false; // nothing on screen to be walking towards
+
+    const wxPoint pointer = wxGetMousePosition();
+    const wxRect  tip     = GetScreenRect();
+
+    if (wxRect(tip).Inflate(TRAVEL_SLACK).Contains(pointer))
+        return true;
+    if (wxRect(_anchor).Inflate(TRAVEL_SLACK).Contains(pointer))
+        return true;
+
+    // Both GetRight()/GetBottom() are inclusive, hence the ±1 on the far edges.
+    const int left  = std::min(_anchor.GetRight(), tip.GetRight()) + 1;
+    const int right = std::max(_anchor.GetLeft(), tip.GetLeft()) - 1;
+    if (left > right)
+        return false; // no gap: the tip could not be placed clear of the row
+    const wxRect span = _anchor.Union(tip);
+    return wxRect(left, span.GetTop(), right - left + 1, span.GetHeight()).Inflate(0, TRAVEL_SLACK).Contains(pointer);
+}
+
 bool MarkdownTip::ShowTip(wxRect const &anchor, std::string const &tip, std::string const &tooltip)
 {
     if (tip.empty()) {
         if (_tipView->GetParent() != this)
             return false;
-        if (anchor.x) {
+        // A non-zero x means the row has a tooltip of its own to show instead (see
+        // OG_CustomCtrl::OnMotion) — but not while the pointer is on its way here:
+        // the revert icons sit at the right end of the row, square in the path from
+        // the label to the tip, and a modified setting gives them a tooltip.
+        if (anchor.x && !PointerInPlay()) {
             _hide = true;
             BOOST_LOG_TRIVIAL(info) << "MarkdownTip::ShowTip: hide soon on empty tip.";
             this->Hide();
         }
         else if (!_hide) {
             _hide = true;
-            BOOST_LOG_TRIVIAL(info) << "MarkdownTip::ShowTip: start hide timer (300)...";
-            _timer->StartOnce(300);
+            BOOST_LOG_TRIVIAL(info) << "MarkdownTip::ShowTip: start hide timer (" << HIDE_DELAY << ")...";
+            _timer->StartOnce(HIDE_DELAY);
         }
         return false;
     }
@@ -334,10 +386,11 @@ void MarkdownTip::OnError(wxWebViewEvent& event)
 void MarkdownTip::OnTimer(wxTimerEvent& event)
 {
     if (_hide) {
-        wxPoint pos = ScreenToClient(wxGetMousePosition());
-        if (GetClientRect().Contains(pos)) {
+        if (PointerInPlay()) {
             BOOST_LOG_TRIVIAL(info) << "MarkdownTip::OnTimer: restart hide timer...";
-            _timer->StartOnce();
+            // Spelled out rather than StartOnce(): that reuses whatever interval ran
+            // last, which is this one only as long as nothing else starts the timer.
+            _timer->StartOnce(HIDE_DELAY);
             return;
         }
         BOOST_LOG_TRIVIAL(info) << "MarkdownTip::OnTimer: hide.";

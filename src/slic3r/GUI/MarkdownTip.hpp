@@ -47,6 +47,10 @@ private:
     // Where a tip of `size` goes for the current anchor, kept on one display.
     wxPoint Place(wxSize const &size) const;
 
+    // Whether the pointer is still on its way to the tip — on it, on the row it
+    // belongs to, or in the gap between the two — rather than gone elsewhere.
+    bool PointerInPlay() const;
+
     std::string LoadTip(std::string const &tip, std::string const &tooltip);
 
     void RunScript(std::string const& script);
