@@ -11,7 +11,9 @@ namespace Slic3r { namespace GUI {
 class MarkdownTip : public wxPopupTransientWindow
 {
 public:
-    static bool ShowTip(std::string const &tip, std::string const &tooltip, wxPoint pos);
+    // `anchor` is the screen rect the tip should sit beside — the hovered row,
+    // spanning the width of its panel, so the tip never lands on the fields.
+    static bool ShowTip(std::string const &tip, std::string const &tooltip, wxRect const &anchor);
 
     static void ExitTip();
 
@@ -32,7 +34,10 @@ private:
 
     void LoadStyle();
 
-    bool ShowTip(wxPoint pos, std::string const &tip, std::string const & tooltip);
+    bool ShowTip(wxRect const &anchor, std::string const &tip, std::string const & tooltip);
+
+    // Where a tip of `size` goes for the current anchor, kept on one display.
+    wxPoint Place(wxSize const &size) const;
 
     std::string LoadTip(std::string const &tip, std::string const &tooltip);
 
@@ -54,7 +59,7 @@ private:
     std::string _lastTip;
     std::string _pendingScript = " ";
     std::string _language;
-    wxPoint _requestPos;
+    wxRect _anchor;
     double _lastHeight = 0;
     wxTimer* _timer = nullptr;
     bool _hide = false;

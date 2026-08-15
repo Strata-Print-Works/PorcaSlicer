@@ -13,6 +13,18 @@ namespace fs = boost::filesystem;
 
 namespace Slic3r { namespace GUI {
 
+// Fixed width; the height follows the rendered content (see OnTitleChanged).
+static const int TIP_WIDTH = 400;
+
+// Usable bounds of whichever display holds `at`. The rect matters, not just its
+// size: a second monitor — or the menu bar on the first — puts the origin well
+// away from zero, and clamping against a bare size lands the tip in the wrong place.
+static wxRect display_area(wxPoint const &at)
+{
+    const int index = wxDisplay::GetFromPoint(at);
+    return wxDisplay(index == wxNOT_FOUND ? 0u : unsigned(index)).GetClientArea();
+}
+
 // CMGUO
 
 static std::string url_encode(const std::string& value) {
@@ -77,7 +89,7 @@ MarkdownTip::MarkdownTip()
     topsizer->Add(_tipView, wxSizerFlags().Expand().Proportion(1));
 
     SetSizer(topsizer);
-    SetSize({400, 300});
+    SetSize({TIP_WIDTH, 300});
 
     LoadStyle();
 
@@ -105,12 +117,32 @@ void MarkdownTip::LoadStyle()
     _lastTip.clear();
 }
 
-bool MarkdownTip::ShowTip(wxPoint pos, std::string const &tip, std::string const &tooltip)
+// The tip sits beside the hovered row, not over it, and stays on one display.
+// Preferred side is to the right of the row; it flips left when the display has
+// no room there, and clamps as a last resort so it is never partly offscreen.
+wxPoint MarkdownTip::Place(wxSize const &size) const
+{
+    const wxRect area = display_area(_anchor.GetTopLeft());
+    const int gap = 8;
+
+    int x = _anchor.GetRight() + gap;
+    if (x + size.x > area.GetRight())
+        x = _anchor.GetLeft() - gap - size.x;
+    // Both GetRight()/GetBottom() are inclusive, hence the +1 on the far edge.
+    x = std::min(std::max(x, area.GetLeft()), std::max(area.GetLeft(), area.GetRight() + 1 - size.x));
+
+    int y = _anchor.GetTop();
+    y = std::min(std::max(y, area.GetTop()), std::max(area.GetTop(), area.GetBottom() + 1 - size.y));
+
+    return {x, y};
+}
+
+bool MarkdownTip::ShowTip(wxRect const &anchor, std::string const &tip, std::string const &tooltip)
 {
     if (tip.empty()) {
         if (_tipView->GetParent() != this)
             return false;
-        if (pos.x) {
+        if (anchor.x) {
             _hide = true;
             BOOST_LOG_TRIVIAL(info) << "MarkdownTip::ShowTip: hide soon on empty tip.";
             this->Hide();
@@ -143,11 +175,8 @@ bool MarkdownTip::ShowTip(wxPoint pos, std::string const &tip, std::string const
             this->Hide();
     }
     if (_tipView->GetParent() == this) {
-        wxSize size = wxDisplay(this).GetClientArea().GetSize();
-        _requestPos = pos;
-        if (pos.y + this->GetSize().y > size.y)
-            pos.y = size.y - this->GetSize().y;
-        this->SetPosition(pos);
+        _anchor = anchor;
+        this->SetPosition(Place(this->GetSize()));
         if (tipChanged || _hide) {
             _hide = false;
             BOOST_LOG_TRIVIAL(info) << "MarkdownTip::ShowTip: start show timer (500)...";
@@ -256,14 +285,12 @@ void MarkdownTip::OnTitleChanged(wxWebViewEvent& event)
             return;
         _lastHeight = height;
         height *= 1.25; height += 50;
-        wxSize size = wxDisplay(this).GetClientArea().GetSize();
-        if (height > size.y)
-            height = size.y;
-        wxPoint pos = _requestPos;
-        if (pos.y + height > size.y)
-            pos.y = size.y - height;
-        this->SetSize({ 400, (int)height });
-        this->SetPosition(pos);
+        const wxRect area = display_area(_anchor.GetTopLeft());
+        if (height > area.GetHeight())
+            height = area.GetHeight();
+        const wxSize size{TIP_WIDTH, int(height)};
+        this->SetSize(size);
+        this->SetPosition(Place(size));
     }
 }
 void MarkdownTip::OnError(wxWebViewEvent& event)
@@ -295,12 +322,12 @@ MarkdownTip* MarkdownTip::markdownTip(bool create)
     return markdownTip;
 }
 
-bool MarkdownTip::ShowTip(std::string const& tip, std::string const & tooltip, wxPoint pos)
+bool MarkdownTip::ShowTip(std::string const& tip, std::string const & tooltip, wxRect const &anchor)
 {
     // Upstream returns false here under NDEBUG, so this popover has never been
     // reachable in a release build — which is why the tooltip content it reads
     // was left unwritten. The content exists now, so let it through.
-    return markdownTip()->ShowTip(pos, tip, tooltip);
+    return markdownTip()->ShowTip(anchor, tip, tooltip);
 }
 
 void MarkdownTip::ExitTip()

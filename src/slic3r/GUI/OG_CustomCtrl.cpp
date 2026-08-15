@@ -405,16 +405,18 @@ void OG_CustomCtrl::OnMotion(wxMouseEvent& event)
     // Set tooltips with information for each icon
     // BBS: markdown tip
     if (!markdowntip.empty()) {
-        wxWindow* window = GetGrandParent();
         assert(focusedLine);
-        wxPoint pos2 = { 250, focusedLine->rect_label.y };
-        pos2 = ClientToScreen(pos2);
-        if (MarkdownTip::ShowTip(markdowntip, into_u8(tooltip), pos2)) {
+        // Anchor on the whole hovered row, not a fixed offset into the panel:
+        // the tip goes beside the row's fields rather than on top of them.
+        const wxRect row(ClientToScreen(wxPoint(0, focusedLine->rect_label.y)),
+                         wxSize(GetSize().x, focusedLine->rect_label.height));
+        if (MarkdownTip::ShowTip(markdowntip, into_u8(tooltip), row)) {
             tooltip.clear();
         }
     }
     else {
-        MarkdownTip::ShowTip(markdowntip, "", {tooltip.empty() ? 0 : 1, 0});
+        // x is the only field read on the hide path: non-zero hides at once.
+        MarkdownTip::ShowTip(markdowntip, "", {tooltip.empty() ? 0 : 1, 0, 0, 0});
     }
     if (GetToolTipText() != tooltip)
         this->SetToolTip(tooltip);
