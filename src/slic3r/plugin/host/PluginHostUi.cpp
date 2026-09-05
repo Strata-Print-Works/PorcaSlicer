@@ -5,6 +5,9 @@
 #include "slic3r/plugin/PluginFsUtils.hpp"   // json_to_py / py_to_json
 #include "slic3r/plugin/PluginUiThread.hpp"  // run_on_ui_blocking
 
+#include <libslic3r/PresetBundle.hpp>
+
+#include <slic3r/GUI/BackgroundSlicingProcess.hpp>
 #include <slic3r/GUI/GUI_App.hpp>
 #include <slic3r/GUI/MainFrame.hpp>
 #include <slic3r/GUI/MarkdownTip.hpp>
@@ -575,6 +578,101 @@ void ui_on_setting_ask(py::object callback)
     });
 }
 
+
+// --------------------------------------------------------------------------
+// orca.host.ui.jump_to_setting
+// --------------------------------------------------------------------------
+// The counterpart to on_setting_ask: that one lets the user point at a setting
+// and ask about it, this one lets the answer point back. A model that can name
+// a setting but not show it has to describe where the field is, and a described
+// screen position is the thing it most reliably gets wrong.
+void ui_jump_to_setting(const std::string& key)
+{
+    if (key.empty())
+        throw std::invalid_argument("setting key must not be empty");
+
+    // Resolving the owning preset happens on the UI thread too: the bundle is
+    // the live one and the user can switch presets under us.
+    const bool found = run_on_ui_blocking([&key]() -> bool {
+        PresetBundle* bundle = GUI::wxGetApp().preset_bundle;
+        if (bundle == nullptr)
+            return false;
+
+        Preset::Type type;
+        if (bundle->prints.get_edited_preset().config.has(key))
+            type = Preset::TYPE_PRINT;
+        else if (bundle->filaments.get_edited_preset().config.has(key))
+            type = Preset::TYPE_FILAMENT;
+        else if (bundle->printers.get_edited_preset().config.has(key))
+            type = Preset::TYPE_PRINTER;
+        else
+            return false;
+
+        // The option lives in the sidebar's parameter panel, which is only
+        // shown on the 3D editor tab — jumping there first is what makes the
+        // blink visible rather than happening on a hidden page.
+        if (GUI::wxGetApp().mainframe != nullptr)
+            GUI::wxGetApp().mainframe->select_tab(wxString(TAB_ID_PREPARE));
+        GUI::wxGetApp().sidebar().jump_to_option(key, type, std::wstring());
+        return true;
+    });
+
+    if (!found)
+        throw std::invalid_argument("unknown setting: " + key);
+}
+
+// --------------------------------------------------------------------------
+// orca.host.ui.on_slice_complete
+// --------------------------------------------------------------------------
+// One slot, like on_setting_ask, and for the same reason: a second registration
+// replaces the first so unload can reliably empty it.
+//
+// Fires only on a SUCCESSFUL slice. A cancelled or failed one leaves the plate
+// without layers to read, so waking a plugin for it would only produce an
+// answer about nothing.
+std::string slice_owner;
+CallablePtr slice_holder;
+bool        slice_bound = false;
+
+void ui_on_slice_complete(py::object callback)
+{
+    CallablePtr       holder     = make_holder(std::move(callback));
+    const std::string plugin_key = PluginAuditManager::instance().current_plugin();
+
+    run_on_ui_blocking([&]() {
+        GUI::Plater* plater = GUI::wxGetApp().plater();
+        if (plater == nullptr)
+            return;
+
+        slice_holder = holder;
+        slice_owner  = holder ? plugin_key : std::string();
+
+        // Bound once for the life of the app and switched by the holder above.
+        // Unbinding a lambda needs the identical functor back, which we cannot
+        // reproduce; keeping one binding and letting it no-op is both simpler
+        // and the only version that cannot leave a stale handler behind.
+        if (slice_bound)
+            return;
+        plater->Bind(GUI::EVT_PROCESS_COMPLETED, [](SlicingProcessCompletedEvent& evt) {
+            evt.Skip();                  // the slicer's own handlers must still run
+            if (!evt.success())
+                return;                  // cancelled or failed: no layers to read
+            CallablePtr holder = slice_holder;
+            if (!holder)
+                return;                  // unregistered
+            PythonGILState gil;
+            if (!gil)
+                return;
+            try {
+                holder->fn();
+            } catch (py::error_already_set& e) {
+                BOOST_LOG_TRIVIAL(error) << "orca.host.ui on_slice_complete handler raised: " << e.what();
+                PyErr_Clear();
+            }
+        });
+        slice_bound = true;
+    });
+}
 } // namespace
 
 void PluginHostUi::RegisterBindings(pybind11::module_& host)
@@ -669,6 +767,27 @@ void PluginHostUi::RegisterBindings(pybind11::module_& host)
     ui.def("create_progress_dialog", &ui_create_progress_dialog, py::arg("title"), py::arg("message"),
            py::arg("maximum") = 100, py::arg("style") = wxPD_APP_MODAL | wxPD_AUTO_HIDE,
            "Create a native progress dialog and return a ProgressDialog handle.");
+
+    ui.def("jump_to_setting", &ui_jump_to_setting, py::arg("key"),
+           "Show a setting in the slicer's own UI: switch to the 3D editor tab, scroll the "
+           "parameter panel to that option and blink it. Raises ValueError if no selected "
+           "preset has the key.\n"
+           "\n"
+           "This is the return path for on_setting_ask. Naming a setting in text leaves the "
+           "user to find it; a model that tries to describe where the field is will sooner or "
+           "later describe it wrong. Point at it instead.");
+
+    ui.def("on_slice_complete", &ui_on_slice_complete, py::arg("callback"),
+           "Call `callback()` on the UI thread each time a slice finishes SUCCESSFULLY. Pass "
+           "None to unregister. One slot: registering again replaces the previous callback.\n"
+           "\n"
+           "Cancelled and failed slices do not fire — they leave no layers to read, so there "
+           "would be nothing to say. This is the moment measure_slice becomes meaningful, and "
+           "a better trigger than watching the plate: the user has committed to slicing, so "
+           "speaking up here interrupts nothing.\n"
+           "\n"
+           "The callback runs on the UI thread. Do not block in it — hand the work to a thread "
+           "of your own and return.");
 
     ui.def("on_setting_ask", &ui_on_setting_ask, py::arg("callback"),
            "Register callback(setting_key) for the \"ask the copilot\" link in the settings tooltip, or "

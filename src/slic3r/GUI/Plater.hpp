@@ -59,6 +59,10 @@ class DevAms;
 using ModelInstancePtrs = std::vector<ModelInstance*>;
 
 
+// Defined in BackgroundSlicingProcess.hpp; only the name is needed to declare
+// the event below, and including that header here would be a cycle.
+class SlicingProcessCompletedEvent;
+
 namespace UndoRedo {
     class Stack;
     enum class SnapshotType : unsigned char;
@@ -96,6 +100,9 @@ inline constexpr int kSidebarContextMenuFilamentId = -2;
 
 //BBS: add EVT_SLICING_UPDATE declare here
 wxDECLARE_EVENT(EVT_SLICING_UPDATE, Slic3r::SlicingStatusEvent);
+// Defined in Plater.cpp alongside the rest; declared here so the plugin host can
+// bind a slice-finished callback without reaching into that translation unit.
+wxDECLARE_EVENT(EVT_PROCESS_COMPLETED, Slic3r::SlicingProcessCompletedEvent);
 wxDECLARE_EVENT(EVT_PUBLISH,        wxCommandEvent);
 wxDECLARE_EVENT(EVT_OPEN_PLATESETTINGSDIALOG,        wxCommandEvent);
 

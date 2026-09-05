@@ -3,9 +3,12 @@
 #include "slic3r/plugin/PluginUiThread.hpp"
 
 #include <libslic3r/BoundingBox.hpp>
+#include <libslic3r/ClipperUtils.hpp>
 #include <libslic3r/Geometry.hpp>
+#include <libslic3r/Layer.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Point.hpp>
+#include <libslic3r/Print.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 
 #include <slic3r/GUI/GUI_App.hpp>
@@ -410,12 +413,198 @@ py::dict plate_signature()
     return result;
 }
 
+// --------------------------------------------------------------------------
+// Measuring the slice.
+//
+// measure_objects above reads the model — what the user put on the plate.
+// This reads the result of slicing it, which is where the failures actually
+// show. An overhang is only a problem once you know the layer that has to span
+// it; a footprint is only too small once it has been cut into islands. Reading
+// the mesh can only ever approximate both.
+//
+// Meaningful only after a slice: before one this reports sliced = false and
+// stops. That is not an error, it is the normal state of a plate someone is
+// still arranging.
+//
+// Same threading rule as the model walk, for a sharper reason: the background
+// slicer replaces these layers wholesale when it re-runs, so a plugin thread
+// walking them races a free. Everything happens on the UI thread and comes
+// back as plain numbers.
+// --------------------------------------------------------------------------
+
+struct SliceMeasurement
+{
+    bool   sliced                        = false;
+    int    object_count                  = 0;
+    int    layer_count                   = 0;
+    double max_z_mm                      = 0.0;
+    double first_layer_area_mm2          = 0.0;
+    int    first_layer_islands           = 0;
+    double smallest_first_layer_island_mm2 = 0.0;
+    double overhang_area_mm2             = 0.0;
+    double max_layer_overhang_mm2        = 0.0;
+    double max_overhang_layer_z_mm       = 0.0;
+    double bridge_area_mm2               = 0.0;
+    bool   has_support                   = false;
+    double support_top_z_mm              = 0.0;
+    double tallest_aspect_ratio          = 0.0;
+};
+
+SliceMeasurement collect_slice_measurement()
+{
+    SliceMeasurement out;
+
+    GUI::Plater* plater = GUI::wxGetApp().plater();
+    if (plater == nullptr)
+        return out;
+
+    const Print& print = plater->fff_print();
+    // Scaled area -> mm^2, the conversion the slicer's own statistics use.
+    const double sf2 = SCALING_FACTOR * SCALING_FACTOR;
+
+    for (const PrintObject* po : print.objects()) {
+        // Adaptors, not vectors: layers() on a const PrintObject hands back a view.
+        const auto& layers = po->layers();
+        if (layers.empty())
+            continue;                    // this object is not sliced yet
+        out.sliced = true;
+        ++out.object_count;
+        out.layer_count = std::max(out.layer_count, (int) layers.size());
+
+        // The first layer is what bed adhesion rests on, and it is a single
+        // small island that lifts — so the smallest one is worth more than the
+        // total.
+        const Layer* first = layers.front();
+        double       object_min_xy = 0.0;
+        BoundingBox  footprint;
+        bool         have_footprint = false;
+        for (const ExPolygon& island : first->lslices) {
+            const double area_mm2 = island.area() * sf2;
+            out.first_layer_area_mm2 += area_mm2;
+            ++out.first_layer_islands;
+            if (out.smallest_first_layer_island_mm2 == 0.0 ||
+                area_mm2 < out.smallest_first_layer_island_mm2)
+                out.smallest_first_layer_island_mm2 = area_mm2;
+            const BoundingBox island_bb = get_extents(island);
+            if (have_footprint)
+                footprint.merge(island_bb);
+            else {
+                footprint      = island_bb;
+                have_footprint = true;
+            }
+        }
+        if (have_footprint)
+            object_min_xy = std::min(unscale<double>(footprint.size().x()),
+                                     unscale<double>(footprint.size().y()));
+
+        double       object_max_z = 0.0;
+        const Layer* below        = nullptr;
+        for (const Layer* layer : layers) {
+            object_max_z = std::max(object_max_z, (double) layer->print_z);
+
+            // Overhang as the slicer sees it: the part of this layer with
+            // nothing beneath it. That is the area which has to be bridged,
+            // supported or drooped over — a truer number than any face angle
+            // measured off the mesh, because it already accounts for the layer
+            // height that produced it.
+            if (below != nullptr) {
+                double            layer_overhang_mm2 = 0.0;
+                const ExPolygons  over_air = diff_ex(layer->lslices, below->lslices);
+                for (const ExPolygon& e : over_air)
+                    layer_overhang_mm2 += e.area() * sf2;
+                out.overhang_area_mm2 += layer_overhang_mm2;
+                if (layer_overhang_mm2 > out.max_layer_overhang_mm2) {
+                    out.max_layer_overhang_mm2  = layer_overhang_mm2;
+                    out.max_overhang_layer_z_mm = layer->print_z;
+                }
+            }
+            below = layer;
+
+            // Bridges the slicer itself flagged: the overhang it already
+            // decided to span rather than support.
+            for (const LayerRegion* region : layer->regions())
+                for (const Surface& surface : region->slices.surfaces)
+                    if (surface.is_bridge())
+                        out.bridge_area_mm2 += surface.area() * sf2;
+        }
+        out.max_z_mm = std::max(out.max_z_mm, object_max_z);
+
+        // Height against the NARROWER footprint dimension: a tall thin part
+        // topples across its narrow side, so that is the ratio that matters.
+        if (object_min_xy > 0.0)
+            out.tallest_aspect_ratio = std::max(out.tallest_aspect_ratio,
+                                                object_max_z / object_min_xy);
+
+        const auto& support_layers = po->support_layers();
+        if (!support_layers.empty()) {
+            out.has_support     = true;
+            out.support_top_z_mm = std::max(out.support_top_z_mm,
+                                            (double) support_layers.back()->print_z);
+        }
+    }
+    return out;
+}
+
+py::dict measure_slice()
+{
+    // Same discipline as measure_objects: the walk runs on the UI thread with
+    // the GIL released and hands back plain C++ values.
+    const SliceMeasurement m = run_on_ui_blocking([]() { return collect_slice_measurement(); });
+
+    // GIL reacquired — Python objects from here on.
+    py::dict result;
+    result["sliced"] = m.sliced;
+    if (!m.sliced)
+        return result;                   // nothing else is meaningful yet
+
+    result["objects"]                         = m.object_count;
+    result["layers"]                          = m.layer_count;
+    result["max_z_mm"]                        = m.max_z_mm;
+    result["first_layer_area_mm2"]            = m.first_layer_area_mm2;
+    result["first_layer_islands"]             = m.first_layer_islands;
+    result["smallest_first_layer_island_mm2"] = m.smallest_first_layer_island_mm2;
+    result["overhang_area_mm2"]               = m.overhang_area_mm2;
+    result["max_layer_overhang_mm2"]          = m.max_layer_overhang_mm2;
+    result["max_overhang_layer_z_mm"]         = m.max_overhang_layer_z_mm;
+    result["bridge_area_mm2"]                 = m.bridge_area_mm2;
+    result["has_support"]                     = m.has_support;
+    result["support_top_z_mm"]                = m.support_top_z_mm;
+    result["tallest_aspect_ratio"]            = m.tallest_aspect_ratio;
+    return result;
+}
+
 } // namespace
 
 // Measurement of the objects on the live plate as a plain-data snapshot, and
 // the cheap signature that says when it is worth taking one again.
 void host_bindings::register_measure(py::module_& host)
 {
+    host.def("measure_slice", &measure_slice,
+             "Measure the CURRENT SLICE and return a plain dict. Always has `sliced`; when "
+             "that is False nothing else is present and there is nothing to read yet — the "
+             "plate has not been sliced since it last changed. When True it also has:\n"
+             "  objects, layers, max_z_mm,\n"
+             "  first_layer_area_mm2, first_layer_islands, smallest_first_layer_island_mm2,\n"
+             "  overhang_area_mm2, max_layer_overhang_mm2, max_overhang_layer_z_mm,\n"
+             "  bridge_area_mm2, has_support, support_top_z_mm, tallest_aspect_ratio\n"
+             "\n"
+             "This is the companion to measure_objects, and the better of the two once a "
+             "slice exists. measure_objects reads the mesh and can only estimate: it reports "
+             "a face angle without knowing the layer height that has to span it. These numbers "
+             "come off the sliced layers, so an overhang here is the area actually printed "
+             "over air, and the first-layer figures are the islands really laid on the bed. "
+             "smallest_first_layer_island_mm2 is usually the interesting one — a plate lifts "
+             "at its smallest island, not its total area.\n"
+             "\n"
+             "Overhang area is per-layer difference against the layer below, summed over the "
+             "plate; bridge_area_mm2 is the subset the slicer already decided to bridge. "
+             "tallest_aspect_ratio is height over the NARROWER footprint dimension, the axis a "
+             "tall part topples across.\n"
+             "\n"
+             "Like measure_objects the walk runs on the main/UI thread (marshaled from the "
+             "plugin thread) — the background slicer replaces these layers when it re-runs, so "
+             "reading them off-thread races a free. Do not call it from a SlicingPipeline hook.");
+
     host.def("measure_objects", &measure_objects,
              py::arg("overhang_threshold_deg") = DEFAULT_OVERHANG_THRESHOLD_DEG,
              "Measure every object on the live plate and return a list of plain dicts:\n"
