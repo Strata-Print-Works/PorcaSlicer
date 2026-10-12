@@ -44,7 +44,8 @@ DockPanel::~DockPanel()
 
 bool DockPanel::on_page_message(const std::string& kind, const nlohmann::json& data)
 {
-    if (kind == "message") {
+    // A dock has no modal result; legacy panels deliver submissions as messages.
+    if (kind == "message" || kind == "submit") {
         if (m_on_message)
             m_on_message(data);
         return true;
