@@ -1,16 +1,23 @@
 #include "PluginHostBindings.hpp"
+#include "pybind11/pytypes.h"
+#include "pybind11/cast.h"
+#include "pybind11/pybind11.h"
 #include "slic3r/plugin/PluginBindingUtils.hpp"
 #include "slic3r/plugin/PluginUiThread.hpp"
 
+#include <cstddef>
 #include <libslic3r/BoundingBox.hpp>
 #include <libslic3r/ClipperUtils.hpp>
+#include <libslic3r/ExPolygon.hpp>
 #include <libslic3r/Geometry.hpp>
 #include <libslic3r/Layer.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Point.hpp>
 #include <libslic3r/Print.hpp>
+#include <libslic3r/Surface.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 
+#include <libslic3r/libslic3r.h>
 #include <slic3r/GUI/GUI_App.hpp>
 #include <slic3r/GUI/Plater.hpp>
 
@@ -19,7 +26,9 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
+#include <wx/app.h>
 
 namespace py = pybind11;
 

@@ -12,6 +12,7 @@
 #include <catch2/catch_message.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include "catch2/generators/catch_generators.hpp"
 #include "plugin_test_utils.hpp"
 #include <pybind11/pytypes.h>
 #include <pybind11/cast.h>

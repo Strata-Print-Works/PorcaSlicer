@@ -1,7 +1,11 @@
 #include "PluginHostBindings.hpp"
+#include <libslic3r/LocalesUtils.hpp>
+#include <libslic3r/Config.hpp>
+#include <exception>
 #include <pybind11/pytypes.h>
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
+#include "pybind11/gil.h"
 #include "slic3r/plugin/PluginBindingUtils.hpp"
 #include "slic3r/plugin/PluginUiThread.hpp"
 
@@ -25,7 +29,9 @@
 #include <cstdlib>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace py = pybind11;

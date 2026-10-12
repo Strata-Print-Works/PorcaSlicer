@@ -7,6 +7,8 @@
 #include "libslic3r/Utils.hpp"
 #include "I18N.hpp"
 
+#include <algorithm>
+#include <functional>
 #include <string>
 #include <sstream>
 #include <ios>
@@ -15,6 +17,7 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/log/trivial.hpp>
 #include <cstddef>
+#include <utility>
 #include <wx/display.h>
 #include <wx/gdicmn.h>
 #include <wx/popupwin.h>

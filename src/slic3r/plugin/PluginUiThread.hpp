@@ -1,5 +1,7 @@
 #pragma once
 
+#include "pybind11/gil.h"
+#include <exception>
 #include <slic3r/GUI/GUI_App.hpp>
 
 #include <pybind11/pybind11.h>
@@ -9,6 +11,7 @@
 #include <future>
 #include <stdexcept>
 #include <type_traits>
+#include <wx/thread.h>
 
 namespace Slic3r {
 

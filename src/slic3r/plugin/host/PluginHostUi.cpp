@@ -1,5 +1,6 @@
 #include "PluginHostUi.hpp"
 
+#include <libslic3r/Preset.hpp>
 #include <pybind11/pytypes.h>
 #include <pybind11/gil.h>
 #include <pybind11/cast.h>
