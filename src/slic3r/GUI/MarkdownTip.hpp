@@ -1,12 +1,19 @@
 #ifndef slic3r_MarkdownTip_hpp_
 #define slic3r_MarkdownTip_hpp_
 
+#include <string>
+#include <wx/gdicmn.h>
 #include <wx/popupwin.h>
 #include <wx/timer.h>
 #include <wx/webview.h>
 
 #include <functional>
-#include <string>
+
+class wxTimer;
+class wxTimerEvent;
+class wxWebView;
+class wxWebViewEvent;
+class wxWindow;
 
 
 namespace Slic3r { namespace GUI {

@@ -1,13 +1,18 @@
 #include "PluginHostBindings.hpp"
+#include <pybind11/pytypes.h>
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
 #include "slic3r/plugin/PluginBindingUtils.hpp"
 #include "slic3r/plugin/PluginUiThread.hpp"
 
+#include <cstddef>
 #include <libslic3r/Preset.hpp>
 #include <libslic3r/PresetBundle.hpp>
 
 #include <slic3r/GUI/GUI_App.hpp>
 #include <slic3r/GUI/Tab.hpp>
 
+#include <memory>
 #include <pybind11/stl.h>
 
 #include <boost/algorithm/string/classification.hpp>
