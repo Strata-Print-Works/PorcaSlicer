@@ -85,6 +85,11 @@ endfunction()
 
 # Register Catch2 tags as CTest labels so `ctest -L`/`-LE` can filter by tag.
 function(orcaslicer_discover_tests TARGET)
+    if (APPLE)
+        # Tests are CLI tools. Inheriting the GUI app's bundle setting makes Xcode
+        # treat their adjacent Python runtime data as nested executable code.
+        set_target_properties(${TARGET} PROPERTIES MACOSX_BUNDLE FALSE)
+    endif()
     if (APPLE AND CMAKE_GENERATOR STREQUAL "Xcode")
         # Xcode signs after post-build scripts. Discovering an unsigned arm64 executable
         # there is killed by macOS; CTest discovery runs after signing has completed.
