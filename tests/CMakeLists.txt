@@ -85,7 +85,13 @@ endfunction()
 
 # Register Catch2 tags as CTest labels so `ctest -L`/`-LE` can filter by tag.
 function(orcaslicer_discover_tests TARGET)
-    catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS)
+    if (APPLE AND CMAKE_GENERATOR STREQUAL "Xcode")
+        # Xcode signs after post-build scripts. Discovering an unsigned arm64 executable
+        # there is killed by macOS; CTest discovery runs after signing has completed.
+        catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS DISCOVERY_MODE PRE_TEST)
+    else()
+        catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS)
+    endif()
 endfunction()
 
 add_subdirectory(libnest2d)
