@@ -88,8 +88,18 @@ std::vector<DiscoveredPrinter> saved_printers()
     return result;
 }
 
+std::string project_destination(const DiscoveredPrinter& printer)
+{
+    return portable_printer_destination(std::string(destination_prefix) + printer.key(), *wxGetApp().app_config);
+}
+
 std::optional<DiscoveredPrinter> saved_printer(const std::string& destination)
 {
+    if (boost::starts_with(destination, "scanned-id:")) {
+        for (const auto& printer : saved_printers())
+            if (project_destination(printer) == destination) return printer;
+        return std::nullopt;
+    }
     if (!boost::starts_with(destination, destination_prefix)) return std::nullopt;
     return DiscoveredPrinter::deserialize(wxGetApp().app_config->get(saved_section, destination.substr(8)));
 }
@@ -134,7 +144,6 @@ static DiscoveryScanGate discovery_scan_gate;
 struct DeviceLink {
     PrinterLinkStatus status = PrinterLinkStatus::unreachable;
     bool checking = true;
-    bool in_flight = false;
     unsigned failures = 0;
     std::chrono::steady_clock::time_point next_check{};
     std::string address, code;
@@ -150,16 +159,19 @@ class PrinterConnections final : public wxPanel
     std::shared_ptr<Guard> m_guard = std::make_shared<Guard>();
     wxTimer m_timer;
     std::vector<std::future<void>> m_workers;
+    // Pending checks belong to this panel, unlike cached connection outcomes.
+    // Recreating the GUI drops canceled ownership with the old panel.
+    std::set<std::string> m_in_flight;
     size_t m_cursor = 0;
 public:
     explicit PrinterConnections(wxWindow* parent) : wxPanel(parent), m_timer(this)
     {
         Hide();
         m_guard->target = this;
-        Bind(EVT_DEVICE_LINK, [](wxThreadEvent& event) {
+        Bind(EVT_DEVICE_LINK, [this](wxThreadEvent& event) {
             const auto update = event.GetPayload<LinkUpdate>();
             auto& link = device_links[update.printer.key()];
-            link.in_flight = false;
+            m_in_flight.erase(update.printer.key());
             const auto current = saved_printer(std::string(destination_prefix) + update.printer.key());
             if (!current || current->address != update.printer.address ||
                 wxGetApp().app_config->get(code_section, current->key()) != update.code) {
@@ -198,7 +210,7 @@ public:
             const auto index = (m_cursor + offset) % printers.size();
             const auto& p = printers[index];
             auto& link = device_links[p.key()];
-            if (link.in_flight) continue;
+            if (m_in_flight.count(p.key())) continue;
             if (auto* devices = wxGetApp().getDeviceManager()) {
                 auto* machine = devices->get_selected_machine();
                 if (machine && machine->get_dev_id() == device_id(p) && machine->is_connected()) {
@@ -217,7 +229,7 @@ public:
                 link.code = code;
             }
             if (std::chrono::steady_clock::now() < link.next_check) continue;
-            link.in_flight = true;
+            m_in_flight.insert(p.key());
             auto guard = m_guard;
             m_workers.emplace_back(std::async(std::launch::async, [guard, p, code] {
                 auto status = PrinterLinkStatus::unreachable;
@@ -256,7 +268,7 @@ int device_plate(const DiscoveredPrinter& p)
 {
     auto* plater = wxGetApp().plater();
     if (!plater) return -1;
-    const auto destination = std::string(destination_prefix) + p.key();
+    const auto destination = project_destination(p);
     auto& plates = plater->get_partplate_list();
     for (int i = 0; i < plates.get_plate_count(); ++i)
         if (plates.get_plate(i)->print_setup().destination == destination) return i;
@@ -686,7 +698,7 @@ void PrinterScanDialog::add()
     wxGetApp().app_config->set(saved_section, p.key(), p.serialize());
     apply_connection(p, bundle.printers.get_edited_preset().config);
     wxGetApp().load_current_presets(false, false);
-    ensure_scanned_printer(std::string(destination_prefix) + p.key());
+    ensure_scanned_printer(project_destination(p));
     const auto id = device_id(p);
     plater->sidebar().printer_combox()->set_selected_dev_id(id);
     if (auto* devices = wxGetApp().getDeviceManager()) devices->set_selected_machine(id);
@@ -714,8 +726,8 @@ void show_printer_scan(wxWindow* parent)
 std::string scanned_printer_destination(const std::string& id)
 {
     for (const auto& p : saved_printers())
-        if (device_id(p) == id) return std::string(destination_prefix) + p.key();
-    return id;
+        if (device_id(p) == id) return project_destination(p);
+    return portable_printer_destination(id, *wxGetApp().app_config);
 }
 
 std::string restore_scanned_printer(const std::string& destination, DynamicPrintConfig& config)
@@ -724,7 +736,8 @@ std::string restore_scanned_printer(const std::string& destination, DynamicPrint
         apply_connection(*p, config);
         return device_id(*p);
     }
-    return boost::starts_with(destination, destination_prefix) ? std::string() : destination;
+    if (boost::starts_with(destination, destination_prefix)) return {};
+    return local_printer_destination(destination, *wxGetApp().app_config);
 }
 
 std::string scanned_printer_name(const std::string& destination)
@@ -735,7 +748,11 @@ std::string scanned_printer_name(const std::string& destination)
 
 bool missing_scanned_printer(const std::string& destination)
 {
-    return boost::starts_with(destination, destination_prefix) && !saved_printer(destination);
+    if (boost::starts_with(destination, destination_prefix)) return !saved_printer(destination);
+    if (!boost::starts_with(destination, "scanned-id:") || saved_printer(destination)) return false;
+    const auto local = local_printer_destination(destination, *wxGetApp().app_config);
+    auto* devices = wxGetApp().getDeviceManager();
+    return local.empty() || !devices || (!devices->get_local_machine(local) && !devices->get_my_machine(local));
 }
 
 void ensure_scanned_printer(const std::string& destination)
@@ -1064,6 +1081,10 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
                 }
                 stop_inspecting(false);
                 const auto old_key = p->key();
+                const auto destination = project_destination(*p);
+                // Retain the portable identity and the old alias when an address changes.
+                if (updated.key() != old_key)
+                    wxGetApp().app_config->set("scanned_printer_destinations", std::string(destination_prefix) + updated.key(), destination);
                 if (device_id(updated) != device_id(*p)) {
                     wxGetApp().app_config->erase_local_machine(device_id(*p));
                     if (auto* dev = wxGetApp().getDeviceManager()) dev->erase_local_machine(device_id(*p));
@@ -1076,14 +1097,13 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
                 auto& plates = wxGetApp().plater()->get_partplate_list();
                 for (int i = 0; i < plates.get_plate_count(); ++i) {
                     auto* plate = plates.get_plate(i);
-                    if (plate->print_setup().destination == std::string(destination_prefix) + old_key) {
-                        plate->print_setup().destination = std::string(destination_prefix) + updated.key();
+                    if (plate->print_setup().destination == destination) {
                         plate->print_setup().destination_name = updated.name;
                         if (plate->get_plate_name() == p->name) plate->set_plate_name(updated.name);
                     }
                 }
                 const auto active = plates.get_curr_plate()->print_setup().destination;
-                if (active == std::string(destination_prefix) + updated.key()) {
+                if (active == destination) {
                     apply_connection(updated, wxGetApp().preset_bundle->printers.get_edited_preset().config);
                     wxGetApp().sidebar().printer_combox()->set_selected_dev_id(device_id(updated));
                 }
@@ -1116,7 +1136,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
             wxGetApp().app_config->erase_local_machine(device_id(*p));
             auto& plates = wxGetApp().plater()->get_partplate_list();
             for (int i = 0; i < plates.get_plate_count(); ++i)
-                if (plates.get_plate(i)->print_setup().destination == std::string(destination_prefix) + p->key())
+                if (plates.get_plate(i)->print_setup().destination == project_destination(*p))
                 {
                     plates.get_plate(i)->print_setup().destination.clear();
                     plates.get_plate(i)->print_setup().destination_name.clear();

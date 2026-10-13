@@ -2,6 +2,11 @@
 #include <algorithm>
 #include <utility>
 #include <vector>
+#include <set>
+#include <cstddef>
+#include "libslic3r/Config.hpp"
+#include "libslic3r/TriangleSelector.hpp"
+#include "test_utils.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/BoundingBox.hpp"
@@ -17,6 +22,48 @@
 #include "libslic3r/libslic3r.h"
 
 using namespace Slic3r;
+
+TEST_CASE("Separating shared copies preserves placement and isolates filament edits", "[Model][PlatePrintSetup]")
+{
+    ScopedTemporaryDir backup;
+    Model model;
+    model.set_backup_path(backup.string());
+    auto* original = model.add_object();
+    auto* volume = original->add_volume(make_cube(20, 20, 20));
+    original->config.set_key_value("extruder", new ConfigOptionInt(2));
+    volume->config.set_key_value("extruder", new ConfigOptionInt(2));
+    TriangleSelector paint(volume->mesh());
+    paint.set_facet(0, EnforcerBlockerType::Extruder2);
+    volume->mmu_segmentation_facets.set_data(paint.serialize());
+    std::vector<Transform3d> transforms;
+    for (size_t i = 0; i < 3; ++i) {
+        auto* instance = original->add_instance();
+        instance->set_offset(Vec3d(30 + 250 * i, 40, -2));
+        instance->set_rotation(Vec3d(0, 0, 0.2 * i));
+        transforms.push_back(instance->get_matrix());
+    }
+    const auto retained_id = original->instances[1]->id();
+    REQUIRE_FALSE(model.separate_instances(0, {}));
+    REQUIRE_FALSE(model.separate_instances(0, {0, 1, 2}));
+    REQUIRE_FALSE(model.separate_instances(0, {3}));
+    REQUIRE(model.objects.size() == 1);
+    auto* detached = model.separate_instances(0, {0, 2});
+    REQUIRE(detached);
+    REQUIRE(model.objects.size() == 2);
+    REQUIRE(original->instances.size() == 1);
+    REQUIRE(detached->instances.size() == 2);
+    REQUIRE(original->instances[0]->id() == retained_id);
+    REQUIRE_THAT((original->instances[0]->get_matrix().matrix() - transforms[1].matrix()).norm(), Catch::Matchers::WithinAbs(0, 1e-9));
+    REQUIRE_THAT((detached->instances[0]->get_matrix().matrix() - transforms[0].matrix()).norm(), Catch::Matchers::WithinAbs(0, 1e-9));
+    REQUIRE_THAT((detached->instances[1]->get_matrix().matrix() - transforms[2].matrix()).norm(), Catch::Matchers::WithinAbs(0, 1e-9));
+    REQUIRE(TriangleSelector::has_facets(detached->volumes[0]->mmu_segmentation_facets.get_data(), EnforcerBlockerType::Extruder2));
+    detached->config.set_key_value("extruder", new ConfigOptionInt(1));
+    detached->volumes[0]->update_extruder_count_when_delete_filament(1, 2, 1, {});
+    REQUIRE(original->config.extruder() == 2);
+    REQUIRE(original->volumes[0]->config.extruder() == 2);
+    REQUIRE(TriangleSelector::has_facets(original->volumes[0]->mmu_segmentation_facets.get_data(), EnforcerBlockerType::Extruder2));
+    REQUIRE_FALSE(TriangleSelector::has_facets(detached->volumes[0]->mmu_segmentation_facets.get_data(), EnforcerBlockerType::Extruder2));
+}
 
 // convex_hull_2d does not clip geometry below the bed, so these cases avoid
 // sinking transforms.

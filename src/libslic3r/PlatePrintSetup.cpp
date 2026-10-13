@@ -3,6 +3,9 @@
 #include "Config.hpp"
 #include "Exception.hpp"
 #include "Preset.hpp"
+#include "DiscoveredPrinter.hpp"
+#include "BoundingBox.hpp"
+#include "Point.hpp"
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -11,6 +14,7 @@
 #include <utility>
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace Slic3r {
 
@@ -41,6 +45,10 @@ void PlatePrintSetup::activate(PresetBundle& bundle, const std::string& plate_na
 
 std::string PlatePrintSetup::serialize() const
 {
+    // GUI import/capture migrates legacy destinations through the local ID map.
+    // Reject unmigrated callers too, rather than publishing a connection address.
+    if (address_based_printer_destination(destination))
+        throw RuntimeError("This printer's project destination must be updated before saving.");
     nlohmann::json values = nlohmann::json::object();
     nlohmann::json exact = nlohmann::json::object();
     for (const auto& key : config.keys()) {
@@ -84,6 +92,7 @@ PlatePrintSetup PlatePrintSetup::deserialize(const std::string& value)
         throw RuntimeError("This plate's printing setup requires a newer version of OrcaSlicer.");
     PlatePrintSetup setup;
     const auto exact = data.value("exact", nlohmann::json::object());
+    if (!exact.is_object()) throw RuntimeError("Cannot restore this plate's printing setup.");
     for (const auto& item : data.at("config").items()) {
         // Project files describe print intent; connection details come from this computer.
         if (local_connection_setting(item.key())) continue;
@@ -127,8 +136,23 @@ PlatePrintSetup PlatePrintSetup::deserialize(const std::string& value)
     }
     setup.destination = data.value("destination", std::string());
     setup.destination_name = data.value("destination_name", std::string());
-    if (setup.empty() || Preset::printer_technology(setup.config) != ptFFF)
+    // Version 1 inherits Orca's implicit FFF technology when the field is absent.
+    for (const char* key : {"printable_area", "printable_height", "nozzle_diameter",
+                            "layer_height", "filament_diameter", "filament_type", "filament_colour"})
+        if (!setup.config.has(key))
+            throw RuntimeError("Cannot restore this plate's setting: " + std::string(key));
+    const auto& area = setup.config.option<ConfigOptionPoints>("printable_area")->values;
+    const auto& nozzles = setup.config.option<ConfigOptionFloats>("nozzle_diameter")->values;
+    const double height = setup.config.opt_float("printable_height");
+    if (Preset::printer_technology(setup.config) != ptFFF || area.size() < 3 ||
+        std::any_of(area.begin(), area.end(), [](const Vec2d& point) { return !point.allFinite(); }) ||
+        !std::isfinite(height) || height <= 0 || nozzles.empty() ||
+        std::any_of(nozzles.begin(), nozzles.end(), [](double nozzle) { return !std::isfinite(nozzle) || nozzle <= 0; }))
         throw RuntimeError("This plate's printing setup is not supported.");
+    const auto bed_size = BoundingBoxf(area).size();
+    if (bed_size.x() <= 0 || bed_size.y() <= 0 ||
+        bed_size.x() > std::numeric_limits<int>::max() || bed_size.y() > std::numeric_limits<int>::max())
+        throw RuntimeError("Cannot restore this plate's printable area.");
     return setup;
 }
 

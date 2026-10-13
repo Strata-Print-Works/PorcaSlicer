@@ -1,9 +1,13 @@
 #include "DiscoveredPrinter.hpp"
+#include "AppConfig.hpp"
 
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/system/error_code.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -37,6 +41,55 @@ bool valid(const DiscoveredPrinter& p)
 std::string DiscoveredPrinter::key() const
 {
     return vendor + ":" + (serial.empty() ? address + ":" + std::to_string(port) : serial);
+}
+
+bool address_based_printer_destination(const std::string& destination)
+{
+    if (destination.compare(0, 11, "scanned-id:") == 0) return false;
+    auto address = destination;
+    const bool scanned = address.compare(0, 8, "scanned:") == 0;
+    if (scanned) {
+        const auto vendor_end = address.find(':', 8);
+        if (vendor_end == std::string::npos) return false;
+        address.erase(0, vendor_end + 1);
+    }
+    if (valid_address(address)) return true;
+    const auto port_start = address.rfind(':');
+    if (port_start != std::string::npos) {
+        if (port_start + 1 == address.size() ||
+            !std::all_of(address.begin() + port_start + 1, address.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            return false;
+        address.resize(port_start);
+    }
+    if (address.size() > 2 && address.front() == '[' && address.back() == ']')
+        address = address.substr(1, address.size() - 2);
+    if (valid_address(address)) return true;
+    // Scanned serials are explicitly identified. Bare native IDs can also be
+    // DNS hosts (including single-label names), so keep those tokens local.
+    return !scanned && !address.empty() && std::all_of(address.begin(), address.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.';
+    });
+}
+
+std::string portable_printer_destination(const std::string& destination, AppConfig& config)
+{
+    if (!address_based_printer_destination(destination)) return destination;
+    constexpr const char* section = "scanned_printer_destinations";
+    auto portable = config.get(section, destination);
+    if (portable.empty()) {
+        portable = "scanned-id:" + boost::uuids::to_string(boost::uuids::random_generator()());
+        config.set(section, destination, portable);
+    }
+    return portable;
+}
+
+std::string local_printer_destination(const std::string& destination, const AppConfig& config)
+{
+    if (destination.compare(0, 11, "scanned-id:") != 0) return destination;
+    if (config.has_section("scanned_printer_destinations"))
+        for (const auto& alias : config.get_section("scanned_printer_destinations"))
+            if (alias.second == destination && alias.first.compare(0, 8, "scanned:") != 0) return alias.first;
+    return {};
 }
 
 std::string DiscoveredPrinter::serialize() const

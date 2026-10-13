@@ -40,11 +40,15 @@ class SystemBrowser {
     DnsReference m_connection;
     std::vector<std::unique_ptr<Query>> m_queries;
     std::set<std::string> m_seen;
-    const Bonjour::TxtKeys& m_keys;
+    Bonjour::TxtKeys m_keys;
     const Bonjour::ReplyFn& m_reply;
 public:
     SystemBrowser(const Bonjour::TxtKeys& keys, const Bonjour::ReplyFn& reply) : m_keys(keys), m_reply(reply)
-    { DNSServiceCreateConnection(&m_connection.ref); }
+    {
+        // BonjourReply::full_address includes the advertised web-server subpath.
+        m_keys.insert("path");
+        DNSServiceCreateConnection(&m_connection.ref);
+    }
 
     bool browse(const std::string& type, unsigned index, bool enumerate)
     {

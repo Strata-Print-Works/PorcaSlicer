@@ -9,6 +9,7 @@
 #include "libslic3r/Color.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/DiscoveredPrinter.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Line.hpp"
 #include "libslic3r/Polyline.hpp"
@@ -6862,12 +6863,16 @@ int PartPlateList::add_to_plate(int obj_id, int instance_id, int plate_id)
 }
 
 //reload all objects
-int PartPlateList::reload_all_objects(bool except_locked, int plate_index)
+int PartPlateList::reload_all_objects(bool except_locked, int plate_index, bool preserve_slice_results)
 {
 	int ret = 0;
 	unsigned int i, j, k;
 
-	clear(false, false, except_locked, plate_index);
+    if (preserve_slice_results) {
+        for (auto* plate : m_plate_list) plate->clear(false);
+        unprintable_plate.clear(false);
+    } else
+        clear(false, false, except_locked, plate_index);
 
 	BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": m_model->objects.size() is %1%") % m_model->objects.size();
 	//try to find a new plate
@@ -7906,8 +7911,9 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		m_plate_list[index]->m_locked = plate_data_list[i]->locked;
 		m_plate_list[index]->config()->apply(plate_data_list[i]->config);
         m_plate_list[index]->print_setup() = plate_data_list[i]->print_setup;
-        m_plate_list[index]->m_has_workspace_position = plate_data_list[i]->has_workspace_position;
-        m_plate_list[index]->m_workspace_position = plate_data_list[i]->workspace_position;
+        if (m_plater)
+            m_plate_list[index]->print_setup().destination = portable_printer_destination(
+                m_plate_list[index]->print_setup().destination, *wxGetApp().app_config);
         if (m_independent_setups) {
             if (m_plate_list[index]->print_setup().empty())
                 m_plate_list[index]->print_setup().capture(*wxGetApp().preset_bundle);
@@ -8056,6 +8062,12 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 
 	}
     if (m_independent_setups) {
+        // Construct every plate before restoring the layout: create_plate freezes
+        // existing origins when adding a bed, including these temporary origins.
+        for (size_t i = 0; i < m_plate_list.size(); ++i) {
+            m_plate_list[i]->m_has_workspace_position = plate_data_list[i]->has_workspace_position;
+            m_plate_list[i]->m_workspace_position = plate_data_list[i]->workspace_position;
+        }
         update_all_plates_pos_and_size(false, false, false, false);
         calc_bounding_boxes();
     }

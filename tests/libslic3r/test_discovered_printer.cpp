@@ -1,11 +1,47 @@
 #include <catch2/catch_test_macros.hpp>
 #include "libslic3r/DiscoveredPrinter.hpp"
+#include "libslic3r/AppConfig.hpp"
 #include <nlohmann/json.hpp>
 #include <cstddef>
 #include <string>
 #include <vector>
 
 using namespace Slic3r;
+
+TEST_CASE("Address-based destinations migrate to stable local random identities", "[DiscoveredPrinter]")
+{
+    AppConfig config;
+    for (const auto& legacy : {std::string("scanned:moonraker:192.168.1.60:7125"),
+                               std::string("scanned:octoprint:fd00::60:80")}) {
+        REQUIRE(address_based_printer_destination(legacy));
+        const auto portable = portable_printer_destination(legacy, config);
+        CHECK(portable.find("scanned-id:") == 0);
+        CHECK_FALSE(address_based_printer_destination(portable));
+        CHECK(portable_printer_destination(legacy, config) == portable);
+        CHECK(portable_printer_destination(portable, config) == portable);
+        AppConfig another_computer;
+        CHECK(portable_printer_destination(legacy, another_computer) != portable);
+        AppConfig reopened = config;
+        CHECK(portable_printer_destination(legacy, reopened) == portable);
+        // Editing an address retains the portable identity through a local alias.
+        const std::string changed = "scanned:moonraker:192.168.1.61:7125";
+        config.set("scanned_printer_destinations", changed, portable);
+        CHECK(portable_printer_destination(changed, config) == portable);
+    }
+    const std::string serial = "scanned:bambu:TEST-PRINTER";
+    CHECK_FALSE(address_based_printer_destination(serial));
+    CHECK(portable_printer_destination(serial, config) == serial);
+    for (const auto& native : {std::string("192.168.1.60"), std::string("192.168.1.60:7125"),
+                              std::string("fd00::60"), std::string("[fd00::60]:7125"),
+                              std::string("printer.local:7125"), std::string("octopi.local"), std::string("printer")}) {
+        REQUIRE(address_based_printer_destination(native));
+        const auto portable = portable_printer_destination(native, config);
+        CHECK(local_printer_destination(portable, config) == native);
+        AppConfig another_computer;
+        CHECK(local_printer_destination(portable, another_computer).empty());
+    }
+}
+
 namespace {
 const std::string notice = "NOTIFY * HTTP/1.1\r\nNT: urn:bambulab-com:device:3dprinter:1\r\n"
     "DevModel.bambu.com: N9\r\nDevSN.bambu.com: TEST-PRINTER\r\nDevName.bambu.com: Workshop\r\n"

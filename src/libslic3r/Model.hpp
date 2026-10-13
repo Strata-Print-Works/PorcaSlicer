@@ -36,6 +36,7 @@
 #include <cereal/types/base_class.hpp>
 #include <cassert>
 #include <cstddef>
+#include <set>
 #include <iterator>
 #include <initializer_list>
 #include <cereal/specialize.hpp>
@@ -1778,6 +1779,8 @@ public:
     ModelObject* add_object(const char *name, const char *path, const TriangleMesh &mesh);
     ModelObject* add_object(const char *name, const char *path, TriangleMesh &&mesh);
     ModelObject* add_object(const ModelObject &other);
+    // Detach a proper subset without moving instances or changing the remaining IDs.
+    ModelObject* separate_instances(size_t object_idx, const std::set<size_t>& instance_indices);
     void         delete_object(size_t idx);
     bool         delete_object(ObjectID id);
     bool         delete_object(ModelObject* object);

@@ -5857,6 +5857,14 @@ void Sidebar::delete_filament(size_t filament_id, int replace_filament_id) {
     if (filament_id > filament_count && filament_id >= total_filaments)
         return;
 
+    SuppressBackgroundProcessingUpdate suppress;
+    if (wxGetApp().plater()->get_partplate_list().independent_setups()) {
+        wxGetApp().plater()->capture_plate_setup();
+        wxGetApp().plater()->take_snapshot(_u8L("Remove filament"));
+        // Detach before preset changes or shrinking arrays can remap shared paint.
+        wxGetApp().plater()->separate_plate_instances();
+    }
+
     bool is_mixed = (filament_id >= p->combos_filament.size());
 
     if (!is_mixed) {
@@ -21298,6 +21306,57 @@ void Plater::on_filament_count_change(size_t num_filaments)
             mv->update_extruder_count(num_filaments);
         }
     }
+}
+
+void Plater::separate_plate_instances()
+{
+    auto& plates = get_partplate_list();
+    if (!plates.independent_setups()) return;
+    auto& model = wxGetApp().model();
+    auto& selection = p->get_selection();
+    SuppressSnapshots suppress(this);
+    const auto selection_mode = selection.get_mode();
+    const auto selected = selection.get_volume_idxs();
+    std::vector<std::pair<size_t, size_t>> selection_ids;
+    for (auto index : selected) selection_ids.push_back(selection.get_volume(index)->geometry_id);
+    bool separated = false;
+    const size_t object_count = model.objects.size();
+    for (size_t object_idx = 0; object_idx < object_count; ++object_idx) {
+        std::set<size_t> local;
+        const auto* object = model.objects[object_idx];
+        for (size_t instance_idx = 0; instance_idx < object->instances.size(); ++instance_idx)
+            if (plates.get_curr_plate()->contain_instance(int(object_idx), int(instance_idx))) local.insert(instance_idx);
+        if (local.empty() || local.size() == object->instances.size()) continue;
+        for (int i = 0; i < plates.get_plate_count(); ++i) {
+            auto* plate = plates.get_plate(i);
+            for (size_t j = 0; j < object->instances.size(); ++j)
+                if (plate->contain_instance(int(object_idx), int(j))) {
+                    plate->update_slice_result_valid_state(false);
+                    break;
+                }
+        }
+        const auto* detached = model.separate_instances(object_idx, local);
+        if (!detached) continue;
+        size_t selected_idx = 0;
+        for (auto index : selected) {
+            const auto* volume = selection.get_volume(index);
+            if (volume->object_idx() == int(object_idx) && local.count(size_t(volume->instance_idx())) &&
+                volume->volume_idx() >= 0 && size_t(volume->volume_idx()) < detached->volumes.size()) {
+                const auto instance_idx = std::distance(local.begin(), local.find(size_t(volume->instance_idx())));
+                selection_ids[selected_idx] = {detached->volumes[volume->volume_idx()]->id().id,
+                                              detached->instances[instance_idx]->id().id};
+            }
+            ++selected_idx;
+        }
+        separated = true;
+    }
+    if (!separated) return;
+    selection.clear();
+    plates.reload_all_objects(false, -1, true);
+    p->view3D->get_canvas3d()->reload_scene(true, true);
+    std::sort(selection_ids.begin(), selection_ids.end());
+    selection.set_deserialized(selection_mode, selection_ids);
+    sidebar().obj_list()->reload_all_plates(false);
 }
 
 void Plater::on_filaments_delete(size_t num_filaments, size_t filament_id, int replace_filament_id, const std::vector<unsigned char>& is_mixed_before_delete)

@@ -654,6 +654,7 @@ public:
 
     void on_filament_change(size_t filament_idx);
     void on_filament_count_change(size_t extruders_count);
+    void separate_plate_instances();
     void on_filaments_delete(size_t extruders_count, size_t filament_id, int replace_filament_id = -1, const std::vector<unsigned char>& is_mixed_before_delete = {});
     std::vector<Slic3r::ColorRGBA> get_extruders_colors();
     // BBS

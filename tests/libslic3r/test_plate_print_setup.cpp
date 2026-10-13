@@ -5,6 +5,9 @@
 #include "libslic3r/Semver.hpp"
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "libslic3r/PlatePrintSetup.hpp"
+#include "libslic3r/DiscoveredPrinter.hpp"
+#include "libslic3r/AppConfig.hpp"
+#include "libslic3r/Exception.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
@@ -264,6 +267,64 @@ TEST_CASE("Unsupported saved plate setups fail without substituting settings", "
     REQUIRE_THROWS(PlatePrintSetup::deserialize(R"({"version":2,"config":{}})"));
     REQUIRE_THROWS(PlatePrintSetup::deserialize(R"({"version":1,"config":{"unknown_setting":"1"}})"));
     REQUIRE_THROWS(PlatePrintSetup::deserialize(R"({"version":1,"config":{}})"));
+    REQUIRE_THROWS(PlatePrintSetup::deserialize(R"({"version":1,"config":{"layer_height":"0.2"}})"));
+}
+
+TEST_CASE("Incomplete or invalid bed settings are rejected before project restoration", "[PlatePrintSetup]")
+{
+    const auto original = setup(180, 0.4, 0.12, "#FF0000");
+    for (const char* key : {"printable_area", "printable_height", "nozzle_diameter"}) {
+        auto data = nlohmann::json::parse(original.serialize());
+        data["config"].erase(key);
+        REQUIRE_THROWS(PlatePrintSetup::deserialize(data.dump()));
+    }
+    for (const auto& area : {nlohmann::json::array(), nlohmann::json{{0, 0}, {0, 10}},
+                            nlohmann::json{{0, 0}, {0, 10}, {0, 20}}}) {
+        auto data = nlohmann::json::parse(original.serialize());
+        data["exact"]["printable_area"] = area;
+        REQUIRE_THROWS(PlatePrintSetup::deserialize(data.dump()));
+    }
+    auto data = nlohmann::json::parse(original.serialize());
+    data["exact"]["nozzle_diameter"] = nlohmann::json::array();
+    REQUIRE_THROWS(PlatePrintSetup::deserialize(data.dump()));
+    data = nlohmann::json::parse(original.serialize());
+    data["exact"]["printable_height"] = -1;
+    REQUIRE_THROWS(PlatePrintSetup::deserialize(data.dump()));
+    data = nlohmann::json::parse(original.serialize());
+    data["config"]["printer_technology"] = "SLA";
+    REQUIRE_THROWS(PlatePrintSetup::deserialize(data.dump()));
+}
+
+TEST_CASE("Portable project destinations never publish legacy connection addresses", "[PlatePrintSetup][3MF]")
+{
+    ProjectFixture project;
+    AppConfig local;
+    project.plate.print_setup.destination = "scanned:moonraker:192.168.1.60:7125";
+    project.plate.print_setup.destination_name = "Workshop";
+    REQUIRE_THROWS(project.plate.print_setup.serialize());
+    project.plate.print_setup.destination = "192.168.1.60:7125";
+    REQUIRE_THROWS(project.plate.print_setup.serialize());
+    project.plate.print_setup.destination = "printer.local:7125";
+    REQUIRE_THROWS(project.plate.print_setup.serialize());
+    project.plate.print_setup.destination = "192.168.1.60:7125";
+    project.plate.print_setup.destination = portable_printer_destination(project.plate.print_setup.destination, local);
+    const auto reopened = PlatePrintSetup::deserialize(project.plate.print_setup.serialize());
+    REQUIRE(reopened.destination == project.plate.print_setup.destination);
+    REQUIRE(reopened.destination_name == "Workshop");
+    ScopedTemporaryFile file(".3mf");
+    project.save(file.string());
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    REQUIRE(open_zip_reader(&zip, file.string()));
+    for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&zip); ++i) {
+        mz_zip_archive_file_stat stat;
+        REQUIRE(mz_zip_reader_file_stat(&zip, i, &stat));
+        if (stat.m_is_directory) continue;
+        std::string data(stat.m_uncomp_size, '\0');
+        REQUIRE(mz_zip_reader_extract_to_mem(&zip, i, data.data(), data.size(), 0));
+        REQUIRE(data.find("192.168.1.60") == std::string::npos);
+    }
+    close_zip_reader(&zip);
 }
 
 TEST_CASE("Plate setup files omit printer connection credentials", "[PlatePrintSetup]")
@@ -298,6 +359,8 @@ TEST_CASE("A two-plate 3MF retains each printing setup and original geometry", "
     first.plate_index = 0;
     first.plate_name = "Small printer";
     first.locked = true;
+    first.has_workspace_position = true;
+    first.workspace_position = Vec2d(-37.25, 18.5);
     first.objects_and_instances = {{0, 0}};
     first.print_setup = setup(180, 0.4, 0.12, "#FF0000");
     first.print_setup.config.set_key_value("filament_colour", new ConfigOptionStrings({"#FF0000", "#00FF00"}));
@@ -354,7 +417,8 @@ TEST_CASE("A two-plate 3MF retains each printing setup and original geometry", "
     REQUIRE_FALSE(imported.plates[1]->locked);
     REQUIRE(imported.plates[1]->has_workspace_position);
     REQUIRE_THAT((imported.plates[1]->workspace_position - second.workspace_position).norm(), Catch::Matchers::WithinAbs(0, 1e-9));
-    REQUIRE_FALSE(imported.plates[0]->has_workspace_position);
+    REQUIRE(imported.plates[0]->has_workspace_position);
+    REQUIRE_THAT((imported.plates[0]->workspace_position - first.workspace_position).norm(), Catch::Matchers::WithinAbs(0, 1e-9));
     REQUIRE(loaded.objects.size() == 2);
     REQUIRE(TriangleSelector::has_facets(loaded.objects[0]->volumes[0]->mmu_segmentation_facets.get_data(), EnforcerBlockerType::Extruder2));
     // The reader may recenter mesh vertices and compensate in the instance;
@@ -436,6 +500,45 @@ TEST_CASE("Geometry can be imported when a project's plate settings are unsuppor
         REQUIRE(loaded_plate->print_setup.empty());
         REQUIRE_FALSE(loaded_plate->has_workspace_position);
     }
+}
+
+TEST_CASE("Incomplete plate setups reject project restoration and allow geometry recovery", "[PlatePrintSetup][3MF]")
+{
+    ProjectFixture project;
+    ScopedTemporaryFile file(".3mf");
+    project.save(file.string());
+    edit_plate_metadata(file.string(), [](std::string& xml) {
+        const auto key_start = xml.find("key=\"orca_plate_print_setup\"");
+        REQUIRE(key_start != std::string::npos);
+        const auto value_start = xml.find("value=\"", key_start) + 7;
+        const auto value_end = xml.find('"', value_start);
+        xml.replace(value_start, value_end - value_start,
+                    "{&quot;version&quot;:1,&quot;config&quot;:{&quot;layer_height&quot;:&quot;0.2&quot;}}");
+    });
+    ScopedTemporaryDir backup;
+    Model rejected;
+    rejected.set_backup_path(backup.string());
+    DynamicPrintConfig config;
+    ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Disable};
+    Imported rejected_plates;
+    bool bambu = false, orca = false;
+    Semver version;
+    bool restored = false;
+    try {
+        restored = load_bbs_3mf(file.string().c_str(), &config, &substitutions, &rejected, &rejected_plates.plates,
+            &rejected_plates.presets, &bambu, &orca, &version, nullptr, LoadStrategy::LoadModel | LoadStrategy::LoadConfig);
+    } catch (const RuntimeError&) {}
+    REQUIRE_FALSE(restored);
+    Model recovered;
+    recovered.set_backup_path(backup.string());
+    Imported recovered_plates;
+    REQUIRE(load_bbs_3mf(file.string().c_str(), &config, &substitutions, &recovered, &recovered_plates.plates,
+        &recovered_plates.presets, &bambu, &orca, &version, nullptr, LoadStrategy::LoadModel));
+    REQUIRE(recovered.objects.size() == 1);
+    REQUIRE_THAT((recovered.objects[0]->instance_bounding_box(0).min - project.model.objects[0]->instance_bounding_box(0).min).norm(),
+                 Catch::Matchers::WithinAbs(0, 1e-6));
+    REQUIRE_THAT((recovered.objects[0]->instance_bounding_box(0).max - project.model.objects[0]->instance_bounding_box(0).max).norm(),
+                 Catch::Matchers::WithinAbs(0, 1e-6));
 }
 
 TEST_CASE("Projects without recognized plate metadata retain ordinary Orca settings", "[PlatePrintSetup][3MF]")

@@ -1555,6 +1555,20 @@ ModelInstance* ModelObject::add_instance(const Vec3d &offset, const Vec3d &scali
     return instance;
 }
 
+ModelObject* Model::separate_instances(size_t object_idx, const std::set<size_t>& instance_indices)
+{
+    if (object_idx >= objects.size() || instance_indices.empty()) return nullptr;
+    auto* original = objects[object_idx];
+    if (instance_indices.size() >= original->instances.size() || *instance_indices.rbegin() >= original->instances.size())
+        return nullptr;
+    auto* detached = add_object(*original);
+    for (size_t i = detached->instances.size(); i-- > 0;)
+        if (!instance_indices.count(i)) detached->delete_instance(i);
+    for (auto it = instance_indices.rbegin(); it != instance_indices.rend(); ++it)
+        original->delete_instance(*it);
+    return detached;
+}
+
 void ModelObject::delete_instance(size_t idx)
 {
     ModelInstancePtrs::iterator i = this->instances.begin() + idx;
