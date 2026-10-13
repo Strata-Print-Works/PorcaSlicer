@@ -2,6 +2,7 @@
 #define slic3r_FlashForge_hpp_
 
 #include <vector>
+#include <atomic>
 #include <string>
 #include <wx/string.h>
 #include "PrintHost.hpp"
@@ -48,7 +49,7 @@ public:
     bool                       fetch_material_slots(std::vector<FlashforgeMaterialSlot>& slots, bool* supports_material_station, wxString& msg) const;
     // Parses a local API "detail" reply. Returns false when the body is not valid JSON.
     static bool                parse_material_slots(const std::string& body, std::vector<FlashforgeMaterialSlot>& slots, bool* supports_material_station);
-    static bool                discover_printers(std::vector<FlashforgeDiscoveredPrinter>& printers, wxString& msg, int timeout_ms = 10000, int idle_timeout_ms = 1500, int max_retries = 3);
+    static bool                discover_printers(std::vector<FlashforgeDiscoveredPrinter>& printers, wxString& msg, int timeout_ms = 10000, int idle_timeout_ms = 1500, int max_retries = 3, const std::atomic<bool>* cancelled = nullptr);
 
 private:
     std::string m_host;

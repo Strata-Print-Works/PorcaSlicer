@@ -382,6 +382,8 @@ void AppConfig::set_defaults()
 //#endif
     if (get("enable_multi_machine").empty())
         set_bool("enable_multi_machine", false);
+    if (get("independent_plate_setups").empty())
+        set_bool("independent_plate_setups", false);
 
     if (get("drc_bits").empty())
         set("drc_bits", DRC_BITS_DEFAULT_STR);

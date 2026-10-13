@@ -812,6 +812,11 @@ void ObjectList::update_filament_values_for_items_when_delete_filament(const siz
             continue;
 
         auto     object = (*m_objects)[i];
+        auto& plates = wxGetApp().plater()->get_partplate_list();
+        if (plates.independent_setups()) {
+            const auto local = plates.get_curr_plate()->get_objects_on_this_plate();
+            if (std::find(local.begin(), local.end(), object) == local.end()) continue;
+        }
         wxString extruder;
         if (!object->config.has("extruder")) {
             extruder = std::to_string(1);
@@ -1053,7 +1058,7 @@ void ObjectList::update_objects_list_filament_column(size_t filaments_count)
     m_prevent_update_filament_in_config = true;
 
     // BBS: update extruder values even when filaments_count is 1, because it may be reduced from value greater than 1
-    if (m_objects)
+    if (m_objects && !wxGetApp().plater()->get_partplate_list().independent_setups())
         update_filament_values_for_items(filaments_count);
 
     update_filament_colors();

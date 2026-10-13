@@ -1,4 +1,5 @@
 #include "Plater.hpp"
+#include "PrinterScanDialog.hpp"
 #include "../Utils/NetworkAgent.hpp"
 #include "IPrinterAgent.hpp"
 #include "CalibUtils.hpp"
@@ -863,6 +864,14 @@ struct ExtruderGroup : StaticBox
     }
 };
 
+static wxString printer_setup_title()
+{
+    auto* plater = wxGetApp().plater();
+    if (plater && plater->get_partplate_list().independent_setups())
+        return wxString::Format(_L("Printer for Plate %d"), plater->get_partplate_list().get_curr_plate_index() + 1);
+    return _L("Printer");
+}
+
 struct Sidebar::priv
 {
     Plater *plater;
@@ -1133,7 +1142,7 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
     if (m_panel_printer_content){
         bool isShown = m_panel_printer_content->IsShown();
         if(!isShown && m_text_printer_settings){
-            m_text_printer_settings->SetLabel(_L("Printer")); // ensure title returns to default state
+            m_text_printer_settings->SetLabel(printer_setup_title()); // ensure title returns to default state
             m_panel_printer_content->Show();
         }
     }
@@ -2815,7 +2824,7 @@ Sidebar::Sidebar(Plater *parent)
         p->m_panel_printer_title->SetBackgroundColor2(0xF1F1F1);
 
         p->m_printer_icon = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "printer");
-        p->m_text_printer_settings = new Label(p->m_panel_printer_title, _L("Printer"), LB_PROPAGATE_MOUSE_EVENT | wxST_ELLIPSIZE_END);
+        p->m_text_printer_settings = new Label(p->m_panel_printer_title, printer_setup_title(), LB_PROPAGATE_MOUSE_EVENT | wxST_ELLIPSIZE_END);
 
         p->m_printer_icon->Bind(wxEVT_BUTTON, [](wxCommandEvent& e) {
             //auto wizard_t = new ConfigWizard(wxGetApp().mainframe);
@@ -2826,6 +2835,10 @@ Sidebar::Sidebar(Plater *parent)
         p->m_printer_connect = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "monitor_signal_strong");
         p->m_printer_connect->SetToolTip(_L("Connection"));
         p->m_printer_connect->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
+            if (p->plater->get_partplate_list().independent_setups()) {
+                show_printer_scan(this->GetParent());
+                return;
+            }
             PhysicalPrinterDialog dlg(this->GetParent());
             dlg.ShowModal();
         });
@@ -2856,6 +2869,12 @@ Sidebar::Sidebar(Plater *parent)
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::TitlebarMargin()));
         h_sizer_title->SetMinSize(-1, 3 * em);
 
+        if (wxGetApp().app_config->get_bool("independent_plate_setups")) {
+            auto* scan = new wxButton(p->m_panel_printer_title, wxID_ANY, _L("Add printer…"));
+            scan->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { show_printer_scan(this->GetParent()); });
+            h_sizer_title->Insert(3, scan, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
+        }
+
         p->m_panel_printer_title->SetSizer(h_sizer_title);
         p->m_panel_printer_title->Layout();
 
@@ -2868,7 +2887,7 @@ Sidebar::Sidebar(Plater *parent)
                 return;
             // ORCA Show printer name on title when its folded to inform user without expanding it again
             bool     isShown = p->m_panel_printer_content->IsShown();
-            wxString title   = _L("Printer") + wxString(!isShown ? "" : ("  |  " + p->combo_printer->GetValue()));
+            wxString title   = printer_setup_title() + wxString(!isShown ? "" : ("  |  " + p->combo_printer->GetValue()));
             p->m_text_printer_settings->SetLabel(title);
             p->m_panel_printer_content->Show(!isShown);
             p->m_panel_printer_separator->Show(isShown);
@@ -3909,6 +3928,7 @@ void Sidebar::update_all_preset_comboboxes()
 
 void Sidebar::update_presets(Preset::Type preset_type)
 {
+    if (p->m_text_printer_settings) p->m_text_printer_settings->SetLabel(printer_setup_title());
     PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
     const auto print_tech = preset_bundle.printers.get_edited_preset().printer_technology();
 
@@ -7209,6 +7229,7 @@ struct Plater::priv
     //BBS: add a flag to ignore cancel event
     bool m_ignore_event{false};
     bool m_slice_all{false};
+    bool m_activating_plate_setup{false};
     bool m_is_slicing {false};
     // Missing-plugin set signatures (sorted full refs joined by '\n'), one per notification. They
     // gate plugin-load re-validation and avoid needlessly recreating the notification when the set
@@ -8929,6 +8950,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
     // Whether one of the files being loaded here carried a CAD recipe. A statement about these
     // files, not about the plater — q->model() may still hold the previous project's recipe.
     bool loaded_cad_recipe                  = false;
+    bool loaded_plate_setups                = false;
 
     int progress_percent = 0;
     int total_files = input_files.size();
@@ -9352,6 +9374,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                                 partplate_list.reset_size(current_width + Bed3D::Axes::DefaultTipRadius, current_depth + Bed3D::Axes::DefaultTipRadius, current_height, false);
                             }
                             project_filament_count = config_loaded.option<ConfigOptionStrings>("filament_colour")->size();
+                            loaded_plate_setups = loaded_plate_setups || std::any_of(plate_data.begin(), plate_data.end(),
+                                [](const auto* plate) { return plate && !plate->print_setup.empty(); });
                             partplate_list.load_from_3mf_structure(plate_data, project_filament_count);
                             partplate_list.update_slice_context_to_current_plate(background_process);
                             this->preview->update_gcode_result(partplate_list.get_current_slice_result());
@@ -9846,8 +9870,11 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 }
 
                 if (plate_data.size() > 0) {
+                    loaded_plate_setups = loaded_plate_setups || std::any_of(plate_data.begin(), plate_data.end(),
+                        [](const auto* plate) { return plate && !plate->print_setup.empty(); });
                     partplate_list.load_from_3mf_structure(plate_data, project_filament_count);
                     partplate_list.update_slice_context_to_current_plate(background_process);
+                    q->activate_plate_setup();
                     this->preview->update_gcode_result(partplate_list.get_current_slice_result());
                     release_PlateData_list(plate_data);
                     sidebar->obj_list()->reload_all_plates();
@@ -9864,6 +9891,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                     for (unsigned int i = 0; i < project_presets.size(); i++) { delete project_presets[i]; }
                     project_presets.clear();
                 }
+                q->activate_plate_setup();
             }
         } catch (const ConfigurationError &e) {
             std::string message = GUI::format(_L("Failed loading file \"%1%\". An invalid configuration was found."), filename.string()) + "\n\n" + e.what();
@@ -10276,7 +10304,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
 #ifdef SLIC3R_CAD
     cad_can_show = wxGetApp().is_enable_cad_feature();
 #endif
-    if (tolal_model_count <= 0 && !q->m_exported_file && (!loaded_cad_recipe || !cad_can_show)) {
+    if (tolal_model_count <= 0 && !loaded_plate_setups && !q->m_exported_file && (!loaded_cad_recipe || !cad_can_show)) {
         dlg.Hide();
         if (!is_user_cancel) {
             const wxString text = loaded_cad_recipe
@@ -11155,7 +11183,13 @@ void Plater::priv::update_print_volume_state()
     //BBS: use the plate's bounding box instead of the bed's
     PartPlate* pp = partplate_list.get_curr_plate();
     BuildVolume build_volume(pp->get_shape(), this->bed.build_volume().printable_height(), this->bed.build_volume().extruder_areas(), this->bed.build_volume().extruder_heights());
-    this->model.update_print_volume_state(build_volume);
+    if (partplate_list.independent_setups()) {
+        for (ModelObject* object : pp->get_objects_on_this_plate())
+            for (size_t index = 0; index < object->instances.size(); ++index)
+                if (partplate_list.find_instance_belongs(int(std::find(model.objects.begin(), model.objects.end(), object) - model.objects.begin()), int(index)) == partplate_list.get_curr_plate_index())
+                    object->instances[index]->print_volume_state = object->instances[index]->calc_print_volume_state(build_volume);
+    } else
+        this->model.update_print_volume_state(build_volume);
 }
 
 void Plater::priv::process_validation_warning(StringObjectException const &warning) const
@@ -12834,7 +12868,7 @@ void Plater::priv::on_select_bed_type(wxCommandEvent &evt)
                 //update slice status
                 auto plate_list = partplate_list.get_plate_list();
                 for (auto plate : plate_list) {
-                    if (plate->get_bed_type() == btDefault) {
+                    if ((!partplate_list.independent_setups() || plate == partplate_list.get_curr_plate()) && plate->get_bed_type() == btDefault) {
                         plate->update_slice_result_valid_state(false);
                     }
                 }
@@ -13007,7 +13041,7 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
         PartPlate* cur_plate = cur_plate_list.get_curr_plate();
         Vec3d cur_plate_pos = cur_plate->get_center_origin();
 
-        if (old_plate_pos.x() != cur_plate_pos.x() || old_plate_pos.y() != cur_plate_pos.y()) {
+        if (!cur_plate_list.independent_setups() && (old_plate_pos.x() != cur_plate_pos.x() || old_plate_pos.y() != cur_plate_pos.y())) {
             for (int i = 0; i < plate_object.size(); ++i) {
                 view3D->select_object_from_idx(plate_object[i]);
                 this->sidebar->obj_list()->update_selections();
@@ -13060,7 +13094,8 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
     // update slice state and set bedtype default for 3rd-party printer
     auto plate_list = partplate_list.get_plate_list();
     for (auto plate : plate_list) {
-         plate->update_slice_result_valid_state(false);
+        if (!partplate_list.independent_setups() || plate == partplate_list.get_curr_plate())
+            plate->update_slice_result_valid_state(false);
     }
 }
 
@@ -13453,7 +13488,7 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
 
         q->Freeze();
         q->select_plate(m_cur_slice_plate);
-        partplate_list.select_plate_view();
+        if (!partplate_list.independent_setups()) partplate_list.select_plate_view();
         int ret = q->start_next_slice();
         if (ret) {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":slicing all, plate %1% can not be sliced, will stop")%m_cur_slice_plate;
@@ -13812,6 +13847,12 @@ void Plater::priv::on_tab_selection_changing(wxBookCtrlEvent& e)
     const wxString new_name = main_frame->m_tabpanel->GetPageName(new_sel);
     sidebar_layout.show = new_name == TAB_ID_PREPARE || new_name == TAB_ID_PREVIEW;
     update_sidebar();
+    if (wxGetApp().app_config->get_bool("independent_plate_setups") && new_name == TAB_ID_MONITOR) {
+        // The saved-device list and its independent LAN checks do not need
+        // Bambu's plug-in; only the legacy printer control page does.
+        e.Skip();
+        return;
+    }
     int old_sel = e.GetOldSelection();
     const bool use_printer_agents = wxGetApp().app_config->get_bool("use_printer_agents");
     const bool use_native_device_tab = wxGetApp().preset_bundle &&
@@ -14455,7 +14496,8 @@ void Plater::priv::update_objects_position_when_select_preset(const std::functio
     // Re-clamp wipe tower positions to new bed boundaries after preset change
     PartPlateList &cur_plate_list = this->partplate_list;
     for (size_t plate_id = 0; plate_id < cur_plate_list.get_plate_list().size(); ++plate_id) {
-        cur_plate_list.set_default_wipe_tower_pos_for_plate(plate_id);
+        if (!cur_plate_list.independent_setups() || plate_id == cur_plate_list.get_curr_plate_index())
+            cur_plate_list.set_default_wipe_tower_pos_for_plate(plate_id);
     }
 
     update();
@@ -14942,7 +14984,7 @@ void Plater::priv::set_bed_shape(const Pointfs       &shape,
     if (!new_shape && partplate_list.get_logo_texture_filename() != custom_texture) {
         partplate_list.update_logo_texture_filename(custom_texture);
     }
-    if (new_shape) {
+    if (new_shape || partplate_list.independent_setups()) {
         if (view3D) view3D->bed_shape_changed();
         if (preview) preview->bed_shape_changed();
 
@@ -16161,6 +16203,10 @@ void Plater::load_project(wxString const& filename2,
 
     bool loaded_published   = false;
     std::vector<size_t> res = load_files(input_paths, strategy, false, &loaded_published);
+
+    // Import may select a different plate while rebuilding object selections.
+    // Restore that final selection before normal edits can capture its setup.
+    activate_plate_setup();
 
     reset_project_dirty_initial_presets();
     update_project_dirty_from_presets();
@@ -20384,29 +20430,25 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
     store_params.strategy = strategy | SaveStrategy::Zip64;
 
 
-    // get type and color for platedata
-    auto* filament_color = dynamic_cast<const ConfigOptionStrings*>(cfg.option("filament_colour"));
-    auto* nozzle_diameter_option = dynamic_cast<const ConfigOptionFloats*>(cfg.option("nozzle_diameter"));
-    auto* filament_id_opt = dynamic_cast<const ConfigOptionStrings*>(cfg.option("filament_ids"));
-    std::string nozzle_diameter_str;
-    if (nozzle_diameter_option)
-        nozzle_diameter_str = nozzle_diameter_option->serialize();
-
+    // Enrich each plate using the setup that produced its slice.
     std::string printer_model_id = preset_bundle.printers.get_edited_preset().get_printer_type(&preset_bundle);
     // The printer reads slice_info.config and knows only its own catalog ids.
     auto* id_agent = preset_bundle.is_bbl_vendor() ? wxGetApp().getAgent() : nullptr;
 
     for (int i = 0; i < plate_data_list.size(); i++) {
         PlateData *plate_data = plate_data_list[i];
-        plate_data->printer_model_id = printer_model_id;
-        plate_data->nozzle_diameters = nozzle_diameter_str;
+        auto plate_cfg = plate_data->print_setup.empty() ? cfg : plate_data->print_setup.config;
+        if (plate_data->print_setup.empty()) plate_data->printer_model_id = printer_model_id;
+        plate_data->nozzle_diameters = plate_cfg.option<ConfigOptionFloats>("nozzle_diameter")->serialize();
+        const auto* plate_colors = plate_cfg.option<ConfigOptionStrings>("filament_colour");
+        const auto* plate_ids = plate_cfg.option<ConfigOptionStrings>("filament_ids");
         for (auto it = plate_data->slice_filaments_info.begin(); it != plate_data->slice_filaments_info.end(); it++) {
             std::string display_filament_type;
-            it->type  = cfg.get_filament_type(display_filament_type, it->id);
-            it->filament_id = filament_id_opt ? filament_id_opt->get_at(it->id) : "";
+            it->type  = plate_cfg.get_filament_type(display_filament_type, it->id);
+            it->filament_id = plate_ids ? plate_ids->get_at(it->id) : "";
             if (id_agent)
                 it->filament_id = id_agent->from_orca_filament_id(it->filament_id);
-            it->color = filament_color ? filament_color->get_at(it->id) : "#FFFFFF";
+            it->color = plate_colors ? plate_colors->get_at(it->id) : "#FFFFFF";
             // save filament info used in curr plate
             int index = p->partplate_list.get_curr_plate_index();
             if (store_params.id_bboxes.size() > index) {
@@ -21246,10 +21288,12 @@ void Plater::on_filament_count_change(size_t num_filaments)
     plate_list.set_filament_count(num_filaments);
     for (int i = 0; i < plate_list.get_plate_count(); ++i) {
         PartPlate* part_plate = plate_list.get_plate(i);
-        part_plate->update_first_layer_print_sequence(num_filaments);
+        if (!plate_list.independent_setups() || (i == plate_list.get_curr_plate_index() && !activating_plate_setup()))
+            part_plate->update_first_layer_print_sequence(num_filaments);
     }
 
     for (ModelObject* mo : wxGetApp().model().objects) {
+        if (plate_list.independent_setups()) continue;
         for (ModelVolume* mv : mo->volumes) {
             mv->update_extruder_count(num_filaments);
         }
@@ -21276,7 +21320,9 @@ void Plater::on_filaments_delete(size_t num_filaments, size_t filament_id, int r
     const auto &is_mixed = is_mixed_before_delete.empty()
         ? wxGetApp().preset_bundle->project_config.option<ConfigOptionBools>("filament_is_mixed")->values
         : is_mixed_before_delete;
+    const auto local_objects = get_partplate_list().get_curr_plate()->get_objects_on_this_plate();
     for (ModelObject *mo : wxGetApp().model().objects) {
+        if (get_partplate_list().independent_setups() && std::find(local_objects.begin(), local_objects.end(), mo) == local_objects.end()) continue;
         for (ModelVolume *mv : mo->volumes) {
             mv->update_extruder_count_when_delete_filament(num_filaments, filament_id + 1, replace_filament_id + 1, is_mixed);  // this function is 1 base
         }
@@ -21304,6 +21350,7 @@ void Plater::on_filaments_delete(size_t num_filaments, size_t filament_id, int r
 
     // update customize gcode
     for (auto item = p->model.plates_custom_gcodes.begin(); item != p->model.plates_custom_gcodes.end(); ++item) {
+        if (get_partplate_list().independent_setups() && item->first != get_partplate_list().get_curr_plate_index()) continue;
         auto iter = std::remove_if(item->second.gcodes.begin(), item->second.gcodes.end(), [filament_id](const CustomGCode::Item& gcode_item) {
             return (gcode_item.type == CustomGCode::Type::ToolChange && gcode_item.extruder == filament_id + 1);
         });
@@ -21373,8 +21420,87 @@ void Plater::config_change_notification(const DynamicPrintConfig &config, const 
     // notification for more options
 }
 
+bool Plater::activating_plate_setup() const { return p->m_activating_plate_setup; }
+
+void Plater::enable_independent_plates()
+{
+    if (p->printer_technology != ptFFF) return;
+    p->partplate_list.enable_independent_setups();
+    capture_plate_setup();
+    set_plater_dirty(true);
+}
+
+void Plater::capture_plate_setup()
+{
+    if (!p->partplate_list.independent_setups() || p->m_activating_plate_setup || is_loading_project()) return;
+    auto& setup = p->partplate_list.get_curr_plate()->print_setup();
+    setup.capture(*wxGetApp().preset_bundle);
+    const auto destination = scanned_printer_destination(sidebar().printer_combox()->get_selected_dev_id());
+    // A project opened on another computer still remembers its intended printer.
+    // Choosing a different printer replaces that intent; a missing local match does not.
+    if (!destination.empty() || !missing_scanned_printer(setup.destination)) {
+        setup.destination = destination;
+        setup.destination_name = scanned_printer_name(destination);
+    }
+}
+
+bool Plater::prepare_plate_setup_switch(int index)
+{
+    if (!p->partplate_list.independent_setups()) return true;
+    if (index != p->partplate_list.get_curr_plate_index() && !p->background_process.can_switch_print()) return false;
+    capture_plate_setup();
+    return true;
+}
+
+void Plater::activate_plate_setup()
+{
+    if (!p->partplate_list.independent_setups() || p->m_activating_plate_setup) return;
+    const auto& setup = p->partplate_list.get_curr_plate()->print_setup();
+    if (setup.empty()) return;
+    const bool was_dirty = p->is_project_dirty();
+    p->background_process_timer.Stop();
+    p->partplate_list.update_slice_context_to_current_plate(p->background_process);
+    p->preview->update_gcode_result(p->partplate_list.get_current_slice_result());
+    p->m_activating_plate_setup = true;
+    try {
+        setup.activate(*wxGetApp().preset_bundle, "Plate " + std::to_string(p->partplate_list.get_curr_plate_index() + 1));
+        const auto device_id = restore_scanned_printer(setup.destination, wxGetApp().preset_bundle->printers.get_edited_preset().config);
+        wxGetApp().load_current_presets(false, false);
+        ensure_scanned_printer(setup.destination);
+        sidebar().printer_combox()->set_selected_dev_id(device_id);
+        if (auto* devices = wxGetApp().getDeviceManager())
+            devices->set_selected_machine(device_id);
+        on_config_change(wxGetApp().preset_bundle->full_config());
+        set_bed_shape();
+    } catch (...) {
+        p->m_activating_plate_setup = false;
+        throw;
+    }
+    p->m_activating_plate_setup = false;
+    if (missing_scanned_printer(setup.destination)) {
+        const auto text = setup.destination_name.empty() ?
+            _u8L("This plate's printer isn't saved on this computer. You can keep editing or choose another printer.") :
+            format(_L("%s isn't saved on this computer. You can keep editing this plate or choose another printer."), setup.destination_name);
+        get_notification_manager()->push_notification(NotificationType::CustomNotification,
+            NotificationManager::NotificationLevel::RegularNotificationLevel, text, _u8L("Add printer"),
+            [this](wxEvtHandler*) { show_printer_scan(this); return true; });
+    }
+    // Loading an external preset makes its edited values the preset baseline.
+    // The project still needs saving when another plate carries unsaved edits.
+    if (was_dirty && !is_loading_project()) set_plater_dirty(true);
+    update_title_dirty_status();
+    p->view3D->get_canvas3d()->update_volumes_colors_by_extruder();
+    p->view3D->get_canvas3d()->set_as_dirty();
+}
+
 void Plater::on_config_change(const DynamicPrintConfig &config)
 {
+    if (!is_loading_project() && !p->m_activating_plate_setup) {
+        if (wxGetApp().app_config->get_bool("independent_plate_setups") && !p->partplate_list.independent_setups())
+            p->partplate_list.enable_independent_setups();
+        capture_plate_setup();
+    }
+
     bool update_scheduled = false;
     bool bed_shape_changed = false;
     bool imex_changed = false;
@@ -21426,7 +21552,10 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
             p->view3D->get_canvas3d()->reset_sequential_print_clearance();
             p->preview->get_canvas3d()->reset_volumes();
             //BBS: invalid all the slice results
-            p->partplate_list.invalid_all_slice_result();
+            if (p->partplate_list.independent_setups())
+                p->partplate_list.get_curr_plate()->update_slice_result_valid_state(false);
+            else
+                p->partplate_list.invalid_all_slice_result();
         }
         //BBS: add bed_exclude_area
         else if (opt_key == "printable_area" || opt_key == "bed_exclude_area"
@@ -21504,11 +21633,14 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
     }
 
     config_change_notification(config, std::string("print_sequence"));
+    capture_plate_setup();
+    if (p->partplate_list.independent_setups())
+        p->view3D->get_canvas3d()->update_volumes_colors_by_extruder();
 
     if (update_scheduled)
         update();
 
-    if (p->main_frame->is_loaded()) {
+    if (p->main_frame->is_loaded() && !p->m_activating_plate_setup) {
         this->p->schedule_background_process();
         update_title_dirty_status();
         p->schedule_auto_reslice_if_needed();
@@ -22608,7 +22740,7 @@ int Plater::select_sliced_plate(int plate_index, bool skip_zoom)
         Thaw();
         return -1;
     }
-    if(skip_zoom)
+    if (skip_zoom && !p->partplate_list.independent_setups())
         p->partplate_list.select_plate_view();
     Thaw();
 
@@ -23266,6 +23398,9 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
             BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "can not select plate %1%" << plate_index;
             ret = -1;
         }
+    } else if (action == (int)PartPlate::PLATE_DRAG_HOVER_ID && p->partplate_list.independent_setups()) {
+        // Dragging is handled by the prepare canvas; a click must never reorder plates.
+        ret = 0;
     } else if ((action == 7) && (!right_click)) {
         // move plate to the front
         take_snapshot("move plate to the front");

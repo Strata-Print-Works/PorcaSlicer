@@ -1,4 +1,7 @@
 #include"cxmdns.h"
+#include <chrono>
+#include <atomic>
+#include <functional>
 #include"mdns.h"
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -170,87 +173,47 @@ namespace cxnet
 		}
 	}
 
-	std::vector<machine_info> syncDiscoveryService(const std::vector<std::string>& prefix)
-	{
-		std::vector<machine_info> retmachineInfos;
-		const char* hostname = "cxslice-host";
-		// Initialize network environment
+    std::vector<machine_info> syncDiscoveryService(const std::vector<std::string>& prefix,
+                                                  const std::atomic<bool>* cancelled, std::function<bool()> permit_probe)
+    {
+        std::vector<machine_info> result;
 #ifdef _WIN32
-		WORD versionWanted = MAKEWORD(1, 1);
-		WSADATA wsaData;
-		if (WSAStartup(versionWanted, &wsaData)) {
-			printf("Failed to initialize WinSock\n");
-			return retmachineInfos;
-		}
-		char hostname_buffer[256];
-		DWORD hostname_size = (DWORD)sizeof(hostname_buffer);
-		if (GetComputerNameA(hostname_buffer, &hostname_size))
-			hostname = hostname_buffer;
-		SetConsoleCtrlHandler(console_handler, TRUE);
-#else
-		char hostname_buffer[256];
-		size_t hostname_size = sizeof(hostname_buffer);
-		if (gethostname(hostname_buffer, hostname_size) == 0)
-			hostname = hostname_buffer;
-		signal(SIGINT, signal_handler);
+        WSADATA data;
+        if (WSAStartup(MAKEWORD(1, 1), &data)) return result;
 #endif
-		int sockets[32];
-		int num_sockets = open_client_sockets(sockets, sizeof(sockets) / sizeof(sockets[0]), 0);
-		if (num_sockets <= 0) {
-			printf("Failed to open any client sockets\n");
+        int sockets[4];
+        const int count = open_client_sockets(sockets, 4, 0);
+        for (int i = 0; i < count; ++i) {
+#ifndef _WIN32
+            if (sockets[i] >= FD_SETSIZE) { mdns_socket_close(sockets[i]); sockets[i] = -1; continue; }
+#endif
+            if ((cancelled && cancelled->load()) || (permit_probe && !permit_probe())) break;
+            if (mdns_discovery_send(sockets[i])) { mdns_socket_close(sockets[i]); sockets[i] = -1; }
+        }
+        char buffer[2048];
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while ((!cancelled || !cancelled->load()) && std::chrono::steady_clock::now() < deadline) {
+            fd_set readfs;
+            FD_ZERO(&readfs);
+            int nfds = 0;
+            for (int i = 0; i < count; ++i) {
+                if (sockets[i] < 0) continue;
+                FD_SET(sockets[i], &readfs);
+                if (sockets[i] >= nfds) nfds = sockets[i] + 1;
+            }
+            if (nfds == 0) break;
+            timeval timeout{0, 100000};
+            const int ready = select(nfds, &readfs, nullptr, nullptr, &timeout);
+            if (ready < 0) break;
+            if (ready > 0)
+                for (int i = 0; i < count; ++i)
+                    if (sockets[i] >= 0 && FD_ISSET(sockets[i], &readfs))
+                        recvMachineInfoFromSocket(sockets[i], buffer, sizeof(buffer), prefix, result, i);
+        }
+        for (int i = 0; i < count; ++i) if (sockets[i] >= 0) mdns_socket_close(sockets[i]);
 #ifdef _WIN32
-			WSACleanup();
+        WSACleanup();
 #endif
-			return retmachineInfos;
-		}
-		printf("Opened %d socket%s for DNS-SD\n", num_sockets, num_sockets > 1 ? "s" : "");
-		printf("Sending DNS-SD discovery\n");
-		for (int isock = 0; isock < num_sockets; ++isock) {
-			if (mdns_discovery_send(sockets[isock]))
-				printf("Failed to send DNS-DS discovery: %s\n", strerror(errno));
-		}
-		size_t capacity = 2048;
-		void* buffer = malloc(capacity);
-		size_t recordNum = 0;
-		void* user_data = 0;
-
-		// This is a simple implementation that loops for 5 seconds or as long as we get replies
-		int res;
-		printf("Reading DNS-SD replies\n");
-		do {
-			struct timeval timeout;
-			timeout.tv_sec = 5;
-			timeout.tv_usec = 0;
-
-			int nfds = 0;
-			fd_set readfs;
-			FD_ZERO(&readfs);
-			for (int isock = 0; isock < num_sockets; ++isock) {
-				if (sockets[isock] >= nfds)
-					nfds = sockets[isock] + 1;
-				FD_SET(sockets[isock], &readfs);
-			}
-			res = select(nfds, &readfs, 0, 0, &timeout);
-			if (res > 0) {
-				for (int isock = 0; isock < num_sockets; ++isock) {
-					if (FD_ISSET(sockets[isock], &readfs)) {
-						//	records += mdns_discovery_recv(sockets[isock], buffer, capacity, query_callback,
-						//		0);
-						recvMachineInfoFromSocket(sockets[isock], buffer, capacity, prefix, retmachineInfos, isock);
-						recordNum++;
-					}
-				}
-			}
-		} while (res > 0);
-
-		free(buffer);
-		//
-		for (int isock = 0; isock < num_sockets; ++isock)
-			mdns_socket_close(sockets[isock]);
-		printf("Closed socket%s\n", num_sockets ? "s" : "");
-#ifdef _WIN32
-		WSACleanup();
-#endif
-		return std::move(retmachineInfos);
-	}
+        return result;
+    }
 }

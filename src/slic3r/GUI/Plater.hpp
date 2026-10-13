@@ -662,6 +662,11 @@ public:
     bool update_filament_colors_in_full_config();
     void config_change_notification(const DynamicPrintConfig &config, const std::string& key);
     void on_config_change(const DynamicPrintConfig &config);
+    void enable_independent_plates();
+    void capture_plate_setup();
+    bool prepare_plate_setup_switch(int plate_index);
+    void activate_plate_setup();
+    bool activating_plate_setup() const;
     void force_filament_colors_update();
     void force_print_bed_update();
     // On activating the parent window.

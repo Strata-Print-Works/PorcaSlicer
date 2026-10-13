@@ -58,6 +58,7 @@
 #include "Widgets/ProgressBar.hpp"
 #include "Widgets/ImageSwitchButton.hpp"
 #include "Widgets/AMSControl.hpp"
+#include "Widgets/AMSItem.hpp"
 #include "Widgets/FilamentLoad.hpp"
 #include "Widgets/FanControl.hpp"
 #include "HMS.hpp"
@@ -577,6 +578,9 @@ protected:
     StepIndicator*  m_calibration_flow;
 
     wxPanel *       m_machine_ctrl_panel;
+    wxPanel*        m_monitoring_temperatures{nullptr};
+    wxScrolledWindow* m_monitoring_filaments{nullptr};
+    wxString        m_filament_overview_key;
     wxPanel *       m_scale_panel;
     wxStaticBitmap* m_img_filament_loading;
     PrintingTaskPanel *       m_project_task_panel;
@@ -625,6 +629,7 @@ public:
     wxBoxSizer *create_temp_axis_group(wxWindow *parent);
     wxBoxSizer *create_temp_control(wxWindow *parent);
     wxBoxSizer *create_misc_control(wxWindow *parent);
+    void update_filament_overview(const std::vector<AMSinfo>& ams, const std::vector<AMSinfo>& external);
     wxBoxSizer *create_axis_control(wxWindow *parent);
     wxPanel *create_bed_control(wxWindow *parent);
     wxBoxSizer *create_extruder_control(wxWindow *parent);

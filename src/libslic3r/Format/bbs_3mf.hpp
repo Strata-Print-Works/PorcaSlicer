@@ -4,6 +4,8 @@
 #include "../GCode/ThumbnailData.hpp"
 #include "libslic3r/MultiNozzleUtils.hpp"
 #include "libslic3r/Semver.hpp"
+#include "libslic3r/PlatePrintSetup.hpp"
+#include "libslic3r/Point.hpp"
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include <cstddef>
@@ -117,6 +119,9 @@ struct PlateData
     std::vector<PlateMixedFilamentInfo> mixed_filaments_info;
     std::vector<size_t> skipped_objects;
     DynamicPrintConfig config;
+    PlatePrintSetup print_setup;
+    bool has_workspace_position {false};
+    Vec2d workspace_position {Vec2d::Zero()};
     bool            is_support_used {false};
     bool            is_sliced_valid = false;
     bool            toolpath_outside {false};

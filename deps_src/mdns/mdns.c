@@ -1,3 +1,4 @@
+#include "../../src/libslic3r/DiscoveryPolicy.h"
 
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -481,9 +482,9 @@ open_client_sockets(int* sockets, int max_sockets, int port) {
 	}
 
 	int first_ipv4 = 1;
-	int first_ipv6 = 1;
 	for (PIP_ADAPTER_ADDRESSES adapter = adapter_address; adapter; adapter = adapter->Next) {
-		if (adapter->TunnelType == TUNNEL_TYPE_TEREDO)
+        if (adapter->TunnelType != TUNNEL_TYPE_NONE || adapter->PhysicalAddressLength == 0 ||
+            (adapter->IfType != IF_TYPE_ETHERNET_CSMACD && adapter->IfType != IF_TYPE_IEEE80211))
 			continue;
 		if (adapter->OperStatus != IfOperStatusUp)
 			continue;
@@ -492,6 +493,7 @@ open_client_sockets(int* sockets, int max_sockets, int port) {
 		     unicast = unicast->Next) {
 			if (unicast->Address.lpSockaddr->sa_family == AF_INET) {
 				struct sockaddr_in* saddr = (struct sockaddr_in*)unicast->Address.lpSockaddr;
+                if (!discovery_ipv4_allowed(ntohl(saddr->sin_addr.s_addr))) continue;
 				if ((saddr->sin_addr.S_un.S_un_b.s_b1 != 127) ||
 				    (saddr->sin_addr.S_un.S_un_b.s_b2 != 0) ||
 				    (saddr->sin_addr.S_un.S_un_b.s_b3 != 0) ||
@@ -520,42 +522,6 @@ open_client_sockets(int* sockets, int max_sockets, int port) {
 						printf("Local IPv4 address: %.*s\n", MDNS_STRING_FORMAT(addr));
 					}
 				}
-			} else if (unicast->Address.lpSockaddr->sa_family == AF_INET6) {
-				struct sockaddr_in6* saddr = (struct sockaddr_in6*)unicast->Address.lpSockaddr;
-				// Ignore link-local addresses
-				if (saddr->sin6_scope_id)
-					continue;
-				static const unsigned char localhost[] = {0, 0, 0, 0, 0, 0, 0, 0,
-				                                          0, 0, 0, 0, 0, 0, 0, 1};
-				static const unsigned char localhost_mapped[] = {0, 0, 0,    0,    0,    0, 0, 0,
-				                                                 0, 0, 0xff, 0xff, 0x7f, 0, 0, 1};
-				if ((unicast->DadState == NldsPreferred) &&
-				    memcmp(saddr->sin6_addr.s6_addr, localhost, 16) &&
-				    memcmp(saddr->sin6_addr.s6_addr, localhost_mapped, 16)) {
-					int log_addr = 0;
-					if (first_ipv6) {
-						service_address_ipv6 = *saddr;
-						first_ipv6 = 0;
-						log_addr = 1;
-					}
-					has_ipv6 = 1;
-					if (num_sockets < max_sockets) {
-						saddr->sin6_port = htons((unsigned short)port);
-						int sock = mdns_socket_open_ipv6(saddr);
-						if (sock >= 0) {
-							sockets[num_sockets++] = sock;
-							log_addr = 1;
-						} else {
-							log_addr = 0;
-						}
-					}
-					if (log_addr) {
-						char buffer[128];
-						mdns_string_t addr = ipv6_address_to_string(buffer, sizeof(buffer), saddr,
-						                                            sizeof(struct sockaddr_in6));
-						printf("Local IPv6 address: %.*s\n", MDNS_STRING_FORMAT(addr));
-					}
-				}
 			}
 		}
 	}
@@ -571,10 +537,10 @@ open_client_sockets(int* sockets, int max_sockets, int port) {
 		printf("Unable to get interface addresses\n");
 
 	int first_ipv4 = 1;
-	int first_ipv6 = 1;
 	for (ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
 		if (!ifa->ifa_addr)
 			continue;
+        if (!discovery_interface_name_allowed(ifa->ifa_name) || !(ifa->ifa_flags & IFF_RUNNING)) continue;
 		if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_MULTICAST))
 			continue;
 		if ((ifa->ifa_flags & IFF_LOOPBACK) || (ifa->ifa_flags & IFF_POINTOPOINT))
@@ -582,6 +548,7 @@ open_client_sockets(int* sockets, int max_sockets, int port) {
 
 		if (ifa->ifa_addr->sa_family == AF_INET) {
 			struct sockaddr_in* saddr = (struct sockaddr_in*)ifa->ifa_addr;
+            if (!discovery_ipv4_allowed(ntohl(saddr->sin_addr.s_addr))) continue;
 			if (saddr->sin_addr.s_addr != htonl(INADDR_LOOPBACK)) {
 				int log_addr = 0;
 				if (first_ipv4) {
@@ -605,41 +572,6 @@ open_client_sockets(int* sockets, int max_sockets, int port) {
 					mdns_string_t addr = ipv4_address_to_string(buffer, sizeof(buffer), saddr,
 					                                            sizeof(struct sockaddr_in));
 					printf("Local IPv4 address: %.*s\n", MDNS_STRING_FORMAT(addr));
-				}
-			}
-		} else if (ifa->ifa_addr->sa_family == AF_INET6) {
-			struct sockaddr_in6* saddr = (struct sockaddr_in6*)ifa->ifa_addr;
-			// Ignore link-local addresses
-			if (saddr->sin6_scope_id)
-				continue;
-			static const unsigned char localhost[] = {0, 0, 0, 0, 0, 0, 0, 0,
-			                                          0, 0, 0, 0, 0, 0, 0, 1};
-			static const unsigned char localhost_mapped[] = {0, 0, 0,    0,    0,    0, 0, 0,
-			                                                 0, 0, 0xff, 0xff, 0x7f, 0, 0, 1};
-			if (memcmp(saddr->sin6_addr.s6_addr, localhost, 16) &&
-			    memcmp(saddr->sin6_addr.s6_addr, localhost_mapped, 16)) {
-				int log_addr = 0;
-				if (first_ipv6) {
-					service_address_ipv6 = *saddr;
-					first_ipv6 = 0;
-					log_addr = 1;
-				}
-				has_ipv6 = 1;
-				if (num_sockets < max_sockets) {
-					saddr->sin6_port = htons(port);
-					int sock = mdns_socket_open_ipv6(saddr);
-					if (sock >= 0) {
-						sockets[num_sockets++] = sock;
-						log_addr = 1;
-					} else {
-						log_addr = 0;
-					}
-				}
-				if (log_addr) {
-					char buffer[128];
-					mdns_string_t addr = ipv6_address_to_string(buffer, sizeof(buffer), saddr,
-					                                            sizeof(struct sockaddr_in6));
-					printf("Local IPv6 address: %.*s\n", MDNS_STRING_FORMAT(addr));
 				}
 			}
 		}

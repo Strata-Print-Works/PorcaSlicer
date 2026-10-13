@@ -1,6 +1,11 @@
 #include "Flashforge.hpp"
+#include "DiscoveryNetwork.hpp"
+#include "libslic3r/DiscoveryPolicy.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <memory>
+#include <utility>
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -89,36 +94,6 @@ bool parse_discovery_response(const std::vector<unsigned char>& response, const 
     return !(printer.name.empty() && printer.serial_number.empty());
 }
 
-std::vector<std::string> get_discovery_broadcast_addresses()
-{
-    std::set<std::string> addresses = {"255.255.255.255", "192.168.0.255", "192.168.1.255"};
-
-    try {
-        boost::asio::io_context          io_context;
-        boost::asio::ip::tcp::resolver   resolver(io_context);
-        boost::system::error_code        ec;
-        const auto                       host_name = boost::asio::ip::host_name(ec);
-        if (!ec) {
-            const auto results = resolver.resolve(boost::asio::ip::tcp::v4(), host_name, "", ec);
-            if (!ec) {
-                for (const auto& entry : results) {
-                    const auto addr = entry.endpoint().address();
-                    if (!addr.is_v4())
-                        continue;
-
-                    const auto bytes = addr.to_v4().to_bytes();
-                    if (bytes[0] == 127)
-                        continue;
-
-                    addresses.insert((boost::format("%1%.%2%.%3%.255") % static_cast<int>(bytes[0]) % static_cast<int>(bytes[1]) % static_cast<int>(bytes[2])).str());
-                }
-            }
-        }
-    } catch (...) {
-    }
-
-    return {addresses.begin(), addresses.end()};
-}
 
 std::string safe_config_string(DynamicPrintConfig* config, const char* key)
 {
@@ -237,105 +212,78 @@ Flashforge::Flashforge(DynamicPrintConfig* config)
 
 const char* Flashforge::get_name() const { return "Flashforge"; }
 
-bool Flashforge::discover_printers(std::vector<FlashforgeDiscoveredPrinter>& printers, wxString& msg, int timeout_ms, int idle_timeout_ms, int max_retries)
+bool Flashforge::discover_printers(std::vector<FlashforgeDiscoveredPrinter>& printers, wxString& msg, int timeout_ms,
+                                 int idle_timeout_ms, int max_retries, const std::atomic<bool>* cancelled)
 {
     printers.clear();
-
     try {
-        const auto broadcast_addresses = get_discovery_broadcast_addresses();
-        std::map<std::string, FlashforgeDiscoveredPrinter> by_ip;
-
-        for (int attempt = 0; attempt < std::max(1, max_retries); ++attempt) {
-            boost::asio::io_context      io_context;
-            boost::asio::ip::udp::socket socket(io_context);
-            boost::system::error_code    ec;
-
-            socket.open(boost::asio::ip::udp::v4(), ec);
-            if (ec) {
-                msg = wxString::FromUTF8(ec.message().c_str());
-                return false;
-            }
-
-            socket.set_option(boost::asio::socket_base::broadcast(true), ec);
-            if (ec) {
-                msg = wxString::FromUTF8(ec.message().c_str());
-                return false;
-            }
-
-            socket.set_option(boost::asio::socket_base::reuse_address(true), ec);
-            if (ec) {
-                msg = wxString::FromUTF8(ec.message().c_str());
-                return false;
-            }
-
-            socket.bind({boost::asio::ip::udp::v4(), FLASHFORGE_DISCOVERY_LISTEN_PORT}, ec);
-            if (ec) {
-                msg = wxString::FromUTF8(ec.message().c_str());
-                return false;
-            }
-
-            for (const auto& addr : broadcast_addresses) {
-                socket.send_to(boost::asio::buffer(FLASHFORGE_DISCOVERY_MESSAGE),
-                               {boost::asio::ip::make_address_v4(addr, ec), FLASHFORGE_DISCOVERY_PORT}, 0, ec);
-                ec.clear();
-            }
-
-            socket.non_blocking(true, ec);
-            if (ec) {
-                msg = wxString::FromUTF8(ec.message().c_str());
-                return false;
-            }
-
-            const auto start      = std::chrono::steady_clock::now();
-            auto       last_reply = start;
-
-            while (true) {
-                const auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() >= timeout_ms)
-                    break;
-                if (!by_ip.empty() && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_reply).count() >= idle_timeout_ms)
-                    break;
-
-                std::vector<unsigned char> buffer(512);
-                boost::asio::ip::udp::endpoint remote_endpoint;
-                const auto received = socket.receive_from(boost::asio::buffer(buffer), remote_endpoint, 0, ec);
-                if (!ec) {
-                    buffer.resize(received);
-                    FlashforgeDiscoveredPrinter printer;
-                    if (parse_discovery_response(buffer, remote_endpoint.address().to_string(), printer)) {
-                        by_ip[printer.ip_address] = std::move(printer);
-                        last_reply               = std::chrono::steady_clock::now();
-                    }
-                } else if (ec == boost::asio::error::would_block || ec == boost::asio::error::try_again) {
-                    ec.clear();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                } else {
-                    msg = wxString::FromUTF8(ec.message().c_str());
-                    return false;
-                }
-            }
-
-            if (!by_ip.empty())
-                break;
+        using boost::asio::ip::udp;
+        struct Probe { std::unique_ptr<udp::socket> socket; udp::endpoint destination; };
+        boost::asio::io_context io;
+        std::vector<Probe> probes;
+        for (const auto& interface : discovery_interfaces()) {
+            if (!interface.broadcast || !discovery_netmask_valid(interface.netmask)) continue;
+            boost::system::error_code ec;
+            auto socket = std::make_unique<udp::socket>(io);
+            socket->open(udp::v4(), ec);
+            if (ec) continue;
+            socket->set_option(boost::asio::socket_base::broadcast(true), ec);
+            if (ec) continue;
+            socket->set_option(boost::asio::socket_base::reuse_address(true), ec);
+            if (ec) continue;
+            socket->bind(udp::endpoint(boost::asio::ip::address_v4(interface.address), FLASHFORGE_DISCOVERY_LISTEN_PORT), ec);
+            if (ec || !constrain_discovery_socket(*socket, interface.index)) continue;
+            socket->non_blocking(true, ec);
+            if (ec) continue;
+            probes.push_back({std::move(socket), udp::endpoint(boost::asio::ip::address_v4(interface.address | ~interface.netmask), FLASHFORGE_DISCOVERY_PORT)});
         }
-
-        for (auto& [_, printer] : by_ip)
-            printers.emplace_back(std::move(printer));
-
-        std::sort(printers.begin(), printers.end(), [](const FlashforgeDiscoveredPrinter& lhs, const FlashforgeDiscoveredPrinter& rhs) {
-            if (lhs.name != rhs.name)
-                return lhs.name < rhs.name;
-            return lhs.ip_address < rhs.ip_address;
-        });
-
-        if (printers.empty()) {
-            msg = _(L("No Flashforge printers were discovered on the local network."));
+        if (probes.empty()) {
+            msg = _L("Could not search for Flashforge printers. Check your network connection.");
             return false;
         }
-
-        return true;
-    } catch (const std::exception& ex) {
-        msg = wxString::FromUTF8(ex.what());
+        std::map<std::string, FlashforgeDiscoveredPrinter> by_ip;
+        for (int attempt = 0; attempt < std::max(1, max_retries); ++attempt) {
+            for (auto& probe : probes) {
+                if (!probe.socket->is_open()) continue;
+                if (!wait_for_discovery_probe(cancelled)) return false;
+                boost::system::error_code ec;
+                probe.socket->send_to(boost::asio::buffer(FLASHFORGE_DISCOVERY_MESSAGE), probe.destination, 0, ec);
+                if (ec) probe.socket->close(ec);
+            }
+            const auto start = std::chrono::steady_clock::now();
+            auto last_reply = start;
+            while ((!cancelled || !cancelled->load()) && std::chrono::steady_clock::now() - start < std::chrono::milliseconds(timeout_ms)) {
+                if (!by_ip.empty() && std::chrono::steady_clock::now() - last_reply >= std::chrono::milliseconds(idle_timeout_ms)) break;
+                bool open = false;
+                for (auto& probe : probes) {
+                    if (!probe.socket->is_open()) continue;
+                    open = true;
+                    for (int packet = 0; packet < 32; ++packet) {
+                        std::vector<unsigned char> buffer(512);
+                        udp::endpoint remote;
+                        boost::system::error_code ec;
+                        const auto size = probe.socket->receive_from(boost::asio::buffer(buffer), remote, 0, ec);
+                        if (ec == boost::asio::error::would_block || ec == boost::asio::error::try_again) break;
+                        if (ec) { probe.socket->close(ec); break; }
+                        buffer.resize(size);
+                        FlashforgeDiscoveredPrinter printer;
+                        if (parse_discovery_response(buffer, remote.address().to_string(), printer)) {
+                            by_ip[printer.ip_address] = std::move(printer);
+                            last_reply = std::chrono::steady_clock::now();
+                        }
+                    }
+                }
+                if (!open) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            if (!by_ip.empty() || (cancelled && cancelled->load())) break;
+        }
+        for (auto& entry : by_ip) printers.push_back(std::move(entry.second));
+        std::sort(printers.begin(), printers.end(), [](const auto& a, const auto& b) { return a.name < b.name || (a.name == b.name && a.ip_address < b.ip_address); });
+        if (printers.empty()) msg = _L("No Flashforge printers were discovered on the local network.");
+        return !printers.empty();
+    } catch (const std::exception& error) {
+        msg = wxString::FromUTF8(error.what());
         return false;
     }
 }

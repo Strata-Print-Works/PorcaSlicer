@@ -55,3 +55,8 @@ __pycache__/
 /.test/
 docs/superpowers/
 ctest_results.xml
+
+# Local Porca app bundles, saved projects, device data and generated test presets.
+/artifacts/
+/mockups/
+/base/

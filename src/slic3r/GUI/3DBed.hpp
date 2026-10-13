@@ -167,6 +167,9 @@ public:
 
     void render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes);
 
+    // Draw only the physical bed mesh for a plate with its own display context.
+    // Returns false when no mesh is available, allowing the caller's polygon fallback.
+    bool render_model_only(const Transform3d& view_matrix, const Transform3d& projection_matrix);
     void on_change_color_mode(bool is_dark);
 
 private:

@@ -2,6 +2,7 @@
 #define slic3r_CrealityHostDiscovery_hpp_
 
 #include <string>
+#include <atomic>
 #include <vector>
 
 namespace Slic3r {
@@ -37,7 +38,7 @@ struct CrealityHost
 class CrealityHostDiscovery
 {
 public:
-    static std::vector<CrealityHost> scan(bool probe_info = true);
+    static std::vector<CrealityHost> scan(bool probe_info = true, const std::atomic<bool>* cancelled = nullptr);
 };
 
 } // namespace Slic3r

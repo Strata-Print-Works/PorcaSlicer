@@ -11,6 +11,7 @@
 #include "MainFrame.hpp"
 #include "GUI_App.hpp"
 #include "Plater.hpp"
+#include "PartPlate.hpp"
 
 #include "Widgets/Label.hpp"
 #include "Widgets/SwitchButton.hpp"
@@ -615,6 +616,11 @@ void ParamsPanel::OnToggled(wxCommandEvent& event)
 // This is special, DO NOT call it from outer except from Tab
 void ParamsPanel::set_active_tab(wxPanel* tab)
 {
+    if (m_mode_region) {
+        auto* plater = wxGetApp().plater();
+        m_mode_region->SetLabels(plater && plater->get_partplate_list().independent_setups() ?
+            _L("This plate") : _L("Global"), _L("Objects"));
+    }
     Tab* cur_tab = dynamic_cast<Tab *> (tab);
 
     if (cur_tab == nullptr) {

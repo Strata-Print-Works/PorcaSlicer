@@ -38,6 +38,10 @@ set(lisbslic3r_sources
     AnyPtr.hpp
     AppConfig.cpp
     AppConfig.hpp
+    PlatePrintSetup.cpp
+    PlatePrintSetup.hpp
+    DiscoveredPrinter.cpp
+    DiscoveredPrinter.hpp
     Arachne/BeadingStrategy/BeadingStrategy.cpp
     Arachne/BeadingStrategy/BeadingStrategyFactory.cpp
     Arachne/BeadingStrategy/BeadingStrategyFactory.hpp

@@ -102,6 +102,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/ConfigWizard_private.hpp
     GUI/ConnectPrinter.cpp
     GUI/ConnectPrinter.hpp
+    GUI/PrinterScanDialog.cpp
+    GUI/PrinterScanDialog.hpp
+    Utils/PrinterDiscovery.cpp
+    Utils/PrinterDiscovery.hpp
     GUI/CreatePresetsDialog.cpp
     GUI/CreatePresetsDialog.hpp
     GUI/DailyTips.cpp
@@ -722,6 +726,10 @@ set(SLIC3R_GUI_SOURCES
     Utils/bambu_networking.hpp
     Utils/Bonjour.cpp
     Utils/Bonjour.hpp
+    Utils/DiscoveryNetwork.cpp
+    Utils/DiscoveryNetwork.hpp
+    Utils/SystemBonjour.cpp
+    Utils/SystemBonjour.hpp
     Utils/MeshInspect.cpp
     Utils/MeshInspect.hpp
     Utils/PaintCLI.cpp

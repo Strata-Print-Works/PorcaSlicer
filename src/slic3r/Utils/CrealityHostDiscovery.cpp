@@ -1,7 +1,11 @@
+#include "Bonjour.hpp"
 #include "CrealityHostDiscovery.hpp"
 #include "CrealityPrint.hpp"
 #include "cxmdns.h"
 #include "Http.hpp"
+#include "SystemBonjour.hpp"
+#include "DiscoveryNetwork.hpp"
+#include <atomic>
 
 #include <boost/log/trivial.hpp>
 #include <exception>
@@ -79,14 +83,21 @@ void probe_info(CrealityHost& host)
 
 } // namespace
 
-std::vector<CrealityHost> CrealityHostDiscovery::scan(bool probe)
+std::vector<CrealityHost> CrealityHostDiscovery::scan(bool probe, const std::atomic<bool>* cancelled)
 {
     const std::vector<std::string> prefixes{ "Creality", "creality" };
 
     BOOST_LOG_TRIVIAL(info)
         << "CrealityHostDiscovery: starting DNS-SD discovery (prefixes: Creality, creality)";
 
-    auto raw = cxnet::syncDiscoveryService(prefixes);
+    std::vector<cxnet::machine_info> raw;
+#ifdef __APPLE__
+    const std::atomic<bool> never_cancelled{false};
+    system_bonjour_lookup("", "", {}, cancelled ? *cancelled : never_cancelled, 6,
+        [&raw](BonjourReply&& reply) { raw.push_back({reply.ip.to_string(), reply.service_name}); }, true);
+#else
+    raw = cxnet::syncDiscoveryService(prefixes, cancelled, [cancelled] { return wait_for_discovery_probe(cancelled); });
+#endif
 
     BOOST_LOG_TRIVIAL(info)
         << "CrealityHostDiscovery: mDNS returned " << raw.size() << " match(es)";
@@ -98,6 +109,7 @@ std::vector<CrealityHost> CrealityHostDiscovery::scan(bool probe)
     // we capture both IPv4/IPv6 replies.
     std::vector<std::string> seen_ips;
     for (const auto& m : raw) {
+        if (cancelled && cancelled->load()) break;
         if (m.machineIp.empty()) continue;
         if (std::find(seen_ips.begin(), seen_ips.end(), m.machineIp) != seen_ips.end())
             continue;

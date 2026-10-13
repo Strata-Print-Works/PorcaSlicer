@@ -16,6 +16,7 @@
 #include <new>
 #include "libslic3r/GCode/ThumbnailData.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Model.hpp"
 #include "libslic3r/Zipper.hpp"
 #include <mutex>
 #include "libslic3r/PrintBase.hpp"
@@ -741,7 +742,33 @@ Print::ApplyStatus BackgroundSlicingProcess::apply(const Model& model, const Dyn
     // TODO: add partplate config
     DynamicPrintConfig new_config = config;
     new_config.apply(*m_current_plate->config());
-    Print::ApplyStatus invalidated = m_print->apply(model, new_config);
+    // This is a derived variant index. Replaying the preset's placeholder over
+    // a completed slice invalidates it even when the physical inputs match.
+    if (!m_current_plate->print_setup().empty())
+        new_config.erase("filament_map_2");
+    Print::ApplyStatus invalidated;
+    {
+        // Print::apply selects instances through their print-volume state. Each
+        // independent bed keeps its own valid states in the scene, so explicitly
+        // exclude other plates only while copying this plate's slice input.
+        std::vector<std::pair<ModelInstance*, ModelInstanceEPrintVolumeState>> excluded;
+        ScopeGuard restore_states([&excluded]() {
+            for (const auto& entry : excluded) entry.first->print_volume_state = entry.second;
+        });
+        if (!m_current_plate->print_setup().empty()) {
+            for (size_t object_index = 0; object_index < model.objects.size(); ++object_index) {
+                const auto& instances = model.objects[object_index]->instances;
+                for (size_t instance_index = 0; instance_index < instances.size(); ++instance_index) {
+                    if (!m_current_plate->contain_instance(int(object_index), int(instance_index))) {
+                        auto* instance = instances[instance_index];
+                        excluded.emplace_back(instance, instance->print_volume_state);
+                        instance->print_volume_state = ModelInstancePVS_Fully_Outside;
+                    }
+                }
+            }
+        }
+        invalidated = m_print->apply(model, new_config);
+    }
 
     // Orca: prevent resetting under gcode viewer mode
     if (invalidated != PrintBase::APPLY_STATUS_UNCHANGED) {

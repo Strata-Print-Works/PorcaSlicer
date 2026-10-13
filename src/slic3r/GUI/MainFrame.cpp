@@ -19,6 +19,7 @@
 #include "slic3r/GUI/Project.hpp"
 #include <wx/bookctrl.h>
 #include "slic3r/GUI/LazyPage.hpp"
+#include "PrinterScanDialog.hpp"
 #include "slic3r/GUI/Monitor.hpp"
 #include "slic3r/GUI/PrinterWebView.hpp"
 #include "slic3r/GUI/MultiMachinePage.hpp"
@@ -56,6 +57,7 @@
 #include <wx/icon.h>
 #include <wx/sizer.h>
 #include <wx/menu.h>
+#include <wx/string.h>
 #include <wx/progdlg.h>
 #include <wx/tooltip.h>
 //#include <wx/glcanvas.h>
@@ -1522,7 +1524,16 @@ void MainFrame::init_tabpanel() {
         //BBS add pages
     m_monitor_page = new LazyPage<MonitorPanel>(m_tabpanel, TAB_ID_MONITOR, 20);
     m_lazy_pages.push_back(m_monitor_page);
-    m_tabpanel->AddPage(TAB_ID_MONITOR, m_monitor_page, _L("Device"), "tab_monitor_active");
+    if (wxGetApp().app_config->get_bool("independent_plate_setups")) {
+        auto* devices = new LazyPage<wxPanel>(m_tabpanel, TAB_ID_MONITOR, 20, [this](wxWindow* parent) {
+            return create_scanned_devices_page(parent, m_monitor_page);
+        });
+        m_lazy_pages.push_back(devices);
+        m_tabpanel->AddPage(TAB_ID_MONITOR, devices, _L("Devices"), "tab_monitor_active");
+        start_scanned_printer_connections(this);
+    } else {
+        m_tabpanel->AddPage(TAB_ID_MONITOR, m_monitor_page, _L("Device"), "tab_monitor_active");
+    }
 
     m_printer_view_page = new LazyPage<PrinterWebView>(m_tabpanel, TAB_ID_MONITOR_WEB, 50, [this](wxWindow* parent) {
         auto* view = new PrinterWebView(parent);
@@ -1576,6 +1587,10 @@ void MainFrame::init_tabpanel() {
 
 // SoftFever
 void MainFrame::show_device(bool should_use_native) {
+    if (wxGetApp().app_config->get_bool("independent_plate_setups")) {
+        fit_tab_labels();
+        return;
+    }
     auto idx = -1;
 
     const bool use_printer_agents = wxGetApp().app_config->get_bool("use_printer_agents");
@@ -2905,6 +2920,30 @@ static void add_common_publish_menu_items(wxMenu* publish_menu, MainFrame* mainF
 
 void MainFrame::add_common_view_menu_items(wxMenu* view_menu, std::function<bool(void)> can_change_view)
 {
+    if (wxGetApp().app_config->get_bool("independent_plate_setups")) {
+        // Native menu navigation also exposes these custom-drawn tabs to assistive tools.
+        append_menu_item(view_menu, wxID_ANY, _L("Prepare"), wxEmptyString,
+            [this](wxCommandEvent&) { select_tab(TAB_ID_PREPARE); });
+        append_menu_item(view_menu, wxID_ANY, _L("Devices"), wxEmptyString,
+            [this](wxCommandEvent&) { select_tab(TAB_ID_MONITOR); });
+        view_menu->AppendSeparator();
+    }
+    auto can_switch_plate = [this]() {
+        return m_plater && !m_plater->is_loading_project() &&
+               m_plater->get_partplate_list().independent_setups() &&
+               m_plater->get_partplate_list().get_plate_count() > 1;
+    };
+    for (const int direction : {-1, 1}) {
+        append_menu_item(view_menu, wxID_ANY,
+            direction < 0 ? _L("Previous plate") : _L("Next plate"), wxEmptyString,
+            [this, direction](wxCommandEvent&) {
+                auto& plates = m_plater->get_partplate_list();
+                const int count = plates.get_plate_count();
+                if (count > 1)
+                    m_plater->select_plate((plates.get_curr_plate_index() + direction + count) % count);
+            }, "", this, can_switch_plate);
+    }
+    view_menu->AppendSeparator();
     append_shortcut_item(view_menu, Shortcut::ViewDefault, true, _L("Default View"), _L("Default View"), [this](wxCommandEvent&) {
         select_view("plate");
         plater()->get_current_canvas3D()->zoom_to_bed();

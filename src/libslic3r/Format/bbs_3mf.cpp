@@ -1750,6 +1750,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate->pick_file = it->second->pick_file;
             plate->pattern_bbox_file = it->second->pattern_bbox_file;
             plate->config = it->second->config;
+            plate->print_setup = it->second->print_setup;
+            plate->has_workspace_position = it->second->has_workspace_position;
+            plate->workspace_position = it->second->workspace_position;
 
             if (!plate->thumbnail_file.empty())
                 _extract_from_archive(archive, plate->thumbnail_file, [&pixels = plate_data_list[it->first - 1]->plate_thumbnail.pixels](auto &archive, auto const &stat) -> bool {
@@ -2445,6 +2448,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate_data_list[it->first-1]->pick_file = (m_load_restore || it->second->pick_file.empty()) ? it->second->pick_file : m_backup_path + "/" + it->second->pick_file;
             plate_data_list[it->first-1]->pattern_bbox_file = (m_load_restore || it->second->pattern_bbox_file.empty()) ? it->second->pattern_bbox_file : m_backup_path + "/" + it->second->pattern_bbox_file;
             plate_data_list[it->first-1]->config = it->second->config;
+            plate_data_list[it->first-1]->print_setup = it->second->print_setup;
+            plate_data_list[it->first-1]->has_workspace_position = it->second->has_workspace_position;
+            plate_data_list[it->first-1]->workspace_position = it->second->workspace_position;
 
             current_plate_data = plate_data_list[it->first - 1];
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", plate %1%, thumbnail_file=%2%, no_light_thumbnail_file=%3%")%it->first %plate_data_list[it->first-1]->thumbnail_file %plate_data_list[it->first-1]->no_light_thumbnail_file;
@@ -4619,8 +4625,23 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             {
                 m_curr_plater->plate_index = atoi(value.c_str());
             }
+            else if (key == "orca_plate_workspace_position") {
+                if (!m_load_config) return true;
+                const auto position = nlohmann::json::parse(value);
+                if (!position.is_array() || position.size() != 2)
+                    throw RuntimeError("Cannot restore this plate's workspace position.");
+                m_curr_plater->workspace_position = Vec2d(position.at(0).get<double>(), position.at(1).get<double>());
+                if (!m_curr_plater->workspace_position.allFinite())
+                    throw RuntimeError("Cannot restore this plate's workspace position.");
+                m_curr_plater->has_workspace_position = true;
+            }
+            else if (key == "orca_plate_print_setup") {
+                if (!m_load_config) return true;
+                m_curr_plater->print_setup = PlatePrintSetup::deserialize(value);
+            }
             else if (key == PLATER_NAME_ATTR) {
-                m_curr_plater->plate_name = xml_unescape(value.c_str());
+                // Expat has already decoded character references once.
+                m_curr_plater->plate_name = value;
             }
             else if (key == LOCK_ATTR)
             {
@@ -8188,7 +8209,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
             if (preset) {
                 preset->file = temp_path + std::string("/") + "_temp_1.config";
-                DynamicPrintConfig& config = preset->config;
+                // Embedded profiles must not carry this computer's printer credentials.
+                DynamicPrintConfig config = preset->config;
+                for (const char* key : {"print_host", "print_host_webui", "printhost_apikey", "printhost_cafile",
+                                       "printhost_user", "printhost_password", "printhost_port"})
+                    config.erase(key);
                 //config.save(preset->file);
                 config.save_to_json(preset->file, preset->name, std::string("project"), preset->version.to_string());
 
@@ -8409,8 +8434,14 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
                 stream << "  <" << PLATE_TAG << ">\n";
                 //plate index
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << PLATERID_ATTR << "\" " << VALUE_ATTR << "=\"" << plate_data->plate_index + 1 << "\"/>\n";
-                stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << PLATER_NAME_ATTR << "\" " << VALUE_ATTR << "=\"" <<  xml_escape(plate_data->plate_name.c_str()) << "\"/>\n";
+                stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << PLATER_NAME_ATTR << "\" " << VALUE_ATTR << "=\"" << xml_escape_double_quotes_attribute_value(plate_data->plate_name) << "\"/>\n";
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << LOCK_ATTR << "\" " << VALUE_ATTR << "=\"" << std::boolalpha<< plate_data->locked<< "\"/>\n";
+                if (!plate_data->print_setup.empty())
+                    stream << "    <metadata key=\"orca_plate_print_setup\" value=\""
+                           << xml_escape_double_quotes_attribute_value(plate_data->print_setup.serialize()) << "\"/>\n";
+                if (plate_data->has_workspace_position)
+                    stream << "    <metadata key=\"orca_plate_workspace_position\" value=\""
+                           << nlohmann::json::array({plate_data->workspace_position.x(), plate_data->workspace_position.y()}).dump() << "\"/>\n";
                 ConfigOption* bed_type_opt = plate_data->config.option("curr_bed_type");
                 t_config_enum_names bed_type_names = ConfigOptionEnum<BedType>::get_enum_names();
                 if (bed_type_opt != nullptr && bed_type_names.size() > bed_type_opt->getInt())
@@ -8703,11 +8734,12 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
             //int instance_size = plate_data->objects_and_instances.size();
 
             if (plate_data != nullptr && plate_data->is_sliced_valid) {
+                const DynamicPrintConfig& plate_config = plate_data->print_setup.empty() ? config : plate_data->print_setup.config;
                 stream << "  <" << PLATE_TAG << ">\n";
                 //plate index
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << PLATE_IDX_ATTR        << "\" " << VALUE_ATTR << "=\"" << plate_data->plate_index + 1 << "\"/>\n";
 
-                int timelapse_type = int(config.opt_enum<TimelapseType>("timelapse_type"));
+                int timelapse_type = int(plate_config.opt_enum<TimelapseType>("timelapse_type"));
                 for (auto it = plate_data->warnings.begin(); it != plate_data->warnings.end(); it++) {
                     if (it->msg == NOT_GENERATE_TIMELAPSE) {
                         timelapse_type = -1;
@@ -8715,9 +8747,9 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
                     }
                 }
 
-                std::vector<int> extruder_types      = config.option<ConfigOptionEnumsGeneric>("extruder_type")->values;
-                std::vector<int> nozzle_volume_types = config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values;
-                auto* nozzle_volume_type_option = dynamic_cast<const ConfigOptionEnumsGeneric*>(config.option("nozzle_volume_type"));
+                std::vector<int> extruder_types      = plate_config.option<ConfigOptionEnumsGeneric>("extruder_type")->values;
+                std::vector<int> nozzle_volume_types = plate_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type")->values;
+                auto* nozzle_volume_type_option = dynamic_cast<const ConfigOptionEnumsGeneric*>(plate_config.option("nozzle_volume_type"));
 
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << EXTRUDER_TYPE_ATTR << "\" " << VALUE_ATTR << "=\"";
                 add_vector(stream, extruder_types);
@@ -8727,7 +8759,7 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
                 add_vector(stream, nozzle_volume_types);
                 stream << "\"/>\n";
 
-                auto* nozzle_diameter_option = dynamic_cast<const ConfigOptionFloats*>(config.option("nozzle_diameter"));
+                auto* nozzle_diameter_option = dynamic_cast<const ConfigOptionFloats*>(plate_config.option("nozzle_diameter"));
                 std::string nozzle_diameters_str;
                 if (nozzle_diameter_option)
                     nozzle_diameters_str = nozzle_diameter_option->serialize();
@@ -8739,7 +8771,7 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
                 // config value; the grouping result rounds it to the nearest of {0.2,0.4,0.6,0.8} for its
                 // internal matching key, so reading that back would rewrite a non-standard nozzle
                 // (e.g. 0.5 -> 0.4). Use this flag to keep the exact config value in that case.
-                auto* extruder_max_nozzle_count_option = dynamic_cast<const ConfigOptionInts*>(config.option("extruder_max_nozzle_count"));
+                auto* extruder_max_nozzle_count_option = dynamic_cast<const ConfigOptionInts*>(plate_config.option("extruder_max_nozzle_count"));
                 const bool has_multi_nozzle_extruder = extruder_max_nozzle_count_option &&
                     std::any_of(extruder_max_nozzle_count_option->values.begin(), extruder_max_nozzle_count_option->values.end(),
                                 [](int v) { return v > 1; });
@@ -8763,13 +8795,13 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
                 else
                     stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << ENABLE_FILAMENT_DYNAMIC_MAP_ATTR << "\" " << VALUE_ATTR << "=\"" << std::boolalpha << false << "\"/>\n";
                 {
-                    bool has_filament_switcher = config.has("has_filament_switcher") ? config.opt_bool("has_filament_switcher") : false;
+                    bool has_filament_switcher = plate_config.has("has_filament_switcher") ? plate_config.opt_bool("has_filament_switcher") : false;
                     stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << HAS_FILAMENT_SWITCHER_ATTR << "\" " << VALUE_ATTR << "=\"" << std::boolalpha << has_filament_switcher << "\"/>\n";
                 }
 
                 std::vector<int> filament_maps = plate_data->filament_maps;
                 if (filament_maps.empty())
-                    filament_maps = config.option<ConfigOptionInts>("filament_map")->values;
+                    filament_maps = plate_config.option<ConfigOptionInts>("filament_map")->values;
                 stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << FILAMENT_MAP_ATTR << "\" " << VALUE_ATTR << "=\"";
                 add_vector<int>(stream, filament_maps);
                 stream << "\"/>\n";
@@ -8787,7 +8819,7 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
                 // "<name>_id_<object index>_copy_<instance index>" (see GCode::set_object_info), which we
                 // reconstruct here from the (sorted) objects_and_instances list. identify_id is unchanged.
                 // BambuLab printers keep the raw object name.
-                const GCodeFlavor slice_gcode_flavor    = config.opt_enum<GCodeFlavor>("gcode_flavor");
+                const GCodeFlavor slice_gcode_flavor    = plate_config.opt_enum<GCodeFlavor>("gcode_flavor");
                 const bool        use_gcode_object_name  = !GCodeProcessor::s_IsBBLPrinter &&
                     (slice_gcode_flavor == gcfKlipper || slice_gcode_flavor == gcfMarlinLegacy ||
                      slice_gcode_flavor == gcfMarlinFirmware || slice_gcode_flavor == gcfRepRapFirmware);

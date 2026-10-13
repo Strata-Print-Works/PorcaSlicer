@@ -1,6 +1,7 @@
 #include "libslic3r/libslic3r.h"
 
 #include "3DBed.hpp"
+#include "PartPlate.hpp"
 
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/ClipperUtils.hpp"
@@ -389,6 +390,27 @@ void Bed3D::on_change_color_mode(bool is_dark)
     m_is_dark = is_dark;
 }
 
+bool Bed3D::render_model_only(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+{
+    // Fade inactive beds into the shared workspace while retaining their physical outline.
+    ColorRGBA color = PartPlate::UNSELECT_COLOR;
+    color.a(0.45f);
+    m_model.set_color(color);
+    const GLboolean blending = ::glIsEnabled(GL_BLEND);
+    GLint src_rgb, dst_rgb, src_alpha, dst_alpha;
+    glsafe(::glGetIntegerv(GL_BLEND_SRC_RGB, &src_rgb));
+    glsafe(::glGetIntegerv(GL_BLEND_DST_RGB, &dst_rgb));
+    glsafe(::glGetIntegerv(GL_BLEND_SRC_ALPHA, &src_alpha));
+    glsafe(::glGetIntegerv(GL_BLEND_DST_ALPHA, &dst_alpha));
+    glsafe(::glEnable(GL_BLEND));
+    glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+    render_model(view_matrix, projection_matrix);
+    glsafe(::glBlendFuncSeparate(src_rgb, dst_rgb, src_alpha, dst_alpha));
+    if (!blending)
+        glsafe(::glDisable(GL_BLEND));
+    return !m_model_filename.empty() && m_model.get_filename() == m_model_filename;
+}
+
 void Bed3D::render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes)
 {
     render_internal(canvas, view_matrix, projection_matrix, bottom, scale_factor, show_axes);
@@ -703,8 +725,7 @@ void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& proj
         return;
 
     if (m_model.get_filename() != m_model_filename && m_model.init_from_file(m_model_filename)) {
-        m_model.set_color(m_is_dark ? DEFAULT_MODEL_COLOR_DARK : DEFAULT_MODEL_COLOR);
-
+        // Both callers set the active or inactive surface before loading the mesh.
         update_model_offset();
 
         // BBS: remove the bed picking logic

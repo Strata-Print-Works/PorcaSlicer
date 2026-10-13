@@ -98,6 +98,7 @@ public:
 
     std::string get_selected_dev_id() const { return m_selected_dev_id; }
     void clear_selected_dev_id() { m_selected_dev_id.clear(); }
+    void set_selected_dev_id(const std::string& id) { m_selected_dev_id = id; }
 
     // BBS
     wxString get_tooltip(const Preset& preset);

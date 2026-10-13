@@ -1074,6 +1074,9 @@ wxBoxSizer *PreferencesDialog::create_item_checkbox(wxString title, wxString too
         app_config->set_bool(param, checkbox->GetValue());
         app_config->save();
 
+        if (param == "independent_plate_setups" && checkbox->GetValue())
+            wxGetApp().plater()->enable_independent_plates();
+
         if (param == "sync_user_preset") {
             bool sync = app_config->get("sync_user_preset") == "true" ? true : false;
             if (sync) {
@@ -1861,6 +1864,9 @@ void PreferencesDialog::create_items()
 
     auto item_auto_arrange     = create_item_checkbox(_L("Auto arrange plate after cloning"), "", "auto_arrange");
     g_sizer->Add(item_auto_arrange);
+    g_sizer->Add(create_item_checkbox(_L("Configure each plate independently"),
+        _L("Keep a separate printer, filament, and print setup for each plate. Saved projects retain their plate setups."),
+        "independent_plate_setups"));
 
     //// CONTROL > Slicing
     g_sizer->Add(create_item_title(_L("Slicing")), 1, wxEXPAND);

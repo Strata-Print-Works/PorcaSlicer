@@ -5,6 +5,7 @@
 #include <glad/gl.h>
 
 #include "3DScene.hpp"
+#include "PartPlate.hpp"
 #include "GLShader.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Colors.hpp"
@@ -701,6 +702,20 @@ void GLVolume::render_with_outline(const GUI::Size& cnv_size)
 //BBS add render for simple case
 void GLVolume::simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_objects, std::vector<ColorRGBA>& extruder_colors, bool ban_light)
 {
+    if (auto* plater = GUI::wxGetApp().plater()) {
+        auto& plates = plater->get_partplate_list();
+        if (plates.independent_setups()) {
+            const int owner = plates.find_instance_belongs(object_idx(), instance_idx());
+            if (owner >= 0) {
+                const auto* colors = plates.get_plate(owner)->print_setup().config.option<ConfigOptionStrings>("filament_colour");
+                if (colors && !colors->values.empty()) {
+                    extruder_colors.assign(colors->values.size(), ColorRGBA());
+                    for (size_t i = 0; i < colors->values.size(); ++i)
+                        decode_color(colors->values[i], extruder_colors[i]);
+                }
+            }
+        }
+    }
     if (this->is_left_handed())
         glFrontFace(GL_CW);
     glsafe(::glCullFace(GL_BACK));
@@ -1458,6 +1473,18 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
     const ModelObjectPtrs &model_objects = model.objects;
     for (GLVolume* volume : this->volumes)
     {
+        auto& plates = GUI::wxGetApp().plater()->get_partplate_list();
+        if (plates.independent_setups() && volume->object_idx() >= 0 && volume->object_idx() < int(model.objects.size())) {
+            const int owner = plates.find_instance_belongs(volume->object_idx(), volume->instance_idx());
+            if (owner >= 0 && owner != plates.get_curr_plate_index()) {
+                const auto* plate = plates.get_plate(owner);
+                const auto& cfg = plate->print_setup().config;
+                BuildVolume own_bed(plate->get_shape(), cfg.opt_float("printable_height"), plate->get_extruder_areas(), plate->get_extruder_heights());
+                const auto state = own_bed.object_state(volume_convex_mesh(*volume).its, volume->world_matrix().cast<float>(), volume_sinking(*volume));
+                volume->is_outside = state != BuildVolume::ObjectState::Inside;
+                continue;
+            }
+        }
         std::vector<bool> inside_extruders;
         if (! volume->is_modifier && (volume->shader_outside_printer_detection_enabled || (! volume->is_wipe_tower && volume->composite_id.volume_id >= 0))) {
             BuildVolume::ObjectState state;

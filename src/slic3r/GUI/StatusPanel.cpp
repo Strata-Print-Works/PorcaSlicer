@@ -25,6 +25,7 @@
 #include "slic3r/GUI/DeviceCore/DevExtruderSystem.h"
 #include "slic3r/GUI/Widgets/ProgressBar.hpp"
 #include "libslic3r/calib.hpp"
+#include "libslic3r/AppConfig.hpp"
 #include <boost/log/trivial.hpp>
 #include "libslic3r/Utils.hpp"
 #include "slic3r/GUI/CameraPopup.hpp"
@@ -65,6 +66,7 @@
 #include <wx/chartype.h>
 #include <utility>
 #include <wx/anybutton.h>
+#include <wx/button.h>
 #include "slic3r/GUI/wxExtensions.hpp"
 #include "slic3r/GUI/Widgets/SwitchButton.hpp"
 #include "slic3r/GUI/wxMediaCtrl3.h"
@@ -913,7 +915,7 @@ void PrintingTaskPanel::create_panel(wxWindow* parent)
     bSizer_subtask_info->Add(progress_lr_panel, 0, wxEXPAND | wxTOP, FromDIP(5));
 
     m_printing_sizer = new wxBoxSizer(wxHORIZONTAL);
-    m_printing_sizer->SetMinSize(wxSize(PAGE_MIN_WIDTH, -1));
+    m_printing_sizer->SetMinSize(wxSize(wxGetApp().app_config->get_bool("independent_plate_setups") ? FromDIP(460) : PAGE_MIN_WIDTH, -1));
     m_printing_sizer->Add(m_bitmap_thumbnail, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxLEFT, FromDIP(12));
     m_printing_sizer->Add(FromDIP(8), 0, 0, wxEXPAND, 0);
     m_printing_sizer->Add(bSizer_subtask_info, 1, wxALL | wxEXPAND, 0);
@@ -1080,7 +1082,7 @@ void PrintingTaskPanel::set_has_reted_text(bool has_rated)
 void PrintingTaskPanel::msw_rescale()
 {
     m_panel_printing_title->SetSize(wxSize(-1, FromDIP(PAGE_TITLE_HEIGHT)));
-    m_printing_sizer->SetMinSize(wxSize(PAGE_MIN_WIDTH, -1));
+    m_printing_sizer->SetMinSize(wxSize(wxGetApp().app_config->get_bool("independent_plate_setups") ? FromDIP(460) : PAGE_MIN_WIDTH, -1));
     //m_staticText_printing->SetMinSize(wxSize(PAGE_TITLE_TEXT_WIDTH, PAGE_TITLE_HEIGHT));
     m_gauge_progress->SetHeight(PROGRESSBAR_HEIGHT);
     m_gauge_progress->Rescale();
@@ -1394,15 +1396,44 @@ StatusBasePanel::StatusBasePanel(wxWindow *parent, wxWindowID id, const wxPoint 
 
     bSizer_status->Add(m_panel_separotor_top, 0, wxEXPAND | wxALL, 0);
 
-    wxBoxSizer *bSizer_status_below = new wxBoxSizer(wxHORIZONTAL);
+    const bool devices_layout = wxGetApp().app_config->get_bool("independent_plate_setups");
+    // Monitoring stays visible while the full native controls expand below it.
+    wxBoxSizer *bSizer_status_below = new wxBoxSizer(devices_layout ? wxVERTICAL : wxHORIZONTAL);
 
     auto m_panel_separotor_left = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
     m_panel_separotor_left->SetBackgroundColour(STATUS_PANEL_BG);
-    m_panel_separotor_left->SetMinSize(wxSize(PAGE_SPACING, -1));
+    m_panel_separotor_left->SetMinSize(devices_layout ? wxSize(0, 0) : wxSize(PAGE_SPACING, -1));
 
     bSizer_status_below->Add(m_panel_separotor_left, 0, wxEXPAND | wxALL, 0);
 
     wxBoxSizer *bSizer_left = new wxBoxSizer(wxVERTICAL);
+    auto* monitoring_row = new wxBoxSizer(wxHORIZONTAL);
+    if (devices_layout) {
+        monitoring_row->Add(bSizer_left, 1, wxEXPAND | wxRIGHT, PAGE_SPACING);
+        auto* overview = new wxPanel(this);
+        overview->SetBackgroundColour(*wxWHITE);
+        overview->SetMinSize(wxSize(FromDIP(190), -1));
+        auto* overview_sizer = new wxBoxSizer(wxVERTICAL);
+        auto* temperatures = new Label(overview, _L("Temperature"));
+        temperatures->SetForegroundColour(PAGE_TITLE_FONT_COL);
+        overview_sizer->Add(temperatures, 0, wxEXPAND | wxALL, FromDIP(12));
+        m_monitoring_temperatures = new wxPanel(overview);
+        m_monitoring_temperatures->SetBackgroundColour(*wxWHITE);
+        overview_sizer->Add(m_monitoring_temperatures, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(8));
+        auto* filament = new Label(overview, _L("Filament"));
+        filament->SetForegroundColour(PAGE_TITLE_FONT_COL);
+        overview_sizer->Add(filament, 0, wxEXPAND | wxALL, FromDIP(12));
+        m_monitoring_filaments = new wxScrolledWindow(overview);
+        m_monitoring_filaments->SetBackgroundColour(*wxWHITE);
+        m_monitoring_filaments->SetScrollRate(0, FromDIP(12));
+        m_monitoring_filaments->SetMinSize(wxSize(-1, FromDIP(180)));
+        m_monitoring_filaments->SetSizer(new wxBoxSizer(wxVERTICAL));
+        overview_sizer->Add(m_monitoring_filaments, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
+        overview->SetSizer(overview_sizer);
+        monitoring_row->Add(overview, 0, wxEXPAND);
+        update_filament_overview({}, {});
+    }
+
 
     // The sizers are nested here so each step only appends to its own.
     add_build_step([this, bSizer_left] {
@@ -1425,11 +1456,16 @@ StatusBasePanel::StatusBasePanel(wxWindow *parent, wxWindowID id, const wxPoint 
 //    m_panel_separotor2->SetMinSize(wxSize(-1, PAGE_SPACING));
 //    bSizer_left->Add(m_panel_separotor2, 1, wxEXPAND, 0);
 
-    bSizer_status_below->Add(bSizer_left, 1, wxALL | wxEXPAND, 0);
+    if (devices_layout)
+        bSizer_status_below->Add(monitoring_row, 0, wxEXPAND | wxLEFT | wxRIGHT, PAGE_SPACING);
+    else {
+        delete monitoring_row;
+        bSizer_status_below->Add(bSizer_left, 1, wxALL | wxEXPAND, 0);
+    }
 
     auto m_panel_separator_middle = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxTAB_TRAVERSAL);
     m_panel_separator_middle->SetBackgroundColour(STATUS_PANEL_BG);
-    m_panel_separator_middle->SetMinSize(wxSize(PAGE_SPACING, -1));
+    m_panel_separator_middle->SetMinSize(devices_layout ? wxSize(-1, PAGE_SPACING) : wxSize(PAGE_SPACING, -1));
 
     bSizer_status_below->Add(m_panel_separator_middle, 0, wxEXPAND | wxALL, 0);
 
@@ -1443,11 +1479,15 @@ StatusBasePanel::StatusBasePanel(wxWindow *parent, wxWindowID id, const wxPoint 
         m_machine_control->Fit(m_machine_ctrl_panel);
     });
 
-    bSizer_status_below->Add(m_machine_ctrl_panel, 0, wxALL, 0);
+    if (devices_layout)
+        bSizer_status_below->Add(m_machine_ctrl_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, PAGE_SPACING);
+    else
+        bSizer_status_below->Add(m_machine_ctrl_panel, 0, wxALL, 0);
 
     m_panel_separator_right = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(PAGE_SPACING, -1), wxTAB_TRAVERSAL);
     m_panel_separator_right->SetBackgroundColour(STATUS_PANEL_BG);
 
+    if (devices_layout) m_panel_separator_right->SetMinSize(wxSize(0, 0));
     bSizer_status_below->Add(m_panel_separator_right, 0, wxEXPAND | wxALL, 0);
 
     bSizer_status->Add(bSizer_status_below, 1, wxALL | wxEXPAND, 0);
@@ -1457,9 +1497,10 @@ StatusBasePanel::StatusBasePanel(wxWindow *parent, wxWindowID id, const wxPoint 
 
     bSizer_status->Add(m_panel_separotor_bottom, 0, wxEXPAND | wxALL, 0);
     this->SetSizer(bSizer_status);
-    add_build_step([this, bSizer_status] {
-        bSizer_status->SetSizeHints(this);
+    add_build_step([this, bSizer_status, devices_layout] {
+        if (!devices_layout) bSizer_status->SetSizeHints(this);
         this->Layout();
+        if (devices_layout) FitInside();
     });
 }
 
@@ -1614,7 +1655,8 @@ wxBoxSizer *StatusBasePanel::create_monitoring_page()
 //    media_ctrl_panel->SetBackgroundColour(*wxBLACK);
 //    wxBoxSizer *bSizer_monitoring = new wxBoxSizer(wxVERTICAL);
     m_media_ctrl = new wxMediaCtrl3(this);
-    m_media_ctrl->SetMinSize(wxSize(PAGE_MIN_WIDTH, FromDIP(288)));
+    const bool devices_layout = wxGetApp().app_config->get_bool("independent_plate_setups");
+    m_media_ctrl->SetMinSize(devices_layout ? wxSize(FromDIP(460), FromDIP(250)) : wxSize(PAGE_MIN_WIDTH, FromDIP(288)));
 
     m_custom_camera_view = WebView::CreateWebView(this, wxEmptyString);
     m_custom_camera_view->EnableContextMenu(false);
@@ -1637,6 +1679,7 @@ wxBoxSizer *StatusBasePanel::create_monitoring_page()
 
 wxBoxSizer *StatusBasePanel::create_machine_control_page(wxWindow *parent)
 {
+    const bool devices_layout = m_monitoring_temperatures != nullptr;
     wxBoxSizer *bSizer_right = new wxBoxSizer(wxVERTICAL);
 
     m_panel_control_title = new wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, PAGE_TITLE_HEIGHT), wxTAB_TRAVERSAL);
@@ -1664,7 +1707,7 @@ wxBoxSizer *StatusBasePanel::create_machine_control_page(wxWindow *parent)
     m_options_btn->Hide();
     m_safety_btn->Hide();
 
-    bSizer_control_title->Add(m_staticText_control, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, PAGE_TITLE_LEFT_MARGIN);
+    bSizer_control_title->Add(m_staticText_control, devices_layout ? 0 : 1, wxALIGN_CENTER_VERTICAL | wxLEFT, PAGE_TITLE_LEFT_MARGIN);
     bSizer_control_title->Add(0, 0, 1, wxEXPAND, 0);
     bSizer_control_title->Add(m_parts_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
     bSizer_control_title->Add(m_options_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
@@ -1676,6 +1719,9 @@ wxBoxSizer *StatusBasePanel::create_machine_control_page(wxWindow *parent)
     bSizer_control_title->Fit(m_panel_control_title);
     bSizer_right->Add(m_panel_control_title, 0, wxALL | wxEXPAND, 0);
 
+    auto* control_body = new wxPanel(parent);
+    control_body->SetBackgroundColour(*wxWHITE);
+    parent = control_body;
     wxBoxSizer *bSizer_control = new wxBoxSizer(wxVERTICAL);
 
     // The slot sizers keep each group's place in bSizer_control.
@@ -1711,7 +1757,21 @@ wxBoxSizer *StatusBasePanel::create_machine_control_page(wxWindow *parent)
     bSizer_control->Add(filament_slot,          0, wxALIGN_CENTER|wxLEFT|wxRIGHT, FromDIP(8));
     bSizer_control->Add(0, 0, 0, wxTOP, FromDIP(4));
 
-    bSizer_right->Add(bSizer_control, 1, wxEXPAND | wxALL, 0);
+    control_body->SetSizer(bSizer_control);
+    bSizer_right->Add(control_body, 0, wxEXPAND);
+    if (devices_layout) {
+        auto* toggle = new wxButton(m_panel_control_title, wxID_ANY, _L("Show controls"));
+        bSizer_control_title->Insert(1, toggle, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(10));
+        control_body->Hide();
+        toggle->Bind(wxEVT_BUTTON, [this, control_body, toggle](wxCommandEvent&) {
+            const bool expanded = !control_body->IsShown();
+            control_body->Show(expanded);
+            toggle->SetLabel(expanded ? _L("Hide controls") : _L("Show controls"));
+            m_machine_ctrl_panel->Layout();
+            Layout();
+            FitInside();
+        });
+    }
 
     return bSizer_right;
 }
@@ -1732,7 +1792,14 @@ wxBoxSizer *StatusBasePanel::create_temp_axis_group(wxWindow *parent)
     box->SetMaxSize(wxSize(FromDIP(586), -1));
 
     wxBoxSizer *content_sizer = new wxBoxSizer(wxHORIZONTAL);
-    wxBoxSizer *m_temp_ctrl   = create_temp_control(box);
+    wxBoxSizer* m_temp_ctrl;
+    if (m_monitoring_temperatures) {
+        m_monitoring_temperatures->SetSizer(create_temp_control(m_monitoring_temperatures));
+        m_temp_ctrl = create_misc_control(box);
+        m_misc_ctrl_sizer = m_temp_ctrl;
+    } else {
+        m_temp_ctrl = create_temp_control(box);
+    }
 
 
     m_temp_temp_line = new wxPanel(box);
@@ -1842,9 +1909,73 @@ wxBoxSizer *StatusBasePanel::create_temp_control(wxWindow *parent)
     m_tempCtrl_chamber->SetBorderColor(tempinput_border_colour);
     sizer->Add(m_tempCtrl_chamber, 0, wxEXPAND | wxALL, 1);
 
-    m_misc_ctrl_sizer = create_misc_control(parent);
-    sizer->Add(m_misc_ctrl_sizer, 0, wxEXPAND, 0);
+    if (parent != m_monitoring_temperatures) {
+        m_misc_ctrl_sizer = create_misc_control(parent);
+        sizer->Add(m_misc_ctrl_sizer, 0, wxEXPAND, 0);
+    }
     return sizer;
+}
+
+
+void StatusBasePanel::update_filament_overview(const std::vector<AMSinfo>& ams, const std::vector<AMSinfo>& external)
+{
+    if (!m_monitoring_filaments) return;
+    wxString key = "filament";
+    auto append_key = [&key](const std::vector<AMSinfo>& units) {
+        for (const auto& unit : units) {
+            key += wxString::FromUTF8(unit.ams_id) + ":";
+            for (const auto& can : unit.cans)
+                key += wxString::FromUTF8(can.can_id) + ":" + can.material_name + ":" + can.material_colour.GetAsString() + ";";
+        }
+    };
+    append_key(ams);
+    append_key(external);
+    if (key == m_filament_overview_key) return;
+    m_filament_overview_key = key;
+    m_monitoring_filaments->Freeze();
+    auto* sizer = m_monitoring_filaments->GetSizer();
+    sizer->Clear(true);
+    auto append_units = [this, sizer](const std::vector<AMSinfo>& units, bool is_external) {
+        for (const auto& unit : units) {
+            wxString name = _L("External spool");
+            if (!is_external && obj) {
+                if (const auto* device_ams = obj->GetFilaSystem()->GetAmsById(unit.ams_id))
+                    name = device_ams->GetDisplayName();
+            }
+            auto* title = new Label(m_monitoring_filaments, name);
+            wxGetApp().UpdateDarkUI(title);
+            sizer->Add(title, 0, wxTOP | wxBOTTOM, FromDIP(6));
+            for (const auto& can : unit.cans) {
+                auto* row = new wxBoxSizer(wxHORIZONTAL);
+                auto* swatch = new wxPanel(m_monitoring_filaments, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(18), FromDIP(18)), wxBORDER_SIMPLE);
+                swatch->SetBackgroundColour(can.material_colour);
+                row->Add(swatch, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+                wxString material = can.material_name.empty() ? _L("Empty") : can.material_name;
+                if (!is_external) {
+                    long slot = 0;
+                    long unit_id = 0;
+                    if (wxString::FromUTF8(can.can_id).ToLong(&slot) && slot >= 0 && slot < 4 &&
+                        wxString::FromUTF8(unit.ams_id).ToLong(&unit_id) && unit_id >= 0 && (unit_id <= 25 || (unit_id >= 128 && unit_id < 154))) {
+                        const auto* device_ams = obj ? obj->GetFilaSystem()->GetAmsById(unit.ams_id) : nullptr;
+                        const int tray = static_cast<int>(device_ams && device_ams->GetAmsType() == DevAms::N3S ? unit_id + slot : unit_id * 4 + slot);
+                        material = wxGetApp().transition_tridid(tray) + "  " + material;
+                    }
+                }
+                auto* label = new Label(m_monitoring_filaments, material);
+                label->Wrap(FromDIP(135));
+                wxGetApp().UpdateDarkUI(label);
+                row->Add(label, 1, wxALIGN_CENTER_VERTICAL);
+                sizer->Add(row, 0, wxEXPAND | wxBOTTOM, FromDIP(8));
+            }
+        }
+    };
+    append_units(ams, false);
+    append_units(external, true);
+    if (ams.empty() && external.empty())
+        sizer->Add(new Label(m_monitoring_filaments, _L("Waiting for printer…")), 0, wxTOP, FromDIP(6));
+    m_monitoring_filaments->Layout();
+    m_monitoring_filaments->FitInside();
+    m_monitoring_filaments->Thaw();
 }
 
 wxBoxSizer *StatusBasePanel::create_misc_control(wxWindow *parent)
@@ -2299,7 +2430,7 @@ void StatusBasePanel::expand_filament_loading(wxMouseEvent& e)
     ///m_button_retry->Show(tag_show);
     m_filament_step->Show(tag_show);
     Layout();
-    Fit();
+    if (m_monitoring_temperatures) FitInside(); else Fit();
     if (MonitorPanel* monitor = MonitorPanel::if_built()) {
         monitor->get_status_panel()->Layout();
         monitor->Layout();
@@ -2313,7 +2444,7 @@ void StatusBasePanel::show_ams_group(bool show)
         m_ams_control->Layout();
         m_ams_control->Fit();
         Layout();
-        Fit();
+        if (m_monitoring_temperatures) FitInside(); else Fit();
         if (MonitorPanel* monitor = MonitorPanel::if_built())
             monitor->Layout();
     }
@@ -2327,7 +2458,7 @@ void StatusBasePanel::show_ams_group(bool show)
         m_ams_control->Layout();
         m_ams_control->Fit();
         Layout();
-        Fit();
+        if (m_monitoring_temperatures) FitInside(); else Fit();
         if (MonitorPanel* monitor = MonitorPanel::if_built())
             monitor->Layout();
     }
@@ -2351,7 +2482,7 @@ void StatusBasePanel::show_filament_load_group(bool show)
         m_filament_step->SetupSteps(obj, cur_ext ? cur_ext->HasFilamentInExt() : false);
 
         Layout();
-        Fit();
+        if (m_monitoring_temperatures) FitInside(); else Fit();
 
         if (MonitorPanel* monitor = MonitorPanel::if_built()) {
             monitor->get_status_panel()->Layout();
@@ -3305,6 +3436,7 @@ void StatusPanel::update_temp_ctrl(MachineObject *obj)
     if (to_update_layout)
     {
         this->Layout();
+        if (m_monitoring_temperatures) FitInside();
     }
 }
 
@@ -3518,6 +3650,8 @@ void StatusPanel::update_ams(MachineObject *obj)
         if (ams_mode == AMSModel::AMS_LITE) info.ext_type = AMSModelOriginType::LITE_EXT;
         ext_info.push_back(info);
     }
+
+    update_filament_overview(ams_info, ext_info);
 
     // must select a current can
     m_ams_control->UpdateAms(obj->get_printer_series_str(), obj->printer_type, ams_info, ext_info, *obj->GetExtderSystem(), obj->get_dev_id(), obj, false);
@@ -5248,6 +5382,7 @@ void StatusPanel::set_default()
         m_media_play_ctrl->StopWebStream();
     }
     obj                  = nullptr;
+    update_filament_overview({}, {});
     last_subtask         = nullptr;
     last_tray_exist_bits = -1;
     speed_lvl         = 1;

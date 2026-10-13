@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include "libslic3r/Config.hpp"
+#include "libslic3r/PlatePrintSetup.hpp"
 #include <memory>
 #include <utility>
 #include "libslic3r/Point.hpp"
@@ -114,6 +115,8 @@ private:
     std::set<std::pair<int, int>> instance_outside_set;
     int m_plate_index;
     Vec3d m_origin;
+    bool m_has_workspace_position {false};
+    Vec2d m_workspace_position {Vec2d::Zero()};
     int m_width;
     int m_depth;
     double m_height;
@@ -182,6 +185,11 @@ private:
     GLModel      m_imex_warn_icon;   // warning badge: IMEX parallel mode + multi-material conflict
     GLModel m_plate_idx_icon;
     GLTexture m_texture;
+    // Display caches only: slicing continues to use this plate's printable area.
+    std::unique_ptr<Bed3D> m_inactive_bed;
+    DynamicPrintConfig m_inactive_bed_config;
+    std::string m_inactive_bed_model;
+    bool render_inactive_bed_model(const Transform3d& view_matrix, const Transform3d& projection_matrix);
 
     float m_scale_factor{ 1.0f };
     GLUquadricObject* m_quadric;
@@ -191,6 +199,7 @@ private:
 
     // BBS
     DynamicPrintConfig m_config;
+    PlatePrintSetup m_print_setup;
 
     // SoftFever
     // part plate name
@@ -256,7 +265,8 @@ private:
     void on_filament_map_mode_change();
 
 public:
-    static constexpr unsigned int PLATE_NAME_HOVER_ID = 6;
+    static constexpr unsigned int PLATE_DRAG_HOVER_ID = 7, // Reuses the legacy move-to-front control in independent projects.
+        PLATE_NAME_HOVER_ID = 6;
     static constexpr unsigned int PLATE_FILAMENT_MAP_ID = 8;
     static constexpr unsigned int PLATE_IMEX_MODE_ID = 9;
     static constexpr unsigned int GRABBER_COUNT = 10;
@@ -309,6 +319,8 @@ public:
     void reset_skirt_start_angle();
 
     DynamicPrintConfig* config() { return &m_config; }
+    PlatePrintSetup& print_setup() { return m_print_setup; }
+    const PlatePrintSetup& print_setup() const { return m_print_setup; }
 
     // set print sequence per plate
     //bool print_seq_same_global = true;
@@ -693,7 +705,7 @@ public:
         std::vector<std::pair<int, int>>	objects_and_instances;
         std::vector<std::pair<int, int>>	instances_outside;
 
-        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config);
+        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config, m_print_setup, m_has_workspace_position, m_workspace_position);
 
         for (std::vector<std::pair<int, int>>::iterator it = objects_and_instances.begin(); it != objects_and_instances.end(); ++it)
             obj_to_instance_set.insert(std::pair(it->first, it->second));
@@ -711,7 +723,7 @@ public:
         for (std::set<std::pair<int, int>>::iterator it = obj_to_instance_set.begin(); it != obj_to_instance_set.end(); ++it)
             objects_and_instances.emplace_back(it->first, it->second);
 
-        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config);
+        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config, m_print_setup, m_has_workspace_position, m_workspace_position);
     }
     /*template<class Archive> void serialize(Archive& ar)
     {
@@ -753,12 +765,16 @@ class PartPlateList : public ObjectBase
     std::vector<double> m_extruder_heights;
     BoundingBoxf3 m_bounding_box;
     bool m_intialized;
+    bool m_independent_setups{false};
     std::string m_logo_texture_filename;
     GLTexture m_logo_texture;
     GLTexture m_del_texture;
     GLTexture m_del_hovered_texture;
     GLTexture m_move_front_hovered_texture;
     GLTexture m_move_front_texture;
+    GLTexture m_plate_drag_texture;
+    GLTexture m_plate_drag_hovered_texture;
+    GLTexture m_plate_drag_locked_texture;
     GLTexture m_arrange_texture;
     GLTexture m_arrange_hovered_texture;
     GLTexture m_orient_texture;
@@ -914,6 +930,9 @@ public:
     }
 
     int get_curr_plate_index() const { return m_current_plate; }
+    bool move_plate(int index, const Vec2d& position);
+    bool independent_setups() const { return m_independent_setups; }
+    void enable_independent_setups();
     PartPlate* get_curr_plate() { return m_plate_list[m_current_plate]; }
     const PartPlate* get_curr_plate() const { return m_plate_list[m_current_plate]; }
 
@@ -1079,7 +1098,7 @@ public:
     {
         //ar(cereal::base_class<ObjectBase>(this));
         //Cancel undo/redo for m_shape ,Because the printing area of different models is different, currently if the grid changes, it cannot correspond to the model on the left ui
-        ar(m_plate_width, m_plate_depth, m_plate_height, m_height_to_lid, m_height_to_rod, m_height_limit_mode, m_plate_count, m_current_plate, m_plate_list, unprintable_plate);
+        ar(m_plate_width, m_plate_depth, m_plate_height, m_height_to_lid, m_height_to_rod, m_height_limit_mode, m_plate_count, m_current_plate, m_plate_list, unprintable_plate, m_independent_setups);
         //ar(m_plate_width, m_plate_depth, m_plate_height, m_plate_count, m_current_plate);
     }
     struct Rect

@@ -684,6 +684,10 @@ private:
     // exactly through the modeling origin; built once and rebuilt only when the bed shape changes.
     GLModel m_cad_grid_minor;
     GLModel m_cad_grid_major;
+    GLModel m_workspace_surface;
+    GLModel m_workspace_grid_minor;
+    GLModel m_workspace_grid_major;
+    BoundingBoxf m_workspace_extent;
     // Geometry the CAD grid models were last built from, so they are rebuilt on bed-shape change
     // rather than every frame.
     BoundingBoxf m_cad_grid_bb;
@@ -776,6 +780,10 @@ private:
     //BBS:add plate related logic
     mutable std::vector<int> m_hover_volume_idxs;
     std::vector<int> m_hover_plate_idxs;
+    int m_plate_drag_index {-1};
+    Vec3d m_plate_drag_origin {Vec3d::Zero()};
+    Vec3d m_plate_drag_anchor {Vec3d::Zero()};
+    bool m_plate_drag_snapshot {false};
     // IMEX ghost hover state (plate-owned transparent ghost volumes).
     int m_hover_ghost_head  { -1 };  // physical head index, -1 when not hovering a ghost
     int m_hover_ghost_plate { -1 };  // plate index for the hovered ghost, -1 when none
@@ -1526,6 +1534,7 @@ private:
     // corner-origin grid, centred on the modeling origin. Rebuilds its GLModels lazily, only
     // when the bed shape changed.
     void _render_cad_grid(const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    void _render_workspace_plane(const Transform3d& view_matrix, const Transform3d& projection_matrix);
     //BBS: add outline drawing logic
     void _render_objects(GLVolumeCollection::ERenderType type, bool with_outline = true);
     // IMEX ghost volumes owned by PartPlate, drawn through the shader the caller bound:

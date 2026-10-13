@@ -2,6 +2,7 @@
 #include "ExportPresetBundleDialog.hpp"
 #include "ICloudServiceAgent.hpp"
 #include "IPrinterAgent.hpp"
+#include "PrinterScanDialog.hpp"
 #include "OrcaCloudServiceAgent.hpp"
 #include "libslic3r/Technologies.hpp"
 #include "libslic3r/Platform.hpp"
@@ -2441,13 +2442,13 @@ void GUI_App::init_networking_callbacks()
                     auto sel = this->m_device_manager->get_selected_machine();
                     if (sel && sel->get_dev_id() == dev_id) {
                         obj->parse_json("cloud", msg);
-                        GUI::wxGetApp().sidebar().load_ams_list(obj);
+                        if (!scanned_printer_control_config()) GUI::wxGetApp().sidebar().load_ams_list(obj);
                     } else {
                         obj->parse_json("cloud", msg, true);
                     }
                 }
 
-                if (GUI::wxGetApp().plater())
+                if (!scanned_printer_control_config() && GUI::wxGetApp().plater())
                     GUI::wxGetApp().plater()->update_machine_sync_status();
             });
         };
@@ -2490,11 +2491,11 @@ void GUI_App::init_networking_callbacks()
                     // Orca: skip it if it doesn't support subscription based filament sync
                     if (this->m_device_manager->get_selected_machine() == obj &&
                         m_agent->get_filament_sync_mode() == FilamentSyncMode::subscription) {
-                        GUI::wxGetApp().sidebar().load_ams_list(obj);
+                        if (!scanned_printer_control_config()) GUI::wxGetApp().sidebar().load_ams_list(obj);
                     }
                 }
 
-                if (GUI::wxGetApp().plater())
+                if (!scanned_printer_control_config() && GUI::wxGetApp().plater())
                     GUI::wxGetApp().plater()->update_machine_sync_status();
                 });
         };
@@ -4162,7 +4163,7 @@ void GUI_App::set_live_printer_agent(std::shared_ptr<IPrinterAgent> agent)
     }
 
     m_agent->set_printer_agent(agent);
-    sidebar().update_all_preset_comboboxes();
+    if (!scanned_printer_control_config()) sidebar().update_all_preset_comboboxes();
 }
 
 std::string GUI_App::resolve_printer_agent_id(const std::string& stored_id) const
@@ -4184,7 +4185,8 @@ void GUI_App::switch_printer_agent()
         return;
     }
 
-    const DynamicPrintConfig& config = preset_bundle->printers.get_edited_preset().config;
+    const auto* inspected = scanned_printer_control_config();
+    const DynamicPrintConfig& config = inspected ? *inspected : preset_bundle->printers.get_edited_preset().config;
     const std::string effective_agent_id = resolve_printer_agent_id(config.opt_string("printer_agent"));
 
     // Check if agent is registered
@@ -4264,7 +4266,8 @@ void GUI_App::select_machine(const std::string& agent_id)
 
     // Get config source (preset or physical printer)
     const auto& preset = preset_bundle->printers.get_edited_preset();
-    const DynamicPrintConfig* host_cfg = &preset.config;
+    const DynamicPrintConfig* host_cfg = scanned_printer_control_config();
+    if (!host_cfg) host_cfg = &preset.config;
 
     std::string print_host = host_cfg->opt_string("print_host");
     if (print_host.empty()) {
@@ -4296,8 +4299,9 @@ void GUI_App::select_machine(const std::string& agent_id)
         // We use dev_id as dev_ip to store the address (host:port)
         machine.dev_ip = dev_id;
         machine.dev_name = dev_id;
-        machine.printer_type = preset.config.opt_string("printer_model");
-        auto access_code = preset.config.opt_string("printhost_apikey");
+        machine.printer_type = host_cfg->opt_string("printer_model");
+        machine.printer_agent_id = agent_id;
+        auto access_code = host_cfg->opt_string("printhost_apikey");
         // Orca expect non empty access code
         if (access_code.empty()) {
             access_code = "88888888";
@@ -4313,10 +4317,17 @@ void GUI_App::select_machine(const std::string& agent_id)
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": created new machine dev_id=" << dev_id;
     }
     existing->local_use_ssl = boost::istarts_with(print_host, "https://");
+    if (scanned_printer_control_config()) {
+        auto access_code = host_cfg->opt_string("printhost_apikey");
+        existing->set_access_code(access_code.empty() ? "88888888" : access_code, false);
+    }
 
     // Use MonitorPanel::select_machine() to trigger full selection flow
     // This reuses existing logic for machine switching (UI updates, callbacks, etc.)
-    if (MonitorPanel* monitor = MonitorPanel::if_built()) {
+    if (scanned_printer_control_config()) {
+        // Inspection is synchronous: a queued selection could run after returning to Prepare.
+        m_device_manager->set_selected_machine(dev_id);
+    } else if (MonitorPanel* monitor = MonitorPanel::if_built()) {
         monitor->select_machine(dev_id);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": triggered select_machine for dev_id=" << dev_id;
     } else if (m_device_manager->set_selected_machine(dev_id)) {
@@ -5197,9 +5208,10 @@ bool GUI_App::is_user_login(const std::string& provider/* = ORCA_CLOUD_PROVIDER*
 
 std::string GUI_App::get_printer_cloud_provider() const
 {
+    const auto* inspected = scanned_printer_control_config();
     const std::string agent_id = resolve_printer_agent_id(
-        preset_bundle ? preset_bundle->printers.get_edited_preset().config.opt_string("printer_agent")
-                      : std::string());
+        inspected ? inspected->opt_string("printer_agent") :
+        preset_bundle ? preset_bundle->printers.get_edited_preset().config.opt_string("printer_agent") : std::string());
     return agent_id == BBL_PRINTER_AGENT_ID ? BBL_CLOUD_PROVIDER : ORCA_CLOUD_PROVIDER;
 }
 

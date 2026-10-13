@@ -3,6 +3,7 @@
 #include "Http.hpp"
 #include "I18N.hpp"
 #include "PrinterWebView.hpp"
+#include "PrinterScanDialog.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Widgets/WebView.hpp"
 #include "slic3r/Utils/PrintHost.hpp"
@@ -58,6 +59,7 @@ namespace {
 
 DynamicPrintConfig* get_active_printer_config()
 {
+    if (auto* inspected = scanned_printer_control_config()) return inspected;
     if (wxGetApp().preset_bundle == nullptr)
         return nullptr;
 

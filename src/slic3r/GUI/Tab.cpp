@@ -1219,6 +1219,10 @@ void Tab::update_all_extruder_options_status()
     auto extruders = m_preset_bundle->printers.get_edited_preset().config.option<ConfigOptionEnumsGeneric>("extruder_type");
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
 
+    if (!extruders || !nozzle_volumes || extruders->values.size() < size_t(extruder_count) ||
+        nozzle_volumes->values.size() < size_t(extruder_count))
+        return;
+
     std::set<int> all_config_indices;
     for (int extruder_id = 0; extruder_id < extruder_count; ++extruder_id) {
         for (auto nozzle_type : get_valid_nozzle_volume_type()) {
@@ -2439,9 +2443,15 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
     m_page_view->GetParent()->Layout();
 
     // ORCA also update states of plates for plates toolbar. same method exist on Plater::priv::on_select_preset()
-    auto& plate_list = wxGetApp().plater()->get_partplate_list();
-    for (auto plate : plate_list.get_plate_list())
-        plate->update_slice_result_valid_state(false);
+    auto* plater = wxGetApp().plater();
+    auto& plate_list = plater->get_partplate_list();
+    if (!plater->activating_plate_setup()) {
+        if (plate_list.independent_setups())
+            plate_list.get_curr_plate()->update_slice_result_valid_state(false);
+        else
+            for (auto plate : plate_list.get_plate_list())
+                plate->update_slice_result_valid_state(false);
+    }
 }
 
 void Tab::show_timelapse_warning_dialog() {
@@ -2631,9 +2641,15 @@ void Tab::on_presets_changed()
     wxGetApp().plater()->update_project_dirty_from_presets();
 
     // ORCA also update states of plates for plates toolbar. same method exist on Plater::priv::on_select_preset()
-    auto& plate_list = wxGetApp().plater()->get_partplate_list();
-    for (auto plate : plate_list.get_plate_list())
-        plate->update_slice_result_valid_state(false);
+    auto* plater = wxGetApp().plater();
+    auto& plate_list = plater->get_partplate_list();
+    if (!plater->activating_plate_setup()) {
+        if (plate_list.independent_setups())
+            plate_list.get_curr_plate()->update_slice_result_valid_state(false);
+        else
+            for (auto plate : plate_list.get_plate_list())
+                plate->update_slice_result_valid_state(false);
+    }
 }
 
 void Tab::build_preset_description_line(ConfigOptionsGroup* optgroup)
@@ -9006,6 +9022,13 @@ void Tab::switch_excluder(int extruder_id, bool reload)
     Preset & printer_preset = m_preset_bundle->printers.get_edited_preset();
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
     auto extruders      = printer_preset.config.option<ConfigOptionEnumsGeneric>("extruder_type");
+    // An imported or incomplete printer can lack a tool roster. There is no
+    // variant column to edit until the user chooses a complete printer setup.
+    if (!nozzle_volumes || !extruders || nozzle_volumes->values.empty() || extruders->values.empty()) {
+        if (m_extruder_switch) m_extruder_switch->Enable(false);
+        if (m_variant_combo) m_variant_combo->Enable(false);
+        return;
+    }
 
     // Orca: the printer tab re-targets its pages to the extruder selected on the switch. Resolved before
     // the range check below, which keeps the extruder_type read in get_index_for_extruder in range.

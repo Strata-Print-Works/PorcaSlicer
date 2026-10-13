@@ -8,6 +8,7 @@
 #include <boost/asio/ip/udp.hpp>
 #include <boost/asio/io_service.hpp>
 #include <cassert>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <ostream>
@@ -99,6 +100,8 @@ public:
 	Ptr resolve();
 	// resolve on the current thread
 	void resolve_sync();
+	void cancel();
+	void wait();
 private:
 	std::unique_ptr<priv> p;
 };
@@ -171,12 +174,14 @@ public:
 		, const boost::asio::ip::address& multicast_address
 		, std::shared_ptr< boost::asio::io_service > io_service);
 
+	virtual ~UdpSocket() = default;
 	void send();
 	void async_receive();
 	void cancel() { socket.cancel(); }
 protected:
 	void receive_handler(SharedSession session, const boost::system::error_code& error, size_t bytes);
 	virtual SharedSession create_session() const = 0;
+	bool receiving = false;
 
 	Bonjour::ReplyFn								replyfn;
 	boost::asio::ip::address					    multicast_address;

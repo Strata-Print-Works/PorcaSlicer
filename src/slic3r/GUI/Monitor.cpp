@@ -40,6 +40,7 @@
 
 #include "wxExtensions.hpp"
 #include "GUI_App.hpp"
+#include "PrinterScanDialog.hpp"
 #include "GUI_ObjectList.hpp"
 #include "Plater.hpp"
 #include "MainFrame.hpp"
@@ -194,10 +195,20 @@ void MonitorPanel::init_timer()
 void MonitorPanel::init_tabpanel()
 {
     m_side_tools = new SideTools(this, wxID_ANY);
+    // Devices has a persistent picker; keep the normal tabs and connection errors.
+    if (wxGetApp().app_config->get_bool("independent_plate_setups"))
+        m_side_tools->get_panel()->Hide();
     wxBoxSizer* sizer_side_tools = new wxBoxSizer(wxVERTICAL);
     sizer_side_tools->Add(m_side_tools, 1, wxEXPAND, 0);
     m_tabpanel             = new Tabbook(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, sizer_side_tools, wxNB_LEFT | wxTAB_TRAVERSAL | wxNB_NOPAGETHEME);
     m_side_tools->set_table_panel(m_tabpanel);
+    if (wxGetApp().app_config->get_bool("independent_plate_setups")) {
+        // The Devices header exposes these views in a native choice control.
+        auto* picker = m_tabpanel->GetBtnsListCtrl();
+        picker->Hide();
+        picker->SetMinSize(wxSize(0, 0));
+        picker->SetMaxSize(wxSize(0, 0));
+    }
     m_tabpanel->SetBackgroundColour(wxColour("#FEFFFF"));
     m_tabpanel->Bind(wxEVT_BOOKCTRL_PAGE_CHANGED, [this](wxBookCtrlEvent& e) {
         auto page = m_tabpanel->GetCurrentPage();
@@ -309,6 +320,9 @@ void MonitorPanel::on_timer(wxTimerEvent& event)
 
 void MonitorPanel::on_select_printer(wxCommandEvent& event)
 {
+    // Devices selects synchronously. Ignore a preset's queued selection that was
+    // posted before entering inspection, so it cannot replace the visible target.
+    if (scanned_printer_control_config()) return;
     Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
     const std::string requested_dev_id = event.GetString().ToStdString();
     BOOST_LOG_TRIVIAL(trace) << "Orca diagnostic: MonitorPanel::on_select_printer requested_dev_id="
@@ -336,7 +350,7 @@ void MonitorPanel::on_select_printer(wxCommandEvent& event)
 
 void MonitorPanel::on_machine_selected(MachineObject* obj)
 {
-    if (obj == nullptr)
+    if (obj == nullptr || scanned_printer_control_config())
         return;
     obj->last_cali_version = -1;
     obj->reset_pa_cali_history_result();

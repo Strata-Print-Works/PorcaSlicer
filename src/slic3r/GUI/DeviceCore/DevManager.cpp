@@ -27,6 +27,7 @@
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Plater.hpp"
+#include "slic3r/GUI/PrinterScanDialog.hpp"
 #include "slic3r/plugin/PluginManager.hpp"
 #include "slic3r/Utils/NetworkAgentFactory.hpp"
 
@@ -1092,6 +1093,7 @@ namespace Slic3r
 
     void DeviceManager::OnSelectedMachineLost()
     {
+        if (GUI::scanned_printer_control_config()) return;
         GUI::wxGetApp().sidebar().update_sync_status(nullptr);
         GUI::wxGetApp().sidebar().load_ams_list(nullptr);
     }
@@ -1105,6 +1107,7 @@ namespace Slic3r
             ctx.code = LifecycleEvtCode::Ok;
             fire_lifecycle_event(LifecycleEvent::DeviceSelected, ctx);
         }
+        if (GUI::scanned_printer_control_config()) return;
         if (MachineObject* obj_ = get_selected_machine()) {
             GUI::wxGetApp().sidebar().update_sync_status(obj_);
             if(m_agent->get_filament_sync_mode() == FilamentSyncMode::subscription)

@@ -2168,7 +2168,9 @@ void GLCanvas3D::set_model(Model* model)
 void GLCanvas3D::bed_shape_changed()
 {
     refresh_camera_scene_box();
-    wxGetApp().plater()->get_camera().requires_zoom_to_bed = true;
+    // Restoring a plate changes the active bed, not the user's workspace view.
+    if (!wxGetApp().plater()->activating_plate_setup())
+        wxGetApp().plater()->get_camera().requires_zoom_to_bed = true;
     m_dirty = true;
 }
 
@@ -2394,8 +2396,24 @@ void GLCanvas3D::select_plate()
 
 void GLCanvas3D::update_volumes_colors_by_extruder()
 {
-    if (m_config != nullptr)
-        m_volumes.update_colors_by_extruder(m_config);
+    if (m_config == nullptr) return;
+    m_volumes.update_colors_by_extruder(m_config);
+    auto& plates = wxGetApp().plater()->get_partplate_list();
+    if (!plates.independent_setups()) return;
+    for (GLVolume* volume : m_volumes.volumes) {
+        if (!volume || volume->is_modifier || volume->is_wipe_tower || volume->volume_idx() < 0) continue;
+        const int index = plates.find_instance_belongs(volume->object_idx(), volume->instance_idx());
+        if (index < 0) continue;
+        const auto& setup = plates.get_plate(index)->print_setup();
+        const auto* colors = setup.config.option<ConfigOptionStrings>("filament_colour");
+        const int slot = std::max(0, volume->extruder_id - 1);
+        if (!colors || slot >= int(colors->values.size())) continue;
+        ColorRGBA color;
+        if (decode_color(colors->values[slot], color)) {
+            color.a(volume->color.a());
+            volume->color = color;
+        }
+    }
 }
 
 bool GLCanvas3D::is_collapse_toolbar_on_left() const
@@ -2539,7 +2557,12 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
         camera.requires_zoom_to_volumes = false;
     }
 
-    camera.apply_projection(_max_bounding_box(true, true, true));
+    const bool workspace_plane = m_canvas_type == CanvasView3D && !m_design_canvas &&
+        wxGetApp().plater()->get_partplate_list().independent_setups();
+    // The workspace is larger than the printable beds. Give its surface room
+    // in the depth range without including it in camera fitting or navigation.
+    camera.apply_projection(_max_bounding_box(true, true, true), workspace_plane ? 100.0 : -1.0,
+        workspace_plane ? camera.get_distance() + 50000.0 : -1.0);
 
     wxGetApp().imgui()->new_frame();
 
@@ -2756,6 +2779,8 @@ void GLCanvas3D::_render_scene(const Camera& camera, const Size& cnv_size)
     /* view3D render*/
     int hover_id = (m_hover_plate_idxs.size() > 0)?m_hover_plate_idxs.front():-1;
     if (m_canvas_type == ECanvasType::CanvasView3D) {
+        if (!m_design_canvas && show_bed && wxGetApp().plater()->get_partplate_list().independent_setups())
+            _render_workspace_plane(camera.get_view_matrix(), camera.get_projection_matrix());
         // m_show_bed gates the plate list too: hiding the bed but leaving its grid and outline
         // floating would read as a rendering fault rather than a deliberate view option.
         if (show_bed) {
@@ -3233,7 +3258,8 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
                 continue;
 
             unsigned int filaments_count = (unsigned int)dynamic_cast<const ConfigOptionStrings*>(m_config->option("filament_colour"))->values.size();
-            model_volume.update_extruder_count(filaments_count);
+            if (!ppl.independent_setups())
+                model_volume.update_extruder_count(filaments_count);
         }
     }
 
@@ -4651,6 +4677,37 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
 
     Point pos(evt.GetX(), evt.GetY());
 
+    // Finish plate gestures before overlays can consume their release event.
+    if (m_plate_drag_index != -1) {
+        // Keep overlay button state in sync while the plate owns the gesture.
+        wxGetApp().imgui()->update_mouse_data(evt);
+        m_mouse.position = pos.cast<double>();
+        m_tooltip.set_in_imgui(false);
+        auto* plater = wxGetApp().plater();
+        auto& plates = plater->get_partplate_list();
+        if (m_plate_drag_index >= 0 && evt.Dragging() && evt.LeftIsDown() && m_mouse.is_move_threshold_met(pos)) {
+            const Vec3d point = mouse_ray(pos).intersect_plane(0.0);
+            if (point.allFinite() && m_plate_drag_anchor.allFinite()) {
+                if (!m_plate_drag_snapshot) {
+                    plater->take_snapshot(_u8L("Move plate"));
+                    m_plate_drag_snapshot = true;
+                }
+                plates.move_plate(m_plate_drag_index, (m_plate_drag_origin + point - m_plate_drag_anchor).head<2>());
+                m_mouse.dragging = true;
+                m_dirty = true;
+            }
+        }
+        if (evt.LeftUp()) {
+            const bool accepted = m_plate_drag_index >= 0;
+            mouse_up_cleanup();
+            if (accepted) {
+                plater->schedule_background_process();
+                post_event(SimpleEvent(EVT_GLCANVAS_MOUSE_DRAGGING_FINISHED));
+            }
+        }
+        return;
+    }
+
     ImGuiWrapper* imgui = wxGetApp().imgui();
     if (m_tooltip.is_in_imgui() && evt.LeftUp())
         // ignore left up events coming from imgui windows and not processed by them
@@ -4788,6 +4845,43 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
         }
         m_dirty = true;
     };
+
+    if (m_canvas_type == CanvasView3D && !m_design_canvas &&
+        wxGetApp().plater()->get_partplate_list().independent_setups()) {
+        auto* plater = wxGetApp().plater();
+        auto& plates = plater->get_partplate_list();
+        int handle_id = -1;
+        if (evt.LeftDown() && m_picking_enabled) {
+            // A quick press may arrive before the next hover frame. Pick at the
+            // press position so grabbing a title cannot fall through to orbit.
+            const ClippingPlane clipping_plane = get_raycaster_clipping_plane();
+            const auto hit = m_scene_raycaster.hit(pos.cast<double>(), plater->get_camera(), &clipping_plane);
+            if (hit.type == SceneRaycaster::EType::Bed && hit.is_valid() &&
+                hit.raycaster_id % PartPlate::GRABBER_COUNT == PartPlate::PLATE_DRAG_HOVER_ID)
+                handle_id = hit.raycaster_id;
+        }
+        if (handle_id >= 0) {
+            const int index = handle_id / PartPlate::GRABBER_COUNT;
+            if (plates.is_locked(index) || plater->is_background_process_slicing()) {
+                m_plate_drag_index = -2; // Consume a blocked handle gesture without orbiting the camera.
+                if (!has_mouse_capture()) m_canvas->CaptureMouse();
+                return;
+            }
+            if (plater->select_plate(index) == 0) {
+                deselect_all();
+                m_gizmos.reset_all_states();
+                m_plate_drag_index = index;
+                m_plate_drag_origin = plates.get_plate(index)->get_origin();
+                m_plate_drag_anchor = mouse_ray(pos).intersect_plane(0.0);
+                plater->suppress_background_process(true);
+                m_mouse.drag.move_start_threshold_position_2D = pos;
+                m_canvas->SetFocus();
+                if (!has_mouse_capture()) m_canvas->CaptureMouse();
+                return;
+            }
+        }
+
+    }
 
     if (!mouse_in_layer_editing && m_gizmos.on_mouse(evt)) {
         if (m_gizmos.is_running()) {
@@ -6165,6 +6259,8 @@ void GLCanvas3D::mouse_up_cleanup()
     m_moving = false;
     m_camera_movement = false;
     m_mouse.drag.move_volume_idx = -1;
+    m_plate_drag_index = -1;
+    m_plate_drag_snapshot = false;
     m_mouse.set_start_position_3D_as_invalid();
     m_mouse.set_start_position_2D_as_invalid();
     m_mouse.dragging = false;
@@ -8849,6 +8945,60 @@ void GLCanvas3D::_render_background()
     }
 
     glsafe(::glEnable(GL_DEPTH_TEST));
+}
+
+void GLCanvas3D::_render_workspace_plane(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+{
+    const auto& bounds = wxGetApp().plater()->get_partplate_list().get_bounding_box();
+    const Vec2d low = (bounds.min.head<2>() / 1000.0).array().floor().matrix() * 1000.0 - Vec2d::Constant(10000.0);
+    const Vec2d high = (bounds.max.head<2>() / 1000.0).array().ceil().matrix() * 1000.0 + Vec2d::Constant(10000.0);
+    if (!m_workspace_surface.is_initialized() || m_workspace_extent.min != low || m_workspace_extent.max != high) {
+        m_workspace_extent = BoundingBoxf(low, high);
+        m_workspace_surface.reset();
+        GLModel::Geometry surface;
+        surface.format = {GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3};
+        surface.add_vertex(Vec3f(float(low.x()), float(low.y()), -3.0f));
+        surface.add_vertex(Vec3f(float(high.x()), float(low.y()), -3.0f));
+        surface.add_vertex(Vec3f(float(high.x()), float(high.y()), -3.0f));
+        surface.add_vertex(Vec3f(float(low.x()), float(high.y()), -3.0f));
+        surface.add_triangle(0, 1, 2);
+        surface.add_triangle(0, 2, 3);
+        m_workspace_surface.init_from(std::move(surface));
+        auto build_grid = [&](GLModel& model, double step, bool major) {
+            model.reset();
+            GLModel::Geometry lines;
+            lines.format = {GLModel::Geometry::EPrimitiveType::Lines, GLModel::Geometry::EVertexLayout::P3};
+            auto line = [&](double x1, double y1, double x2, double y2) {
+                const unsigned int index = static_cast<unsigned int>(lines.vertices_count());
+                lines.add_vertex(Vec3f(float(x1), float(y1), -2.98f));
+                lines.add_vertex(Vec3f(float(x2), float(y2), -2.98f));
+                lines.add_line(index, index + 1);
+            };
+            for (double x = low.x(); x <= high.x(); x += step)
+                if (major || std::fmod(x, step * 5.0) != 0.0) line(x, low.y(), x, high.y());
+            for (double y = low.y(); y <= high.y(); y += step)
+                if (major || std::fmod(y, step * 5.0) != 0.0) line(low.x(), y, high.x(), y);
+            model.init_from(std::move(lines));
+        };
+        const double spacing = (high - low).maxCoeff() > 10000.0 ? 50.0 : 10.0;
+        build_grid(m_workspace_grid_minor, spacing, false);
+        build_grid(m_workspace_grid_major, spacing * 5.0, true);
+    }
+    auto* shader = wxGetApp().get_shader("flat");
+    if (!shader) return;
+    shader->start_using();
+    shader->set_uniform("view_model_matrix", view_matrix);
+    shader->set_uniform("projection_matrix", projection_matrix);
+    glsafe(::glEnable(GL_DEPTH_TEST));
+    const bool dark = GUI_App::dark_mode();
+    m_workspace_surface.set_color(dark ? ColorRGBA(0.27f, 0.285f, 0.31f, 1.0f) : ColorRGBA(0.91f, 0.925f, 0.937f, 1.0f));
+    m_workspace_surface.render();
+    glsafe(::glLineWidth(1.0f));
+    m_workspace_grid_minor.set_color(dark ? ColorRGBA(0.31f, 0.33f, 0.36f, 1.0f) : ColorRGBA(0.84f, 0.867f, 0.886f, 1.0f));
+    m_workspace_grid_minor.render();
+    m_workspace_grid_major.set_color(dark ? ColorRGBA(0.38f, 0.41f, 0.45f, 1.0f) : ColorRGBA(0.765f, 0.796f, 0.827f, 1.0f));
+    m_workspace_grid_major.render();
+    shader->stop_using();
 }
 
 void GLCanvas3D::_render_bed(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool show_axes)
