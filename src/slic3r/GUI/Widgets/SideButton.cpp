@@ -1,3 +1,4 @@
+#include "../Branding.hpp"
 #include "SideButton.hpp"
 #include "Label.hpp"
 
@@ -44,9 +45,9 @@ SideButton::SideButton(wxWindow* parent, wxString text, wxString icon, long stly
     border_color.setTakeFocusedAsHovered(false);
 
     text_color.append(0xACACAC, StateColor::Disabled);
-    text_color.append(0xFEFEFE, StateColor::Pressed);
-    text_color.append(0xFEFEFE, StateColor::Hovered);
-    text_color.append(0xFEFEFE, StateColor::Normal);
+    text_color.append(wxColour(Slic3r::GUI::Branding::accent_foreground), StateColor::Pressed);
+    text_color.append(wxColour(Slic3r::GUI::Branding::accent_foreground), StateColor::Hovered);
+    text_color.append(wxColour(Slic3r::GUI::Branding::accent_foreground), StateColor::Normal);
 
     background_color.append(0x6B6B6B, StateColor::Disabled);
     background_color.append(wxColour(0, 137, 123), StateColor::Pressed);

@@ -24,6 +24,37 @@ in vec4 world_pos;
 
 out vec4 out_color;
 
+
+#ifdef PORCA_SHADOW_RECEIVER
+uniform sampler2D shadow_map;
+uniform mat4 shadow_light_vp;
+uniform float shadow_map_texel;
+uniform float shadow_intensity;
+uniform float shadow_depth_bias;
+uniform vec4 shadow_bounds;
+float receiver_visibility(vec4 position)
+{
+    if (shadow_intensity <= 0.0)
+        return 1.0;
+    if (any(lessThan(position.xy, shadow_bounds.xy)) || any(greaterThan(position.xy, shadow_bounds.zw)))
+        return 1.0;
+    vec4 light = shadow_light_vp * position;
+    vec3 p = light.xyz / light.w * 0.5 + 0.5;
+    if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0))))
+        return 1.0;
+    float occlusion = 0.0;
+    for (int x = -2; x <= 2; ++x)
+        for (int y = -2; y <= 2; ++y) {
+            float depth = texture(shadow_map, p.xy + vec2(float(x), float(y)) * shadow_map_texel).r;
+            occlusion += p.z - shadow_depth_bias > depth ? 1.0 : 0.0;
+        }
+    return 1.0 - shadow_intensity * occlusion / 25.0;
+}
+#endif
+#ifdef PORCA_SHADOW_RECEIVER
+in vec2 key_intensity;
+#endif
+
 void main()
 {
     vec3  color = uniform_color.rgb;
@@ -43,4 +74,8 @@ void main()
     color = (any(lessThan(pv_check_min, ZERO)) || any(greaterThan(pv_check_max, ZERO))) ? mix(color, WHITE, 0.3333) : color;
 	//out_color = vec4(vec3(intensity.y) + color * intensity.x, alpha);
 	out_color = vec4(vec3(intensity.y) + color * (intensity.x + emission_factor), alpha);
+#ifdef PORCA_SHADOW_RECEIVER
+    float visibility = receiver_visibility(world_pos);
+    out_color.rgb -= (1.0 - visibility) * (vec3(key_intensity.y) + color * key_intensity.x);
+#endif
 }

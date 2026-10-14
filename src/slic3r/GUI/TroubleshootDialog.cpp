@@ -172,15 +172,15 @@ TroubleshootDialog::TroubleshootDialog()
 
     auto data_dir   = boost::filesystem::path(Slic3r::data_dir());
     auto app_config = wxGetApp().app_config;
-    bool is_dark    = app_config->get("dark_color_mode") == "1";
+    bool is_dark    = wxGetApp().dark_mode();
  
     // LEFT SIZER //////////////////////
 
     // HEADER
-    m_logo            = ScalableBitmap(this, is_dark ? "OrcaSlicer_horizontal_dark" : "OrcaSlicer_horizontal_light", 64);
+    m_logo            = ScalableBitmap(this, is_dark ? "porca_logo_dark" : "porca_logo_light", 64);
     m_header_logo     = new wxStaticBitmap(this, wxID_ANY, m_logo.bmp());
     auto logo_line    = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(2)));
-    logo_line->SetBackgroundColour(StateColor::darkModeColorFor(wxColour("#009687")));
+    logo_line->SetBackgroundColour(StateColor::darkModeColorFor(wxColour("#009688")));
     auto version      = new Label(this, wxString(SoftFever_VERSION), wxALIGN_CENTRE_HORIZONTAL);
     wxFont version_font = GetFont();
     version_font = version_font.Scaled(1.65f); // SetPointSize(18) not works on macOS because it uses a 72 PPI reference
@@ -1431,6 +1431,15 @@ bool TroubleshootDialog::SaveAsZip(const std::vector<wxString>& sourcePaths, con
     if (!success)
         wxRemoveFile(zipFullPath);
     return success;
+}
+
+void TroubleshootDialog::on_sys_color_changed()
+{
+    wxGetApp().init_label_colours();
+    wxGetApp().UpdateDlgDarkUI(this);
+    m_logo = ScalableBitmap(this, wxGetApp().dark_mode() ? "porca_logo_dark" : "porca_logo_light", 64);
+    m_header_logo->SetBitmap(m_logo.bmp());
+    Refresh();
 }
 
 void TroubleshootDialog::on_dpi_changed(const wxRect& suggested_rect)

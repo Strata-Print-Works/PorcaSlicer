@@ -1,3 +1,4 @@
+#include "../ToolbarStyle.hpp"
 #include "GLGizmosManager.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/3DScene.hpp"
@@ -130,7 +131,7 @@ GLGizmosManager::EType GLGizmosManager::get_gizmo_from_mouse(const Vec2d &mouse_
         top_x = m_parent.get_main_toolbar_offset();
         top_x += m_parent.get_main_toolbar_width() + separator_width / 2 + border;
     }
-    float top_y = 0;
+    float top_y = DesignSystem::toolbar_top_inset(m_parent);
     float stride_x = m_layout.scaled_stride_x();
 
     // is mouse vertically in the area?
@@ -392,6 +393,10 @@ bool GLGizmosManager::init_arrow(const std::string& filename)
 
 void GLGizmosManager::set_overlay_icon_size(float size)
 {
+    if (m_parent.get_canvas_type() == GLCanvas3D::CanvasView3D && !m_parent.is_design_canvas()) {
+        m_layout.border = DesignSystem::space_4 * m_parent.get_scale();
+        m_layout.gap_x = DesignSystem::space_4 * m_parent.get_scale();
+    }
     if (m_layout.icons_size != size)
     {
         m_layout.icons_size = size;
@@ -1270,9 +1275,9 @@ void GLGizmosManager::do_render_overlay(bool draw_icons) const
         top_x = main_toolbar_left + main_toolbar_width * 2 + separator_width;
         top_x = top_x * inv_cnv_w;
     }
-    float top_y = 1.0f;
+    float top_y = 1.0f - 2.0f * DesignSystem::toolbar_top_inset(m_parent) * inv_cnv_h;
 
-    if (draw_icons)
+    if (draw_icons && (m_parent.get_canvas_type() != GLCanvas3D::CanvasView3D || m_parent.is_design_canvas()))
         render_background(top_x, top_y, top_x + width, top_y - height, border_w, border_h);
 
     top_x += border_w;
@@ -1320,7 +1325,7 @@ void GLGizmosManager::do_render_overlay(bool draw_icons) const
             //1. no need to scale by camera zoom, set {0,0} at left-up corner for imgui
             //gizmo->render_input_window(width, 0.5f * cnv_h - zoomed_top_y * zoom, toolbar_top);
             if (!draw_icons)
-                m_gizmos[m_current]->render_input_window(0.5 * cnv_w + 0.5f * top_x * cnv_w, get_scaled_total_height(), cnv_h);
+                m_gizmos[m_current]->render_input_window(0.5 * cnv_w + 0.5f * top_x * cnv_w, get_scaled_total_height() + DesignSystem::toolbar_top_inset(m_parent), cnv_h);
 
             is_render_current = true;
         }
@@ -1329,7 +1334,7 @@ void GLGizmosManager::do_render_overlay(bool draw_icons) const
 
     // BBS simplify gizmo is not a selected gizmo and need to render input window
     if (!draw_icons && !is_render_current && m_current != Undefined) {
-        m_gizmos[m_current]->render_input_window(0.5 * cnv_w + 0.5f * top_x * cnv_w, get_scaled_total_height(), cnv_h);
+        m_gizmos[m_current]->render_input_window(0.5 * cnv_w + 0.5f * top_x * cnv_w, get_scaled_total_height() + DesignSystem::toolbar_top_inset(m_parent), cnv_h);
     }
 }
 
@@ -1378,6 +1383,7 @@ GLGizmosManager::EType GLGizmosManager::get_gizmo_from_name(const std::string& g
 
 bool GLGizmosManager::generate_icons_texture()
 {
+    const bool tokens = m_parent.get_canvas_type() == GLCanvas3D::CanvasView3D && !m_parent.is_design_canvas();
     std::string path = resources_dir() + "/images/";
     std::vector<std::string> filenames;
     for (size_t idx=0; idx<m_gizmos.size(); ++idx)
@@ -1387,7 +1393,7 @@ bool GLGizmosManager::generate_icons_texture()
         {
             const std::string& icon_filename = gizmo->get_icon_filename();
             if (!icon_filename.empty())
-                filenames.push_back(path + icon_filename);
+                filenames.push_back(tokens ? DesignSystem::toolbar_icon_path(path + icon_filename) : path + icon_filename);
         }
     }
 
@@ -1404,7 +1410,8 @@ bool GLGizmosManager::generate_icons_texture()
 //    if (sprite_size_px % 2 != 0)
 //        sprite_size_px += 1;
 
-    bool res = m_icons_texture.load_from_svg_files_as_sprites_array(filenames, states, sprite_size_px, false);
+    const auto palette = DesignSystem::toolbar_palette(wxGetApp().dark_mode(), true);
+    bool res = m_icons_texture.load_from_svg_files_as_sprites_array(filenames, states, sprite_size_px, false, tokens ? &palette : nullptr);
     if (res)
         m_icons_texture_dirty = false;
 

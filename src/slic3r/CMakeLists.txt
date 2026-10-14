@@ -57,6 +57,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/BindDialog.hpp
     GUI/BitmapCache.cpp
     GUI/BitmapCache.hpp
+    GUI/DesignTokens.hpp
+    GUI/Typography.hpp
+    GUI/Typography.cpp
+    GUI/ToolbarStyle.hpp
+    GUI/ToolbarStyle.cpp
+    GUI/Branding.hpp
     GUI/BitmapComboBox.cpp
     GUI/BitmapComboBox.hpp
     GUI/BonjourDialog.cpp
@@ -218,6 +224,11 @@ set(SLIC3R_GUI_SOURCES
     GUI/Gizmos/GLGizmoTextureDisplacement.hpp
     GUI/Gizmos/GLGizmoUtils.cpp
     GUI/Gizmos/GLGizmoUtils.hpp
+    GUI/ViewportLighting.cpp
+    GUI/ViewportLightingGL.cpp
+    GUI/ViewportLighting.hpp
+    GUI/StudioEnvironment.cpp
+    GUI/StudioEnvironment.hpp
     GUI/GLCanvas3D.cpp
     GUI/GLCanvas3D.hpp
     GUI/GLModel.cpp
@@ -1088,4 +1099,9 @@ if (ORCA_BUILD_PYTHON_STUBGEN_MODULE)
         OUTPUT_NAME orca
         PREFIX ""
     )
+endif()
+
+# Explicit opt-in only: never register a graphics-window test in blanket CTest.
+if (PORCA_BUILD_VIEWPORT_RENDER_TESTS AND NOT SLIC3R_OPENGL_ES)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/tests/viewport_render ${CMAKE_BINARY_DIR}/tests/viewport_render)
 endif()

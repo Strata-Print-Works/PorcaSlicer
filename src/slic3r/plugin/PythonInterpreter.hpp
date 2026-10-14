@@ -159,6 +159,10 @@ class PythonGILState
 {
 public:
     PythonGILState() {
+        // Retained GUI callbacks can be destroyed during static teardown, after
+        // PythonInterpreter and its lease mutex have already been destroyed.
+        if (!Py_IsInitialized())
+            return;
         m_runtime_lease = PythonInterpreter::instance().acquire_runtime_lease();
         if (m_runtime_lease) {
             m_state    = PyGILState_Ensure();

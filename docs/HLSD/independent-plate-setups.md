@@ -28,7 +28,7 @@ Native verification of the handle interaction uses two different beds and saved 
 
 Inactive plates retain their physical bed meshes, resolved from their own custom model or saved printer model. Display caches are separate from the active printer and are rebuilt only when bed settings change; movement updates the placement without reloading the mesh. Missing or invalid models fall back to that plate's printable polygon. Printable areas and slicing inputs are unchanged by physical bed rendering.
 
-The selected bed keeps the darker, opaque surface. Inactive physical meshes and printable-polygon fallbacks use the same light-gray surface at 45% opacity, with fainter grid lines. Their physical outlines remain visible while the inactive beds recede into the shared workspace. Switching plates swaps the surface tones.
+The selected bed keeps the darker, opaque surface. Inactive physical meshes and printable-polygon fallbacks use the same light-gray surface at 45% opacity, with fainter grid lines. Their physical outlines remain visible while the inactive beds recede into the shared workspace. Switching plates swaps the surface tones. With Satin plastic appearance enabled in Prepare, shadow receivers follow each bed's displayed polygon or physical model, and the shared plane receives shadows at its own height. The optional [studio rendering](prepare-studio-rendering.md) changes only the view.
 
 Printer discovery and saved devices
 ----------------------------------

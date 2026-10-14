@@ -1973,19 +1973,36 @@ void PreferencesDialog::create_items()
     g_sizer->Add(create_item_title(_L("General")), 1, wxEXPAND);
 
     auto smooth_normals = create_item_checkbox(
-        _L("Smooth normals"),
-        _L("Applies smooth normals to the model.\n\nRequires manual scene reload to take effect "
-                                "(right-click on 3D view → \"Reload All\")."),
+        _L("Smooth curved surfaces"),
+        _L("Smooth the lighting on curves while keeping sharp edges.\n\nReload the scene to apply this change "
+           "(right-click in Prepare → \"Reload All\")."),
         SETTING_OPENGL_PHONG_SMOOTH_NORMALS
     );
     g_sizer->Add(smooth_normals);
 
-    //// GRAPHICS > Realistic view
-    g_sizer->Add(create_item_title(_L("Realistic View")), 1, wxEXPAND);
+    //// GRAPHICS > Experimental graphics settings
+    g_sizer->Add(create_item_title(_L("Experimental graphics settings")), 1, wxEXPAND);
+
+    g_sizer->Add(create_item_checkbox(_L("Enable realistic appearance"),
+        _L("Show parts with more natural lighting."), SETTING_OPENGL_REALISTIC_MODE));
+
+    g_sizer->Add(create_item_checkbox(_L("Enhanced material surface"),
+        _L("Show each part with the surface of its assigned filament. Applies in Prepare when realistic appearance is enabled."),
+        SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE));
+    // An unopened canvas has not established graphics capability yet.
+    if (wxGetApp().get_shader("phong") != nullptr &&
+        (wxGetApp().get_shader("prepare_plastic") == nullptr ||
+         wxGetApp().get_shader("prepare_flat_receiver") == nullptr ||
+         wxGetApp().get_shader("prepare_bed_receiver") == nullptr)) {
+        auto* fallback = new wxStaticText(m_parent, wxID_ANY,
+            _L("Enhanced material surfaces are unavailable on this computer. Classic appearance will be used."));
+        fallback->SetFont(::Label::Body_14);
+        g_sizer->Add(fallback);
+    }
 
     auto item_realistic_phong = create_item_checkbox(
-        _L("Phong shading"),
-        _L("Uses Phong shading inside realistic view.")
+        _L("Smooth lighting in Classic"),
+        _L("Light parts smoothly in Classic appearance and other views.")
         , SETTING_OPENGL_REALISTIC_PHONG
     );
     g_sizer->Add(item_realistic_phong);
@@ -2000,8 +2017,8 @@ void PreferencesDialog::create_items()
     g_sizer->Add(item_realistic_preview);
 
     auto item_realistic_ssao = create_item_checkbox(
-        _L("SSAO ambient occlusion"),
-        _L("Applies SSAO in realistic view."),
+        _L("Shade small recesses"),
+        _L("Deepen small recesses in Classic appearance and other views."),
         SETTING_OPENGL_PHONG_SSAO
     );
     g_sizer->Add(item_realistic_ssao);
@@ -2014,9 +2031,9 @@ void PreferencesDialog::create_items()
     std::vector<std::string> ShadowsValues = { "off", "static", "orbit" };
     auto item_realistic_shadows = create_item_combobox(
         _L("Shadows"),
-        _L("Renders cast shadows on the plate, other objects, and each object onto itself in realistic view.\n"
-           "Static: the light stays fixed in the world, so the shadows are only recomputed when the scene changes.\n"
-           "Orbit: the light turns with the camera, recomputing the shadows every frame the camera moves."),
+        _L("Cast shadows to make parts easier to see on their beds.\n"
+           "Static: keep the light in place as you turn the view.\n"
+           "Orbit: turn the light with the view."),
         SETTING_OPENGL_REALISTIC_SHADOWS, ShadowsLabels, ShadowsValues);
     g_sizer->Add(item_realistic_shadows);
 

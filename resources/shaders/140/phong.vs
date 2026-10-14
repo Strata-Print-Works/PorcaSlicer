@@ -35,6 +35,9 @@ out vec4 world_pos;
 out float world_normal_z;
 out vec3 eye_normal;
 out vec3 eye_position;
+#ifdef PORCA_PLASTIC
+out vec3 plastic_surface_position;
+#endif
 
 void main()
 {
@@ -43,6 +46,10 @@ void main()
 
     vec4 position = view_model_matrix * vec4(v_position, 1.0);
     eye_position = position.xyz;
+#ifdef PORCA_PLASTIC
+    // Finish patterns follow the mesh, never its workspace or camera position.
+    plastic_surface_position = v_position;
+#endif
 
     // Point in homogenous coordinates.
     world_pos = volume_world_matrix * vec4(v_position, 1.0);

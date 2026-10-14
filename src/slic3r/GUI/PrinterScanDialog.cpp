@@ -787,7 +787,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
         wxStaticText *m_summary, *m_name, *m_info, *m_message;
         wxButton *m_open, *m_reconnect, *m_manage, *m_setup;
         wxChoice* m_view;
-        wxPanel* m_empty;
+        wxPanel *m_detail, *m_empty;
         wxScrolledWindow* m_controls;
         LazyPage<MonitorPanel>* m_monitor;
         PrinterWebView* m_web = nullptr;
@@ -820,7 +820,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
             left->Add(m_summary, 0, wxALL, FromDIP(16));
             sidebar->SetSizer(left);
 
-            auto* detail = new wxPanel(splitter);
+            auto* detail = m_detail = new wxPanel(splitter);
             auto* right = new wxBoxSizer(wxVERTICAL);
             m_name = new wxStaticText(detail, wxID_ANY, _L("Select a printer"));
             m_name->SetFont(Label::Head_20);
@@ -903,7 +903,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
             });
             m_view->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) {
                 if (auto* panel = m_monitor->get()) panel->get_tabpanel()->SetSelection(m_view->GetSelection());
-                m_controls->FitInside(); Layout();
+                layout_detail();
             });
             m_list->Bind(wxEVT_LISTBOX, [this](wxCommandEvent& e) {
                 if (m_refreshing || e.GetSelection() < 0 || size_t(e.GetSelection()) >= m_printers.size()) return;
@@ -929,6 +929,18 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
             return changed;
         }
     private:
+        void layout_detail()
+        {
+            Layout();
+            // Showing a child doesn't resize the splitter pane. Relayout its own
+            // sizer so the view selector and previously hidden controls get space.
+            m_detail->Layout();
+            if (m_empty->IsShown()) m_empty->Layout();
+            if (m_controls->IsShown()) {
+                m_controls->Layout();
+                m_controls->FitInside();
+            }
+        }
         std::optional<DiscoveredPrinter> selected() const
         {
             for (const auto& p : m_printers) if (p.key() == m_selected) return p;
@@ -962,7 +974,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
                 stop_inspecting();
                 m_empty->Show(); m_controls->Hide(); m_setup->Hide();
                 m_message->SetLabel(_L("Add a printer, then select it to see its status and controls."));
-                Layout();
+                layout_detail();
                 return;
             }
             const auto* preset = wxGetApp().preset_bundle->printers.find_preset(p->preset);
@@ -970,7 +982,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
                 stop_inspecting();
                 m_empty->Show(); m_controls->Hide(); m_setup->Hide();
                 m_message->SetLabel(_L("Install this printer's profiles to use its controls."));
-                Layout();
+                layout_detail();
                 return;
             }
             DynamicPrintConfig config = preset->config;
@@ -985,7 +997,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
                 m_message->SetLabel(needs_bambu ? _L("Set up Bambu connection support to see the camera and use printer controls.") :
                                                _L("Controls aren't available for this printer yet. You can still open its plate."));
                 m_message->Wrap(FromDIP(440));
-                Layout();
+                layout_detail();
                 return;
             }
             const std::string loaded = p->serialize() + wxGetApp().app_config->get(code_section, p->key()) + (native ? "native" : "web");
@@ -999,7 +1011,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
                     stop_inspecting();
                     m_empty->Show(); m_controls->Hide(); m_setup->Hide();
                     m_message->SetLabel(_L("Could not open this printer's controls. Try reconnecting."));
-                    Layout();
+                    layout_detail();
                     return;
                 }
                 ensure_scanned_printer(std::string(destination_prefix) + p->key());
@@ -1028,9 +1040,8 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
             }
             m_empty->Hide(); m_controls->Show();
             m_loaded = loaded;
-            m_controls->FitInside();
+            layout_detail();
             m_controls->Scroll(0, 0);
-            Layout();
         }
         void open_plate()
         {
@@ -1178,6 +1189,7 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
             m_open->Enable(p && device_plate(*p) >= 0 && !wxGetApp().plater()->is_background_process_slicing());
             m_open->SetToolTip(p && device_plate(*p) < 0 ? _L("This printer has no plate in the current project.") : _L("Go to this printer's plate."));
             m_reconnect->Enable(bool(p)); m_manage->Enable(bool(p)); m_setup->Hide();
+            m_detail->Layout();
         }
     };
     return new DevicesPage(parent, monitor);

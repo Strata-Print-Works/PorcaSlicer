@@ -1,4 +1,5 @@
 #include "StateColor.hpp"
+#include "../Branding.hpp"
 #include <algorithm>
 #include <cmath>
 #include <wx/colour.h>
@@ -7,41 +8,65 @@
 #include <wx/string.h>
 
 static bool gDarkMode = false;
+namespace Brand = Slic3r::GUI::Branding;
 
 static bool operator<(wxColour const &l, wxColour const &r) { return l.GetRGBA() < r.GetRGBA(); }
 
+// Keep inherited semantic keys so native widgets share the Porca palette.
+static const std::map<wxColour, wxColour> gLightThemeColors{
+    {"#009688", Brand::coral_ink}, {"#26A69A", "#9F3441"},
+    {"#52c7b8", "#9F3441"}, {"#00897B", "#8C2C39"},
+    {Brand::accent_foreground, Brand::cream},
+    {"#FFFFFF", Brand::cream}, {"#FEFFFF", "#F0ECE6"},
+    {"#F8F8F8", "#F2EEE8"}, {"#F1F1F1", "#F2EEE9"},
+    {"#F4F4F4", "#F1EDE7"}, {"#000000", Brand::charcoal},
+    {"#262E30", Brand::charcoal}, {"#323A3D", "#413D38"},
+    {"#DFDFDF", "#E7E1D8"}, {"#D4D4D4", "#DDD4C9"},
+    {"#DBDBDB", "#C8BFB3"}, {"#EEEEEE", "#DED5CA"},
+    {"#BFE1DE", "#FFDAD4"}, {"#E5F0EE", "#F5E2DC"},
+    {"#3B4446", Brand::charcoal}
+};
+
+static wxColour light_theme_color(const wxColour& color)
+{
+    const auto it = gLightThemeColors.find(color);
+    return it == gLightThemeColors.end() ? color : it->second;
+}
+
 static std::map<wxColour, wxColour> gDarkColors{
-    {"#009688", "#00675b"}, // rgb(0, 150, 136)    ORCA color
+    {Brand::accent_foreground, Brand::charcoal},
+    {"#00897B", "#DD5B63"},
+    {"#009688", "#FF7B7B"}, // rgb(0, 150, 136)    ORCA color
     {"#1F8EEA", "#2778D2"}, // rgb(31, 142, 234)   ???
     {"#FF6F00", "#D15B00"}, // rgb(255, 111, 0)    Secondary color
     {"#D01B1B", "#BB2A3A"}, // rgb(208, 27, 27)    ???
-    {"#262E30", "#EFEFF0"}, // rgb(38, 46, 48)     Button text color | Input Text Color
-    {"#DFDFDF", "#3E3E45"}, // rgb(223, 223, 223)  Button Background color
-    {"#D4D4D4", "#4D4D54"}, // rgb(212, 212, 212)  Button Background color on Hover
-    {"#6B6A6A", "#909090"}, // rgb(107, 107, 106)  Button Dimmed text
-    {"#26A69A", "#008172"}, // rgb(0, 150, 136)    Button Confirm Color hover | ORCA Color Hover
-    {"#6B6B6A", "#B3B3B5"}, // rgb(107, 107, 106)  Input box side text
+    {"#262E30", "#FAF7F1"}, // rgb(38, 46, 48)     Button text color | Input Text Color
+    {"#DFDFDF", "#34312E"}, // rgb(223, 223, 223)  Button Background color
+    {"#D4D4D4", "#433D38"}, // rgb(212, 212, 212)  Button Background color on Hover
+    {"#6B6A6A", "#B8B1A8"}, // rgb(107, 107, 106)  Button Dimmed text
+    {"#26A69A", "#F16B70"}, // rgb(0, 150, 136)    Button Confirm Color hover | ORCA Color Hover
+    {"#6B6B6A", "#B8B1A9"}, // rgb(107, 107, 106)  Input box side text
     {"#2C2C2E", "#B3B3B4"}, // rgb(44, 44, 46)     ???
     {"#6B6B6B", "#818183"}, // rgb(107, 107, 107)  Disabled Text
     {"#ACACAC", "#65656A"}, // rgb(172, 172, 172)  Disabled Text on boxes | Dimmed Elements
-    {"#EEEEEE", "#4C4C55"}, // rgb(238, 238, 238)  Separator Line | Title Line Color
+    {"#EEEEEE", "#423B35"}, // rgb(238, 238, 238)  Separator Line | Title Line Color
     {"#E8E8E8", "#3E3E45"}, // rgb(232, 232, 232)  ???
-    {"#323A3D", "#E5E5E4"}, // rgb(50, 58, 61)     Softer text color
-    {"#FFFFFF", "#2D2D31"}, // rgb(255, 255, 255)  Window background
-    {"#F8F8F8", "#36363C"}, // rgb(248, 248, 248)  Sidebar > Titlebar > Gradient Top | BBL monitor page titlebar bg
-    {"#F1F1F1", "#36363B"}, // rgb(241, 241, 241)  Sidebar > Titlebar > Gradient Bottom
-    {"#3B4446", "#2D2D30"}, // rgb(59, 68, 78)     Top Bar / Main tab bar bg color
+    {"#323A3D", "#DED8CF"}, // rgb(50, 58, 61)     Softer text color
+    {"#FFFFFF", "#242424"}, // rgb(255, 255, 255)  Window background
+    {"#F8F8F8", "#2C2926"}, // rgb(248, 248, 248)  Sidebar > Titlebar > Gradient Top | BBL monitor page titlebar bg
+    {"#F1F1F1", "#2C2927"}, // rgb(241, 241, 241)  Sidebar > Titlebar > Gradient Bottom
+    {"#3B4446", "#1E1E1E"}, // rgb(59, 68, 78)     Top Bar / Main tab bar bg color
     {"#CECECE", "#54545B"}, // rgb(206, 206, 206)  Sidebar wxPanel bg | 
     {"#DBFDD5", "#3B3B40"}, // rgb(219, 253, 213)  Not Used anymore // Was used for BBS combo boxes etc
-    {"#000000", "#FFFFFE"}, // rgb(0, 0, 0)        Mostly Text color wxBlack
+    {"#000000", "#FAF7F0"}, // rgb(0, 0, 0)        Mostly Text color wxBlack
     {"#F4F4F4", "#36363D"}, // rgb(244, 244, 244)  ???
-    {"#DBDBDB", "#4A4A51"}, // rgb(219, 219, 219)  Input/Combo Box Border Color
+    {"#DBDBDB", "#51483E"}, // rgb(219, 219, 219)  Input/Combo Box Border Color
     {"#EDFAF2", "#283232"}, // rgb(229, 240, 238)  Not Used anymore // Was used for BBS Combo / Dropdown focused background color
     {"#323A3C", "#E5E5E6"}, // rgb(50, 58, 60)     Text color used on search list | 
     {"#303A3C", "#E5E5E5"}, // rgb(48, 58, 60)     Object Table > Column header text color | StaticBox Border Color
-    {"#FEFFFF", "#242428"}, // rgb(254, 255, 255)  Side Tabbar bg | 
+    {"#FEFFFF", "#1E1E1F"}, // rgb(254, 255, 255)  Side Tabbar bg
     {"#A6A9AA", "#2D2D29"}, // rgb(166, 169, 170)  Seperator color
-    {"#363636", "#B2B3B5"}, // rgb(54, 54, 54)     Sidebar > Parameter Label/Title color | Sidebar tab text | Create Filament window text
+    {"#363636", "#C6BEB4"}, // rgb(54, 54, 54)     Sidebar > Parameter Label/Title color | Sidebar tab text | Create Filament window text
     {"#F0F0F1", "#333337"}, // rgb(240, 240, 241)  Disabled element background // ORCA Used better background color for dark mode
     {"#9E9E9E", "#53545A"}, // rgb(158, 158, 158)  ???
     {"#D7E8DE", "#1F2B27"}, // rgb(215, 232, 222)  Not Used anymore // Leftover from BBS
@@ -52,8 +77,8 @@ static std::map<wxColour, wxColour> gDarkColors{
     {"#EBF9F0", "#293F34"},
     //{"#F0F0F0", "#4C4C54"},
     // ORCA
-    {"#BFE1DE", "#223C3C"}, // rgb(191, 225, 222)  Dropdown checked item background color > ORCA color with %25 opacity
-    {"#E5F0EE", "#283232"}, // rgb(229, 240, 238)  Combo / Dropdown focused background color > ORCA color with %10 opacity
+    {"#BFE1DE", "#48282A"}, // rgb(191, 225, 222)  Dropdown checked item background color > ORCA color with %25 opacity
+    {"#E5F0EE", "#342527"}, // rgb(229, 240, 238)  Combo / Dropdown focused background color > ORCA color with %10 opacity
 };
 
 std::tuple<double, double, double> StateColor::GetLAB(const wxColour& color) {
@@ -195,7 +220,7 @@ void StateColor::SetDarkMode(bool dark) { gDarkMode = dark; }
 inline wxColour darkModeColorFor2(wxColour const &color)
 {
     if (!gDarkMode)
-        return color;
+        return light_theme_color(color);
     auto iter = gDarkColors.find(color);
     if (iter != gDarkColors.end()) return iter->second;
     return color;
@@ -212,11 +237,35 @@ wxColour StateColor::lightModeColorFor(wxColour const &color)
 {
     static std::map<wxColour, wxColour> gLightColors = revert(gDarkColors);
     auto iter = gLightColors.find(color);
-    if (iter != gLightColors.end()) return iter->second;
-    return color;
+    return light_theme_color(iter != gLightColors.end() ? iter->second : color);
 }
 
 wxColour StateColor::darkModeColorFor(wxColour const &color) { return darkModeColorFor2(color); }
+
+wxColour Slic3r::GUI::Branding::window_color(const wxColour& color, bool background)
+{
+    if (background && (color == wxColour(charcoal) || color == wxColour(coral) || color == wxColour(coral_hover)))
+        return color;
+    // Charcoal is also an accent foreground in the inverse dark palette.
+    // Keep resolved light text from becoming cream on a repeated theme pass.
+    if (!gDarkMode && !background && color == wxColour(charcoal))
+        return color;
+    if (!gDarkMode)
+        return StateColor::lightModeColorFor(color);
+    if (background && color == wxColour(cream))
+        return darkModeColorFor2(wxColour("#FFFFFF"));
+    if (!background && color == wxColour(charcoal))
+        return darkModeColorFor2(wxColour("#000000"));
+    if (!background && color == wxColour(cream))
+        return color;
+    for (const auto& entry : gLightThemeColors) {
+        if (entry.second == color) {
+            const auto dark = gDarkColors.find(entry.first);
+            if (dark != gDarkColors.end()) return dark->second;
+        }
+    }
+    return darkModeColorFor2(color);
+}
 
 StateColor::StateColor(wxColour const &color) { append(color, 0); }
 

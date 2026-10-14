@@ -1,6 +1,7 @@
 #include "libslic3r/libslic3r.h"
 
 #include "3DBed.hpp"
+#include "ViewportLighting.hpp"
 #include "PartPlate.hpp"
 
 #include "libslic3r/Polygon.hpp"
@@ -390,7 +391,7 @@ void Bed3D::on_change_color_mode(bool is_dark)
     m_is_dark = is_dark;
 }
 
-bool Bed3D::render_model_only(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+bool Bed3D::render_model_only(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow)
 {
     // Fade inactive beds into the shared workspace while retaining their physical outline.
     ColorRGBA color = PartPlate::UNSELECT_COLOR;
@@ -403,21 +404,24 @@ bool Bed3D::render_model_only(const Transform3d& view_matrix, const Transform3d&
     glsafe(::glGetIntegerv(GL_BLEND_SRC_ALPHA, &src_alpha));
     glsafe(::glGetIntegerv(GL_BLEND_DST_ALPHA, &dst_alpha));
     glsafe(::glEnable(GL_BLEND));
-    glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
-    render_model(view_matrix, projection_matrix);
+    if (shadow != nullptr)
+        glsafe(::glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+    else
+        glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+    render_model(view_matrix, projection_matrix, shadow);
     glsafe(::glBlendFuncSeparate(src_rgb, dst_rgb, src_alpha, dst_alpha));
     if (!blending)
         glsafe(::glDisable(GL_BLEND));
     return !m_model_filename.empty() && m_model.get_filename() == m_model_filename;
 }
 
-void Bed3D::render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes)
+void Bed3D::render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes, const ShadowRenderContext* shadow)
 {
-    render_internal(canvas, view_matrix, projection_matrix, bottom, scale_factor, show_axes);
+    render_internal(canvas, view_matrix, projection_matrix, bottom, scale_factor, show_axes, shadow);
 }
 
 void Bed3D::render_internal(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor,
-    bool show_axes)
+    bool show_axes, const ShadowRenderContext* shadow)
 {
     m_scale_factor = scale_factor;
 
@@ -430,9 +434,9 @@ void Bed3D::render_internal(GLCanvas3D& canvas, const Transform3d& view_matrix, 
 
     switch (m_type)
     {
-    case Type::System: { render_system(canvas, view_matrix, projection_matrix, bottom); break; }
+    case Type::System: { render_system(canvas, view_matrix, projection_matrix, bottom, shadow); break; }
     default:
-    case Type::Custom: { render_custom(canvas, view_matrix, projection_matrix, bottom); break; }
+    case Type::Custom: { render_custom(canvas, view_matrix, projection_matrix, bottom, shadow); break; }
     }
 
     render_gravity_arrow(view_matrix, projection_matrix);
@@ -513,10 +517,10 @@ void Bed3D::render_axes()
         m_axes.render();
 }
 
-void Bed3D::render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom)
+void Bed3D::render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, const ShadowRenderContext* shadow)
 {
     if (!bottom)
-        render_model(view_matrix, projection_matrix);
+        render_model(view_matrix, projection_matrix, shadow);
 
     /*if (show_texture)
         render_texture(bottom, canvas);*/
@@ -719,7 +723,7 @@ void Bed3D::update_bed_triangles()
     const_cast<BoundingBoxf3 &>(m_extended_bounding_box)  = calc_extended_bounding_box();
 }
 
-void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow)
 {
     if (m_model_filename.empty())
         return;
@@ -733,18 +737,20 @@ void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& proj
     }
 
     if (!m_model.get_filename().empty()) {
-        const Camera &     camera      = wxGetApp().plater()->get_camera();
-        const Transform3d &view_matrix = camera.get_view_matrix();
-        const Transform3d &projection_matrix = camera.get_projection_matrix();
-        GLShaderProgram* shader = wxGetApp().get_shader("hotbed");
+        const Camera& camera = wxGetApp().plater()->get_camera();
+        const Transform3d& render_view = shadow != nullptr ? view_matrix : camera.get_view_matrix();
+        const Transform3d& render_projection = shadow != nullptr ? projection_matrix : camera.get_projection_matrix();
+        GLShaderProgram* shader = wxGetApp().get_shader(shadow != nullptr ? "prepare_bed_receiver" : "hotbed");
         if (shader != nullptr) {
             shader->start_using();
             shader->set_uniform("emission_factor", 0.0f);
+            if (shadow != nullptr)
+                shadow->set_uniforms(*shader);
             Transform3d model_matrix = Geometry::assemble_transform(m_model_offset);
             shader->set_uniform("volume_world_matrix",  model_matrix);
-            shader->set_uniform("view_model_matrix", view_matrix * model_matrix);
-            shader->set_uniform("projection_matrix", projection_matrix);
-            const Matrix3d view_normal_matrix = view_matrix.matrix().block(0, 0, 3, 3) * model_matrix.matrix().block(0, 0, 3, 3).inverse().transpose();
+            shader->set_uniform("view_model_matrix", render_view * model_matrix);
+            shader->set_uniform("projection_matrix", render_projection);
+            const Matrix3d view_normal_matrix = render_view.matrix().block(0, 0, 3, 3) * model_matrix.matrix().block(0, 0, 3, 3).inverse().transpose();
             shader->set_uniform("view_normal_matrix", view_normal_matrix);
             if (m_build_volume.get_extruder_area_count() > 0) {
                 const BuildVolume::BuildSharedVolume& shared_volume = m_build_volume.get_shared_volume();
@@ -765,15 +771,15 @@ void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& proj
     }
 }
 
-void Bed3D::render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom)
+void Bed3D::render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, const ShadowRenderContext* shadow)
 {
     if (m_model_filename.empty()) {
-        render_default(bottom, view_matrix, projection_matrix);
+        render_default(bottom, view_matrix, projection_matrix, shadow);
         return;
     }
 
     if (!bottom)
-        render_model(view_matrix, projection_matrix);
+        render_model(view_matrix, projection_matrix, shadow);
 
     /*if (show_texture)
         render_texture(bottom, canvas);*/
@@ -832,22 +838,29 @@ void Bed3D::render_gravity_arrow(const Transform3d& view_matrix, const Transform
     shader->stop_using();
 }
 
-void Bed3D::render_default(bool bottom, const Transform3d& view_matrix, const Transform3d& projection_matrix)
+void Bed3D::render_default(bool bottom, const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow)
 {
     // m_texture.reset();
 
     update_bed_triangles();
 
-    GLShaderProgram* shader = wxGetApp().get_shader("flat");
+    GLShaderProgram* shader = wxGetApp().get_shader(shadow != nullptr ? "prepare_flat_receiver" : "flat");
     if (shader != nullptr) {
         shader->start_using();
 
         shader->set_uniform("view_model_matrix", view_matrix);
         shader->set_uniform("projection_matrix", projection_matrix);
+        if (shadow != nullptr) {
+            shadow->set_uniforms(*shader);
+            shader->set_uniform("shadow_world_matrix", Transform3d::Identity());
+        }
 
         glsafe(::glEnable(GL_DEPTH_TEST));
         glsafe(::glEnable(GL_BLEND));
-        glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+        if (shadow != nullptr)
+            glsafe(::glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+        else
+            glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
 
         if (m_model.get_filename().empty() && !bottom) {
             // draw background

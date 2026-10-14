@@ -5,6 +5,7 @@
 #include "GUI_App.hpp"
 
 #include <cassert>
+#include <cstddef>
 #include <algorithm>
 #include <string>
 #include <initializer_list>
@@ -58,6 +59,16 @@ std::pair<bool, std::string> GLShadersManager::init()
     valid &= append_shader("fxaa", { prefix + "fxaa.vs", prefix + "fxaa.fs" });
     // used to apply screen-space ambient occlusion in post process
     valid &= append_shader("ssao", { prefix + "ssao.vs", prefix + "ssao.fs" });
+#if !SLIC3R_OPENGL_ES
+    if (prefix == "140/") {
+        // These are optional: a driver rejecting an enhanced variant must still edit projects.
+        const size_t required_error_size = error.size();
+        append_shader("prepare_plastic", {prefix + "phong.vs", prefix + "phong.fs"}, {"PORCA_PLASTIC"sv});
+        append_shader("prepare_flat_receiver", {prefix + "flat.vs", prefix + "flat.fs"}, {"PORCA_SHADOW_RECEIVER"sv});
+        append_shader("prepare_bed_receiver", {prefix + "hotbed.vs", prefix + "hotbed.fs"}, {"PORCA_SHADOW_RECEIVER"sv});
+        error.resize(required_error_size);
+    }
+#endif
     // used to render 3D scene background
     valid &= append_shader("background", { prefix + "background.vs", prefix + "background.fs" });
 #if SLIC3R_OPENGL_ES

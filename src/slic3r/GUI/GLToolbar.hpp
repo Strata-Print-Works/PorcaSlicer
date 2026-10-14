@@ -330,6 +330,7 @@ private:
     bool m_enabled;
     GLTexture m_icons_texture;
     bool m_icons_texture_dirty;
+    bool m_design_tokens{false};
     mutable GLTexture m_images_texture;
     BackgroundTexture m_background_texture;
     GLTexture m_arrow_texture;
@@ -414,6 +415,7 @@ public:
     bool update_items_state();
 
     void render(const GLCanvas3D& parent,GLToolbarItem::EType type = GLToolbarItem::Action);
+    void render_surface(const GLCanvas3D& parent, float width) const;
     // The ImGui windows of pressed items, built with the same layout as render().
     void render_item_windows(const GLCanvas3D& parent);
     // Hash of the state render() draws from: enabled, and each item's state and visibility.
@@ -445,7 +447,7 @@ private:
     int contains_mouse_horizontal(const Vec2d& mouse_pos, const GLCanvas3D& parent) const;
     int contains_mouse_vertical(const Vec2d& mouse_pos, const GLCanvas3D& parent) const;
 
-    void render_background(float left, float top, float right, float bottom, float border_w, float border_h) const;
+    void render_background(float left, float top, float right, float bottom, float border_w, float border_h, bool full_corners = false) const;
     void render_horizontal(const GLCanvas3D &parent, GLToolbarItem::EType type, bool draw_icons);
     void render_vertical(const GLCanvas3D& parent, bool draw_icons);
 

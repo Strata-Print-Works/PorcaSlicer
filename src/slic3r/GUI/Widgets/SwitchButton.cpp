@@ -1,3 +1,4 @@
+#include "../Branding.hpp"
 #include "SwitchButton.hpp"
 #include "Button.hpp"
 #include "Label.hpp"
@@ -48,7 +49,7 @@ SwitchButton::SwitchButton(wxWindow* parent, wxWindowID id)
 	: wxBitmapToggleButton(parent, id, wxNullBitmap, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxBU_EXACTFIT)
 	, m_on(this, "toggle_on", 16)
 	, m_off(this, "toggle_off", 16)
-    , text_color(std::pair{0xfffffe, (int) StateColor::Checked}, std::pair{0x6B6B6B, (int) StateColor::Normal})
+    , text_color(std::pair{wxColour(Slic3r::GUI::Branding::accent_foreground), (int) StateColor::Checked}, std::pair{0x6B6B6B, (int) StateColor::Normal})
 	, track_color(0xD9D9D9)
     , thumb_color(std::pair{0x009688, (int) StateColor::Checked}, std::pair{0xD9D9D9, (int) StateColor::Normal})
 {
@@ -654,13 +655,13 @@ MultiSwitchButton::MultiSwitchButton(wxWindow *parent, wxWindowID id, const wxPo
           std::make_pair(0x009688, (int) StateColor::Normal)))
     , m_text_color(StateColor(
           std::make_pair(0x6B6B6B, (int) StateColor::NotChecked),
-          std::make_pair(0xFFFFFE, (int) StateColor::Normal)))
+          std::make_pair(wxColour(Slic3r::GUI::Branding::accent_foreground), (int) StateColor::Normal)))
     , m_br_color_modified(StateColor(
           std::make_pair(0xD9D9D9, (int) StateColor::NotChecked),
           std::make_pair(0xF1754F, (int) StateColor::Normal)))
     , m_fg_color_modified(StateColor(
           std::make_pair(0xF1754E, (int) StateColor::NotChecked),
-          std::make_pair(0xFFFFFE, (int) StateColor::Normal)))
+          std::make_pair(wxColour(Slic3r::GUI::Branding::accent_foreground), (int) StateColor::Normal)))
     , m_button_radius(10.0)
     , m_button_padding(11, 3)
 {

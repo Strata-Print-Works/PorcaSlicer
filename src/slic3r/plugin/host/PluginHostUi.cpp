@@ -920,6 +920,14 @@ void PluginHostUi::RegisterBindings(pybind11::module_& host)
            "and may return True to close the notification.");
 }
 
+void PluginHostUi::clear_callbacks()
+{
+    GUI::MarkdownTip::SetAskHandler({});
+    ask_owner.clear();
+    slice_holder.reset();
+    slice_owner.clear();
+}
+
 void PluginHostUi::close_windows_for_plugin(const std::string& plugin_key)
 {
     if (wxTheApp == nullptr)

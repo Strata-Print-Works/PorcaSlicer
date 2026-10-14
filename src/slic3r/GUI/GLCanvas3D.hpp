@@ -2,6 +2,8 @@
 #define slic3r_GLCanvas3D_hpp_
 
 #include "libslic3r/Point.hpp"
+#include "StudioEnvironment.hpp"
+#include "ViewportLighting.hpp"
 #include "libslic3r/ConnectedBodies.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -926,6 +928,8 @@ public:
     std::array<unsigned int, 2> m_ssao_texture_size{ { 0, 0 } };
     // The last scene pass, for frames that only rebuild the overlay.
     SceneCache m_scene_cache;
+    StudioEnvironment m_studio_environment;
+    float m_shadow_depth_bias{0.0f};
     // Signature of the overlay on screen; empty after render(), a paint request or a frame drawn but
     // not shown, so the next frame is presented regardless.
     std::optional<size_t> m_presented_signature;
@@ -950,7 +954,7 @@ public:
     void set_context(wxGLContext* context) { m_context = context; }
     void set_type(ECanvasType type) { m_canvas_type = type; }
     void set_studio_lighting(bool on) { m_studio_lighting = on; }
-    ECanvasType get_canvas_type() { return m_canvas_type; }
+    ECanvasType get_canvas_type() const { return m_canvas_type; }
 
     wxGLCanvas* get_wxglcanvas() { return m_canvas; }
 	const wxGLCanvas* get_wxglcanvas() const { return m_canvas; }
@@ -1104,6 +1108,7 @@ public:
     void set_collapse_toolbar(GLToolbar* toolbar, std::function<CollapseSide()> side);
     void enable_plate_chrome(bool enable);
     void set_design_canvas(bool b) { m_design_canvas = b; }
+    bool is_design_canvas() const { return m_design_canvas; }
     void set_show_bed(bool b) { m_show_bed = b; }
     bool get_show_bed() const { return m_show_bed; }
     void enable_sinking_contours(bool enable) { m_sinking_contours_enabled = enable; }
@@ -1497,6 +1502,8 @@ private:
     void _picking_pass_imex_ghosts();
     bool _is_fxaa_enabled() const;
     bool _is_realistic_view_enabled() const;
+    bool _is_prepare_plastic_enabled() const;
+    ShadowRenderContext _prepare_shadow_context() const;
     bool _is_ssao_enabled() const;
     int _get_effective_fps_cap() const;
     bool _is_fps_overlay_enabled() const;
@@ -1505,7 +1512,7 @@ private:
     EShadowMode _shadow_mode() const;
     // Direction to the static shadow light in eye space, when it lights the scene.
     std::optional<Vec3d> _static_light_dir_eye() const;
-    size_t _shadow_casters_signature(bool toolpath_casters) const;
+    size_t _shadow_casters_signature(bool toolpath_casters, bool geometry_revision = false) const;
     bool _is_scene_cache_enabled() const;
     bool _is_scene_cacheable() const;
     bool _is_frame_skipping_enabled() const;
@@ -1525,7 +1532,7 @@ private:
     void _render_bed(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool show_axes);
     // Build the light-space depth shadow map (consumed by gouraud/phong for object & self shadows)
     // and cast it onto the build plate. Realistic view only.
-    void _render_shadows(const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    void _render_shadows(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool map_only = false);
     //BBS: add part plate related logic
     void _render_platelist(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_current, bool only_body = false, int hover_id = -1, bool render_cali = false, bool show_grid = true);
     // The current plate's box (XY, at z = 0); in the Design tab, its own bed's.

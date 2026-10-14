@@ -92,6 +92,7 @@
 #include "2DBed.hpp"
 #include "3DBed.hpp"
 #include "PartPlate.hpp"
+#include "ViewportLighting.hpp"
 #include "Camera.hpp"
 #include "GUI_Colors.hpp"
 #include "GUI_ObjectList.hpp"
@@ -4585,7 +4586,7 @@ bool PartPlate::intersects(const BoundingBoxf3& bb) const
 	return print_volume.intersects(bb);
 }
 
-bool PartPlate::render_inactive_bed_model(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+bool PartPlate::render_inactive_bed_model(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow)
 {
     if (!m_partplate_list->independent_setups() || m_print_setup.empty()) return false;
     const auto& config = m_print_setup.config;
@@ -4616,29 +4617,47 @@ bool PartPlate::render_inactive_bed_model(const Transform3d& view_matrix, const 
             m_inactive_bed_model, true, position, changed);
     }
     m_inactive_bed->on_change_color_mode(m_partplate_list->m_is_dark);
-    const bool rendered = m_inactive_bed->render_model_only(view_matrix, projection_matrix);
+    const bool rendered = m_inactive_bed->render_model_only(view_matrix, projection_matrix, shadow);
     if (!rendered) m_inactive_bed_model.clear(); // Keep the polygon fallback without retrying a bad file every frame.
     return rendered;
 }
 
-void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_body, bool force_background_color, HeightLimitMode mode, int hover_id, bool render_cali, bool show_grid, bool hide_chrome)
+void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_body, bool force_background_color, HeightLimitMode mode, int hover_id, bool render_cali, bool show_grid, bool hide_chrome, const ShadowRenderContext* shadow)
 {
     glsafe(::glEnable(GL_DEPTH_TEST));
     const bool physical_bed = !bottom && !m_selected && !force_background_color &&
-        render_inactive_bed_model(view_matrix, projection_matrix);
+        render_inactive_bed_model(view_matrix, projection_matrix, shadow);
 
     GLShaderProgram *shader = wxGetApp().get_shader("flat");
     if (shader != nullptr) {
         shader->start_using();
         glsafe(::glEnable(GL_BLEND));
-        glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+        if (shadow != nullptr)
+            glsafe(::glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+        else
+            glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
 
         shader->set_uniform("view_model_matrix", view_matrix);
         shader->set_uniform("projection_matrix", projection_matrix);
 
         if (!bottom) {
             // draw background
-            if (!physical_bed) render_background(force_background_color);
+            if (!physical_bed) {
+                GLShaderProgram* receiver = shadow != nullptr ? wxGetApp().get_shader("prepare_flat_receiver") : nullptr;
+                if (receiver != nullptr) {
+                    shader->stop_using();
+                    receiver->start_using();
+                    receiver->set_uniform("view_model_matrix", view_matrix);
+                    receiver->set_uniform("projection_matrix", projection_matrix);
+                    receiver->set_uniform("shadow_world_matrix", Transform3d::Identity());
+                    shadow->set_uniforms(*receiver);
+                }
+                render_background(force_background_color);
+                if (receiver != nullptr) {
+                    receiver->stop_using();
+                    shader->start_using();
+                }
+            }
 
             render_exclude_area(force_background_color);
             render_imex_zones(force_background_color);
@@ -7290,7 +7309,7 @@ void PartPlateList::postprocess_arrange_polygon(arrangement::ArrangePolygon& arr
 
 /*rendering related functions*/
 //render
-void PartPlateList::render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_current, bool only_body, int hover_id, bool render_cali, bool show_grid, bool hide_chrome)
+void PartPlateList::render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_current, bool only_body, int hover_id, bool render_cali, bool show_grid, bool hide_chrome, const ShadowRenderContext* shadow)
 {
 	const std::lock_guard<std::mutex> local_lock(m_plates_mutex);
 	std::vector<PartPlate*>::iterator it = m_plate_list.begin();
@@ -7310,15 +7329,15 @@ void PartPlateList::render(const Transform3d& view_matrix, const Transform3d& pr
 		if (current_index == m_current_plate) {
 			PartPlate::HeightLimitMode height_mode = (only_current)?PartPlate::HEIGHT_LIMIT_NONE:m_height_limit_mode;
 			if (plate_hover_index == current_index)
-                (*it)->render(view_matrix, projection_matrix, bottom, only_body, false, height_mode, plate_hover_action, render_cali, show_grid, hide_chrome);
+                (*it)->render(view_matrix, projection_matrix, bottom, only_body, false, height_mode, plate_hover_action, render_cali, show_grid, hide_chrome, shadow);
 			else
-                (*it)->render(view_matrix, projection_matrix, bottom, only_body, false, height_mode, -1, render_cali, show_grid, hide_chrome);
+                (*it)->render(view_matrix, projection_matrix, bottom, only_body, false, height_mode, -1, render_cali, show_grid, hide_chrome, shadow);
 		}
 		else {
 			if (plate_hover_index == current_index)
-				(*it)->render(view_matrix, projection_matrix, bottom, only_body, false, PartPlate::HEIGHT_LIMIT_NONE, plate_hover_action, render_cali, show_grid, hide_chrome);
+				(*it)->render(view_matrix, projection_matrix, bottom, only_body, false, PartPlate::HEIGHT_LIMIT_NONE, plate_hover_action, render_cali, show_grid, hide_chrome, shadow);
 			else
-                (*it)->render(view_matrix, projection_matrix, bottom, only_body, false, PartPlate::HEIGHT_LIMIT_NONE, -1, render_cali, show_grid, hide_chrome);
+                (*it)->render(view_matrix, projection_matrix, bottom, only_body, false, PartPlate::HEIGHT_LIMIT_NONE, -1, render_cali, show_grid, hide_chrome, shadow);
 		}
 	}
 }

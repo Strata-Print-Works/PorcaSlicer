@@ -1,3 +1,5 @@
+#include "ToolbarStyle.hpp"
+#include <algorithm>
 #include "libslic3r/Point.hpp"
 
 #include "GLToolbar.hpp"
@@ -320,18 +322,21 @@ void GLToolbar::set_position(float top, float left)
 
 void GLToolbar::set_border(float border)
 {
+    if (m_layout.border == border) return;
     m_layout.border = border;
     m_layout.dirty = true;
 }
 
 void GLToolbar::set_separator_size(float size)
 {
+    if (m_layout.separator_size == size) return;
     m_layout.separator_size = size;
     m_layout.dirty = true;
 }
 
 void GLToolbar::set_gap_size(float size)
 {
+    if (m_layout.gap_size == size) return;
     m_layout.gap_size = size;
     m_layout.dirty = true;
 }
@@ -547,6 +552,9 @@ void GLToolbar::render(const GLCanvas3D& parent,GLToolbarItem::EType type)
     if (!m_enabled || m_items.empty())
         return;
 
+    const bool tokens = parent.get_canvas_type() == GLCanvas3D::CanvasView3D && !parent.is_design_canvas() &&
+        (m_name == "Main" || m_name == "Assembly_View" || m_name == "Separator");
+    if (tokens != m_design_tokens) { m_design_tokens = tokens; m_icons_texture_dirty = true; }
     if (m_icons_texture_dirty)
         generate_icons_texture();
 
@@ -1247,7 +1255,7 @@ int GLToolbar::contains_mouse_vertical(const Vec2d& mouse_pos, const GLCanvas3D&
     return -1;
 }
 
-void GLToolbar::render_background(float left, float top, float right, float bottom, float border_w, float border_h) const
+void GLToolbar::render_background(float left, float top, float right, float bottom, float border_w, float border_h, bool full_corners) const
 {
     const unsigned int tex_id = m_background_texture.texture.get_id();
     const float tex_width = (float)m_background_texture.texture.get_width();
@@ -1259,7 +1267,7 @@ void GLToolbar::render_background(float left, float top, float right, float bott
         const float internal_left   = left + border_w;
         const float internal_right  = right - border_w;
         const float internal_top    = top - border_h;
-        const float internal_bottom = bottom + border_w;
+        const float internal_bottom = bottom + border_h;
 
         const float left_uv   = 0.0f;
         const float right_uv  = 1.0f;
@@ -1272,25 +1280,25 @@ void GLToolbar::render_background(float left, float top, float right, float bott
         const float internal_bottom_uv = (float)m_background_texture.metadata.bottom * inv_tex_height;
 
         // top-left corner
-        if (m_layout.horizontal_orientation == Layout::HO_Left || m_layout.vertical_orientation == Layout::VO_Top)
+        if (!full_corners && (m_layout.horizontal_orientation == Layout::HO_Left || m_layout.vertical_orientation == Layout::VO_Top))
             GLTexture::render_sub_texture(tex_id, left, internal_left, internal_top, top, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, left, internal_left, internal_top, top, { { left_uv, internal_top_uv }, { internal_left_uv, internal_top_uv }, { internal_left_uv, top_uv }, { left_uv, top_uv } });
 
         // top edge
-        if (m_layout.vertical_orientation == Layout::VO_Top)
+        if (!full_corners && (m_layout.vertical_orientation == Layout::VO_Top))
             GLTexture::render_sub_texture(tex_id, internal_left, internal_right, internal_top, top, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, internal_left, internal_right, internal_top, top, { { internal_left_uv, internal_top_uv }, { internal_right_uv, internal_top_uv }, { internal_right_uv, top_uv }, { internal_left_uv, top_uv } });
 
         // top-right corner
-        if (m_layout.horizontal_orientation == Layout::HO_Right || m_layout.vertical_orientation == Layout::VO_Top)
+        if (!full_corners && (m_layout.horizontal_orientation == Layout::HO_Right || m_layout.vertical_orientation == Layout::VO_Top))
             GLTexture::render_sub_texture(tex_id, internal_right, right, internal_top, top, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, internal_right, right, internal_top, top, { { internal_right_uv, internal_top_uv }, { right_uv, internal_top_uv }, { right_uv, top_uv }, { internal_right_uv, top_uv } });
 
         // center-left edge
-        if (m_layout.horizontal_orientation == Layout::HO_Left)
+        if (!full_corners && (m_layout.horizontal_orientation == Layout::HO_Left))
             GLTexture::render_sub_texture(tex_id, left, internal_left, internal_bottom, internal_top, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, left, internal_left, internal_bottom, internal_top, { { left_uv, internal_bottom_uv }, { internal_left_uv, internal_bottom_uv }, { internal_left_uv, internal_top_uv }, { left_uv, internal_top_uv } });
@@ -1299,25 +1307,25 @@ void GLToolbar::render_background(float left, float top, float right, float bott
         GLTexture::render_sub_texture(tex_id, internal_left, internal_right, internal_bottom, internal_top, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
 
         // center-right edge
-        if (m_layout.horizontal_orientation == Layout::HO_Right)
+        if (!full_corners && (m_layout.horizontal_orientation == Layout::HO_Right))
             GLTexture::render_sub_texture(tex_id, internal_right, right, internal_bottom, internal_top, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, internal_right, right, internal_bottom, internal_top, { { internal_right_uv, internal_bottom_uv }, { right_uv, internal_bottom_uv }, { right_uv, internal_top_uv }, { internal_right_uv, internal_top_uv } });
 
         // bottom-left corner
-        if (m_layout.horizontal_orientation == Layout::HO_Left || m_layout.vertical_orientation == Layout::VO_Bottom)
+        if (!full_corners && (m_layout.horizontal_orientation == Layout::HO_Left || m_layout.vertical_orientation == Layout::VO_Bottom))
             GLTexture::render_sub_texture(tex_id, left, internal_left, bottom, internal_bottom, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, left, internal_left, bottom, internal_bottom, { { left_uv, bottom_uv }, { internal_left_uv, bottom_uv }, { internal_left_uv, internal_bottom_uv }, { left_uv, internal_bottom_uv } });
 
         // bottom edge
-        if (m_layout.vertical_orientation == Layout::VO_Bottom)
+        if (!full_corners && (m_layout.vertical_orientation == Layout::VO_Bottom))
             GLTexture::render_sub_texture(tex_id, internal_left, internal_right, bottom, internal_bottom, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, internal_left, internal_right, bottom, internal_bottom, { { internal_left_uv, bottom_uv }, { internal_right_uv, bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_left_uv, internal_bottom_uv } });
 
         // bottom-right corner
-        if (m_layout.horizontal_orientation == Layout::HO_Right || m_layout.vertical_orientation == Layout::VO_Bottom)
+        if (!full_corners && (m_layout.horizontal_orientation == Layout::HO_Right || m_layout.vertical_orientation == Layout::VO_Bottom))
             GLTexture::render_sub_texture(tex_id, internal_right, right, bottom, internal_bottom, { { internal_left_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv }, { internal_right_uv, internal_top_uv }, { internal_left_uv, internal_top_uv } });
         else
             GLTexture::render_sub_texture(tex_id, internal_right, right, bottom, internal_bottom, { { internal_right_uv, bottom_uv }, { right_uv, bottom_uv }, { right_uv, internal_bottom_uv }, { internal_right_uv, internal_bottom_uv } });
@@ -1387,6 +1395,22 @@ void GLToolbar::render_arrow(const GLCanvas3D& parent, GLToolbarItem* highlighte
     }
 }
 
+void GLToolbar::render_surface(const GLCanvas3D& parent, float width) const
+{
+    const Size canvas = parent.get_canvas_size();
+    if (canvas.get_width() <= 0 || canvas.get_height() <= 0) return;
+    const float x = 2.0f / canvas.get_width();
+    const float y = 2.0f / canvas.get_height();
+    const float height = (2 * m_layout.border + m_layout.icons_size) * m_layout.scale;
+    // The nine-slice includes an 80-DIP transparent gutter for the supplied
+    // 12px-offset, 32px-blur popover shadow. Hit bounds remain the solid surface.
+    const float padding = 80.0f * parent.get_scale();
+    const float corner = std::min({float(DesignSystem::radius_lg) * parent.get_scale(), height * 0.5f, width * 0.5f}) + padding;
+    render_background((m_layout.left - padding) * x, (m_layout.top + padding) * y,
+        (m_layout.left + width + padding) * x, (m_layout.top - height - padding) * y,
+        corner * x, corner * y, true);
+}
+
 void GLToolbar::render_horizontal(const GLCanvas3D& parent, GLToolbarItem::EType type, bool draw_icons)
 {
     const Size cnv_size = parent.get_canvas_size();
@@ -1418,7 +1442,7 @@ void GLToolbar::render_horizontal(const GLCanvas3D& parent, GLToolbarItem::EType
         right = left + width * 0.5;
     const float bottom = top - height;
 
-    if (draw_icons)
+    if (draw_icons && !m_design_tokens)
         render_background(left, top, right, bottom, border_w, border_h);
 
     left += border_w;
@@ -1549,7 +1573,7 @@ bool GLToolbar::generate_icons_texture()
     for (GLToolbarItem* item : m_items) {
         const std::string& icon_filename = item->get_icon_filename();
         if (!icon_filename.empty())
-            filenames.push_back(path + icon_filename);
+            filenames.push_back(m_design_tokens ? DesignSystem::toolbar_icon_path(path + icon_filename) : path + icon_filename);
     }
 
     std::vector<std::pair<int, bool>> states;
@@ -1581,7 +1605,8 @@ bool GLToolbar::generate_icons_texture()
 //    if (sprite_size_px % 2 != 0)
 //        sprite_size_px += 1;
 
-    bool res = m_icons_texture.load_from_svg_files_as_sprites_array(filenames, states, sprite_size_px, false);
+    const auto palette = DesignSystem::toolbar_palette(wxGetApp().dark_mode(), false);
+    bool res = m_icons_texture.load_from_svg_files_as_sprites_array(filenames, states, sprite_size_px, false, m_design_tokens ? &palette : nullptr);
     if (res)
         m_icons_texture_dirty = false;
 

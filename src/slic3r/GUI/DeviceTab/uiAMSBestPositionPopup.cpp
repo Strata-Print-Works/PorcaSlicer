@@ -695,7 +695,7 @@ ReselectMachineDialog::ReselectMachineDialog(wxWindow* parent)
     m_buttonClose = new Button(this, _L("Close"));
     m_buttonClose->SetMinSize(wxSize(FromDIP(80), FromDIP(32)));
     m_buttonClose->SetMaxSize(wxSize(FromDIP(80), FromDIP(32)));
-    m_buttonClose->SetBackgroundColor(wxColour("#009688")); // Orca: accent green
+    m_buttonClose->SetStyle(ButtonStyle::Confirm, ButtonType::Choice);
     m_buttonClose->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e){
         this->Close();
     });

@@ -1,4 +1,5 @@
 #include "BitmapCache.hpp"
+#include "Branding.hpp"
 
 #include "libslic3r/Utils.hpp"
 #include "../Utils/MacDarkMode.hpp"
@@ -363,8 +364,21 @@ wxBitmap* BitmapCache::load_svg(const std::string &bitmap_name, unsigned target_
     if (strstr(bitmap_name.c_str(), "toggle_on") != NULL && dark_mode) // ORCA only replace color of toggle button
         replaces["#009688"] = "#00675b";
 
-    if (!new_color.empty())
+    const std::string accent = dark_mode ? Slic3r::GUI::Branding::coral : Slic3r::GUI::Branding::coral_ink;
+    replaces["\"#009688\""] = "\"" + accent + "\"";
+    replaces["\"#26A69A\""] = "\"" + accent + "\"";
+    replaces["\"#0x00AE42\""] = "\"" + accent + "\"";
+    replaces["#009688"] = accent;
+    replaces["#26A69A"] = accent;
+    replaces["#4db6ac"] = accent;
+    if (bitmap_name == "check_on" || bitmap_name == "check_on_focused" ||
+        bitmap_name == "check_half" || bitmap_name == "check_half_focused")
+        replaces["stroke:#fff;"] = std::string("stroke:") + (dark_mode ? Slic3r::GUI::Branding::charcoal : Slic3r::GUI::Branding::cream) + ";";
+
+    if (!new_color.empty()) {
         replaces["\"#009688\""] = "\"" + new_color + "\"";
+        replaces["#009688"] = new_color;
+    }
 
      NSVGimage *image = nullptr;
     if (strstr(bitmap_name.c_str(), "printer_thumbnail") == NULL) {

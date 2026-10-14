@@ -5,6 +5,7 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Color.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <vector>
 #include <string>
@@ -153,6 +154,7 @@ namespace GUI {
         bool m_render_disabled{ false };
         BoundingBoxf3 m_bounding_box;
         std::string m_filename;
+        std::uint64_t m_geometry_revision{0};
 
     public:
         GLModel() = default;
@@ -167,6 +169,8 @@ namespace GUI {
         size_t vertices_size_bytes() const  { return vertices_size_floats() * sizeof(float); }
 
         size_t indices_size_bytes() const { return indices_count() * Geometry::index_stride_bytes(m_render_data.geometry); }
+
+        std::uint64_t geometry_revision() const { return m_geometry_revision; }
 
         const Geometry& get_geometry() const { return m_render_data.geometry; }
 

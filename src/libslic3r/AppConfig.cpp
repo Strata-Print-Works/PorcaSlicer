@@ -18,6 +18,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <exception>
 #include <boost/none.hpp>
@@ -326,6 +327,17 @@ void AppConfig::set_defaults()
 
     if (get(SETTING_OPENGL_REALISTIC_MODE).empty())
         set_bool(SETTING_OPENGL_REALISTIC_MODE, false);
+
+    const auto surface = get(SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE);
+    if (surface.empty())
+        set_bool(SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE, true);
+    else if (surface != "true" && surface != "false") {
+        // Legacy global finishes become automatic filament matching. Classic
+        // and unrecognized choices keep enhanced surfaces disabled.
+        const std::array<std::string_view, 7> finishes{"filament", "satin", "matte", "silk", "carbon_fiber", "galaxy", "wood"};
+        set_bool(SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE,
+            std::find(finishes.begin(), finishes.end(), surface) != finishes.end());
+    }
 
     if (get(SETTING_OPENGL_REALISTIC_PHONG).empty())
         set_bool(SETTING_OPENGL_REALISTIC_PHONG, true);

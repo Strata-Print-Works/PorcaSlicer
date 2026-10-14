@@ -1,3 +1,4 @@
+#include "Branding.hpp"
 ///////////////////////////////////////////////////////////////////////////
 // C++ code generated with wxFormBuilder (version 3.10.0-4761b0c)
 // http://www.wxformbuilder.org/
@@ -783,7 +784,7 @@ void ParamsPanel::notify_object_config_changed()
     if (has_config == m_has_object_config) return;
     m_has_object_config = has_config;
     if (has_config)
-        m_mode_region->SetTextColor2(StateColor(std::pair{0xfffffe, (int) StateColor::Checked}, std::pair{wxGetApp().get_label_clr_modified(), 0}));
+        m_mode_region->SetTextColor2(StateColor(std::pair{wxColour(Branding::accent_foreground), (int) StateColor::Checked}, std::pair{wxGetApp().get_label_clr_modified(), 0}));
     else
         m_mode_region->SetTextColor2(StateColor());
     m_mode_region->Rescale();

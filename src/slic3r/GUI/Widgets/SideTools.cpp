@@ -1,4 +1,5 @@
 #include "SideTools.hpp"
+#include "../Branding.hpp"
 #include "bambu_networking.hpp"
 #include <wx/colour.h>
 #include <wx/dcclient.h>
@@ -512,6 +513,8 @@ void SideTools::update_status(MachineObject* obj)
 
 void SideTools::show_status(int status)
 {
+    m_connection_info->SetTextColor(wxColour((status & (int)MonitorStatus::MONITOR_CONNECTING) ?
+        Slic3r::GUI::Branding::accent_foreground : "#FFFFFF"));
     if (((status & (int)MonitorStatus::MONITOR_DISCONNECTED) != 0) || ((status & (int)MonitorStatus::MONITOR_DISCONNECTED_SERVER) != 0)) {
         if ((status & (int)MonitorStatus::MONITOR_DISCONNECTED_SERVER)) {
             m_hyperlink->SetLabel(_L("Failed to connect to the server"));

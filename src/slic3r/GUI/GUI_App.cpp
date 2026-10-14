@@ -7,6 +7,7 @@
 #include "libslic3r/Technologies.hpp"
 #include "libslic3r/Platform.hpp"
 #include "GUI_App.hpp"
+#include "Branding.hpp"
 #include "Shortcuts.hpp"
 #include "DeviceCore/DevConfigUtil.h"
 #include "BindDialog.hpp"
@@ -454,7 +455,7 @@ public:
         bool dark_mode = m_fg_color != wxColour("#6B6A6A");
         wxSize sz  = m_window->GetClientSize();
         BitmapCache bmp_cache;
-        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "splash_logo_dark" : "splash_logo", sz.GetWidth(), sz.GetHeight());
+        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "porca_splash_dark" : "porca_splash_light", sz.GetWidth(), sz.GetHeight());
 
         m_window->Bind(wxEVT_PAINT, &SplashScreen::OnPaint, this);
         m_window->Refresh();
@@ -2516,6 +2517,7 @@ GUI_App::~GUI_App()
     NetworkAgentFactory::clear_printer_agent_cache();
 
     Slic3r::PluginManager::instance().shutdown();
+    Slic3r::PluginHostUi::clear_callbacks();
     Slic3r::PythonInterpreter::instance().shutdown();
 
     if (app_config != nullptr) {
@@ -2668,6 +2670,7 @@ void GUI_App::init_app_config()
 {
 	// Profiles for the alpha are stored into the PrusaSlicer-alpha directory to not mix with the current release.
     SetAppName(SLIC3R_APP_KEY);
+    SetAppDisplayName("Porca");
 //	SetAppName(SLIC3R_APP_KEY "-alpha");
 //  SetAppName(SLIC3R_APP_KEY "-beta");
 //	SetAppDisplayName(SLIC3R_APP_NAME);
@@ -3148,6 +3151,7 @@ bool GUI_App::on_init_inner()
         stop_orca_health_check(m_agent);
         Slic3r::NetworkAgent::unload_network_module();
         Slic3r::PluginManager::instance().shutdown();
+        Slic3r::PluginHostUi::clear_callbacks();
         Slic3r::PythonInterpreter::instance().shutdown();
         e.Skip();
     });
@@ -4496,7 +4500,7 @@ void GUI_App::UpdateDarkUI(wxWindow* window, bool highlited/* = false*/, bool ju
     if (m_is_dark_mode) {
 
         auto orig_col = window->GetBackgroundColour();
-        auto bg_col = StateColor::darkModeColorFor(orig_col);
+        auto bg_col = Branding::window_color(orig_col, true);
         // there are cases where the background color of an item is bright, specifically:
         // * the background color of a button: #009688  -- 73
         if (bg_col != orig_col) {
@@ -4504,7 +4508,11 @@ void GUI_App::UpdateDarkUI(wxWindow* window, bool highlited/* = false*/, bool ju
         }
 
         orig_col = window->GetForegroundColour();
-        auto fg_col = StateColor::darkModeColorFor(orig_col);
+        auto fg_col = Branding::window_color(orig_col, false);
+        if (bg_col == wxColour(Branding::coral) || bg_col == wxColour(Branding::coral_hover) || bg_col == wxColour("#DD5B63")) {
+            window->SetForegroundColour(wxColour(Branding::charcoal));
+            return;
+        }
         auto fg_l = StateColor::GetLightness(fg_col);
 
         auto color_difference = StateColor::GetColorDifference(bg_col, fg_col);
@@ -4527,14 +4535,18 @@ void GUI_App::UpdateDarkUI(wxWindow* window, bool highlited/* = false*/, bool ju
     }
     else {
         auto original_col = window->GetBackgroundColour();
-        auto bg_col = StateColor::lightModeColorFor(original_col);
+        auto bg_col = Branding::window_color(original_col, true);
 
         if (bg_col != original_col) {
             window->SetBackgroundColour(bg_col);
         }
 
         original_col = window->GetForegroundColour();
-        auto fg_col = StateColor::lightModeColorFor(original_col);
+        if (bg_col == wxColour(Branding::coral) || bg_col == wxColour(Branding::coral_hover) || bg_col == wxColour("#DD5B63")) {
+            window->SetForegroundColour(wxColour(Branding::charcoal));
+            return;
+        }
+        auto fg_col = Branding::window_color(original_col, false);
 
         if (fg_col != original_col) {
             window->SetForegroundColour(fg_col);
@@ -8715,7 +8727,9 @@ void GUI_App::open_preferences(PreferencesTab tab, const std::string& highlight_
     // Render settings the canvas reads every frame; a change needs one redraw to show.
     static constexpr const char* opengl_render_setting_keys[] = {
         SETTING_OPENGL_FXAA_ENABLED, SETTING_OPENGL_FPS_CAP, SETTING_OPENGL_SHOW_FPS_OVERLAY, SETTING_OPENGL_SHOW_RENDER_TIMINGS,
-        SETTING_OPENGL_SCENE_CACHE, SETTING_OPENGL_SKIP_IDENTICAL_FRAMES, SETTING_OPENGL_REALISTIC_SHADOWS
+        SETTING_OPENGL_SCENE_CACHE, SETTING_OPENGL_SKIP_IDENTICAL_FRAMES, SETTING_OPENGL_REALISTIC_SHADOWS,
+        SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE, SETTING_OPENGL_REALISTIC_MODE, SETTING_OPENGL_REALISTIC_PHONG,
+        SETTING_OPENGL_PHONG_SSAO
     };
     std::vector<std::string> previous_opengl_render_settings;
     for (const char* key : opengl_render_setting_keys)

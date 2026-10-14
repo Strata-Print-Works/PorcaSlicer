@@ -11,6 +11,7 @@ add_executable(${_TEST_NAME}_tests
     test_web_media_controller.cpp
     test_scene_raycaster.cpp
     test_scene_benchmark.cpp
+    test_viewport_lighting.cpp
     test_lazy.cpp
     test_prebuild_queue.cpp
     test_staged_build.cpp
@@ -27,6 +28,8 @@ add_executable(${_TEST_NAME}_tests
     test_printer_agent.cpp
     test_plugin_install.cpp
     test_plugin_lifecycle.cpp
+    test_python_shutdown.cpp
+    test_branding.cpp
     test_plugin_printer_agent.cpp
     test_printhost.cpp
     test_slicing_pipeline_bindings.cpp

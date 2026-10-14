@@ -116,7 +116,8 @@ namespace GUI {
         // second field (bool):
         // false -> no changes
         // true -> add background color
-        bool load_from_svg_files_as_sprites_array(const std::vector<std::string>& filenames, const std::vector<std::pair<int, bool>>& states, unsigned int sprite_size_px, bool compress);
+        bool load_from_svg_files_as_sprites_array(const std::vector<std::string>& filenames, const std::vector<std::pair<int, bool>>& states, unsigned int sprite_size_px, bool compress,
+            const std::vector<std::pair<wxColour, wxColour>>* palette = nullptr);
         void reset();
         //BBS: add generate logic for text strings
         int m_original_width;

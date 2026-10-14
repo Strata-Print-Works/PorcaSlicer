@@ -12,6 +12,7 @@
 #include "Plater.hpp"
 #include "BitmapCache.hpp"
 #include "Camera.hpp"
+#include "ViewportLighting.hpp"
 
 #include "libslic3r/BuildVolume.hpp"
 #include "libslic3r/ExtrusionEntity.hpp"
@@ -702,12 +703,19 @@ void GLVolume::render_with_outline(const GUI::Size& cnv_size)
 //BBS add render for simple case
 void GLVolume::simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_objects, std::vector<ColorRGBA>& extruder_colors, bool ban_light)
 {
+    const bool finish_shader = shader != nullptr && shader->get_name() == "prepare_plastic";
+    const DynamicPrintConfig* filament_config = nullptr;
     if (auto* plater = GUI::wxGetApp().plater()) {
+        filament_config = plater->config();
         auto& plates = plater->get_partplate_list();
         if (plates.independent_setups()) {
-            const int owner = plates.find_instance_belongs(object_idx(), instance_idx());
+            const int owner = plates.find_instance(object_idx(), instance_idx());
+            // Unassigned geometry must not borrow another plate's material identity.
+            filament_config = nullptr;
             if (owner >= 0) {
-                const auto* colors = plates.get_plate(owner)->print_setup().config.option<ConfigOptionStrings>("filament_colour");
+                filament_config = owner == plates.get_curr_plate_index() ? plater->config() :
+                    &plates.get_plate(owner)->print_setup().config;
+                const auto* colors = filament_config ? filament_config->option<ConfigOptionStrings>("filament_colour") : nullptr;
                 if (colors && !colors->values.empty()) {
                     extruder_colors.assign(colors->values.size(), ColorRGBA());
                     for (size_t i = 0; i < colors->values.size(); ++i)
@@ -716,6 +724,12 @@ void GLVolume::simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_obj
             }
         }
     }
+    const auto set_finish = [&](size_t slot) {
+        if (finish_shader)
+            shader->set_uniform("plastic_finish", int(GUI::filament_surface_finish(filament_config, slot)));
+    };
+    const size_t default_slot = size_t(std::max(0, extruder_id - 1));
+    set_finish(default_slot);
     if (this->is_left_handed())
         glFrontFace(GL_CW);
     glsafe(::glCullFace(GL_BACK));
@@ -761,6 +775,9 @@ void GLVolume::simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_obj
             GUI::GLModel &m = mmuseg_models[idx];
             if (!m.is_initialized())
                 continue;
+            // Region zero inherits the volume assignment; other regions are
+            // one-based palette slots, just like the existing paint colors.
+            set_finish(idx == 0 ? default_slot : size_t(idx - 1));
 
             if (shader) {
                 if (idx == 0) {
@@ -811,6 +828,7 @@ void GLVolume::simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_obj
             else
                 m.render(this->tverts_range, shader);
         }
+        set_finish(default_slot);
     } else {
         if (tverts_range == std::make_pair<size_t, size_t>(0, -1))
             model.render(shader);
@@ -1267,6 +1285,9 @@ void GLVolumeCollection::render(GLVolumeCollection::ERenderType       type,
         //    BOOST_LOG_TRIVIAL(info) << boost::format("opaque rendering...");
 #endif // ENABLE_MODIFIERS_ALWAYS_TRANSPARENT
         volume.first->set_render_color();
+        if (shader->get_name() == "prepare_plastic")
+            shader->set_uniform("plastic_material", volume.first->printable &&
+                !volume.first->is_modifier && !volume.first->is_wipe_tower && !volume.first->slice_error);
 #if ENABLE_MODIFIERS_ALWAYS_TRANSPARENT
         if (type == ERenderType::Transparent)
             volume.first->force_transparent = false;

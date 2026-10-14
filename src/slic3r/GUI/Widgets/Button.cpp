@@ -1,4 +1,5 @@
 #include "Button.hpp"
+#include "../Branding.hpp"
 #include "Label.hpp"
 
 #include "slic3r/GUI/Widgets/StaticBox.hpp"
@@ -43,11 +44,11 @@ END_EVENT_TABLE()
 Button::Button() : paddingSize(10, 8)
 {
     background_color = StateColor(std::make_pair(0xF0F0F1, (int) StateColor::Disabled),
-                                  std::make_pair(0x52c7b8, (int) StateColor::Hovered | StateColor::Checked),
-                                  std::make_pair(0x009688, (int) StateColor::Checked),
+                                  std::make_pair(wxColour(Slic3r::GUI::Branding::coral_hover), (int) StateColor::Hovered | StateColor::Checked),
+                                  std::make_pair(wxColour(Slic3r::GUI::Branding::coral), (int) StateColor::Checked),
                                   std::make_pair(*wxLIGHT_GREY, (int) StateColor::Hovered),
                                   std::make_pair(*wxWHITE, (int) StateColor::Normal));
-    text_color = StateColor(std::make_pair(*wxLIGHT_GREY, (int) StateColor::Disabled), std::make_pair(*wxBLACK, (int) StateColor::Normal));
+    text_color = StateColor(std::make_pair(*wxLIGHT_GREY, (int) StateColor::Disabled), std::make_pair(wxColour(Slic3r::GUI::Branding::charcoal), (int) StateColor::Checked), std::make_pair(*wxBLACK, (int) StateColor::Normal));
 }
 
 Button::Button(wxWindow* parent, wxString text, wxString icon, long style, int iconSize, wxWindowID btn_id) : Button()
@@ -193,7 +194,7 @@ void Button::SetVertical(bool vertical)
 //                           Background                                             Foreground                       Border on focus
 // Button Colors             0-Disabled 1-Pressed  2-Hover    3-Normal   4-Enabled  5-Disabled 6-Normal   7-Hover    8-Dark     9-Light
 wxString btn_regular[10]  = {"#DFDFDF", "#DFDFDF", "#D4D4D4", "#DFDFDF", "#DFDFDF", "#6B6A6A", "#262E30", "#262E30", "#009688", "#009688"};
-wxString btn_confirm[10]  = {"#DFDFDF", "#009688", "#26A69A", "#009688", "#009688", "#6B6A6A", "#FEFEFE", "#FEFEFE", "#22bfb0", "#00FFD4"};
+wxString btn_confirm[10]  = {"#DFDFDF", Slic3r::GUI::Branding::coral, Slic3r::GUI::Branding::coral_hover, Slic3r::GUI::Branding::coral, Slic3r::GUI::Branding::coral, "#6B6A6A", Slic3r::GUI::Branding::charcoal, Slic3r::GUI::Branding::charcoal, "#009688", "#009688"};
 wxString btn_alert[10]    = {"#DFDFDF", "#DFDFDF", "#E14747", "#DFDFDF", "#DFDFDF", "#6B6A6A", "#262E30", "#FFFFFD", "#009688", "#009688"};
 wxString btn_disabled[10] = {"#DFDFDF", "#DFDFDF", "#DFDFDF", "#DFDFDF", "#DFDFDF", "#6B6A6A", "#6B6A6A", "#262E30", "#DFDFDF", "#DFDFDF"};
 

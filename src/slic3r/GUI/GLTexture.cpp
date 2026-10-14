@@ -1,3 +1,4 @@
+#include "ToolbarStyle.hpp"
 //BBS:add i18n
 #include "I18N.hpp"
 //BBS: add fstream for debug output
@@ -297,9 +298,10 @@ bool GLTexture::load_from_raw_data(std::vector<unsigned char> data, unsigned int
 }
 
 
-bool GLTexture::load_from_svg_files_as_sprites_array(const std::vector<std::string>& filenames, const std::vector<std::pair<int, bool>>& states, unsigned int sprite_size_px, bool compress)
+bool GLTexture::load_from_svg_files_as_sprites_array(const std::vector<std::string>& filenames, const std::vector<std::pair<int, bool>>& states, unsigned int sprite_size_px, bool compress, const std::vector<std::pair<wxColour, wxColour>>* palette)
 {
     reset();
+    if (palette && palette->size() != states.size()) return false;
 
     if (filenames.empty() || states.empty() || sprite_size_px == 0)
         return false;
@@ -362,10 +364,12 @@ bool GLTexture::load_from_svg_files_as_sprites_array(const std::vector<std::stri
         if (image == nullptr)
             continue;
 
-        float scale = (float)sprite_size_px / std::max(image->width, image->height);
-
-        // offset by 1 to leave the first pixel empty (both in x and y)
-        nsvgRasterize(rast, image, 1, 1, scale, sprite_data.data(), sprite_size_px, sprite_size_px, sprite_stride);
+        const float glyph_size = palette ? sprite_size_px * float(DesignSystem::icon_lg) / DesignSystem::control_md : float(sprite_size_px);
+        const float padding = (sprite_size_px - glyph_size) * 0.5f;
+        float scale = glyph_size / std::max(image->width, image->height);
+        std::fill(sprite_data.begin(), sprite_data.end(), 0);
+        // Keep a one-pixel gutter around each atlas cell.
+        nsvgRasterize(rast, image, 1 + padding, 1 + padding, scale, sprite_data.data(), sprite_size_px, sprite_size_px, sprite_stride);
 
         ::memcpy((void*)pressed_data.data(), (const void*)sprite_data.data(), sprite_bytes);
         for (int i = 0; i < sprite_n_pixels; ++i) {
@@ -444,6 +448,8 @@ bool GLTexture::load_from_svg_files_as_sprites_array(const std::vector<std::stri
             }
 
             ::memcpy((void*)output_data.data(), (const void*)src->data(), sprite_bytes);
+            if (palette)
+                DesignSystem::color_toolbar_sprite(output_data, sprite_data, sprite_size_px, (*palette)[state_id]);
 
             //BBS use BBS pressed style
             //if (state.second) {

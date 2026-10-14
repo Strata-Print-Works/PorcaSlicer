@@ -1,5 +1,6 @@
 #include "libslic3r/Utils.hpp"
 #include "Label.hpp"
+#include "../Typography.hpp"
 #include "StaticBox.hpp"
 #include <wx/font.h>
 #include <string>
@@ -35,6 +36,11 @@ wxFont Label::sysFont(int size, bool bold)
 #endif
 
     wxString face = "HarmonyOS Sans SC";
+    const auto* language = wxLocale::GetLanguageInfo(wxLocale::GetSystemLanguage());
+    const bool cjk = language && (language->CanonicalName.StartsWith("zh") ||
+        language->CanonicalName.StartsWith("ja") || language->CanonicalName.StartsWith("ko"));
+    if (!cjk)
+        return Slic3r::GUI::DesignSystem::interface_font(size, bold);
 
     // Check if the current locale is Korean
     if (wxLocale::GetSystemLanguage() == wxLANGUAGE_KOREAN) {
@@ -100,6 +106,7 @@ static bool fc_font_available(const char *family_name)
 
 void Label::initSysFont()
 {
+    Slic3r::GUI::DesignSystem::register_fonts();
 #if defined(__linux__) || defined(_WIN32)
     // On Linux, skip AddPrivateFont for fonts already known to fontconfig
     // (e.g. installed system-wide in a Flatpak).  Calling AddPrivateFont

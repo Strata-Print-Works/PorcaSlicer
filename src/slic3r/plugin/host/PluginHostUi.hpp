@@ -22,6 +22,9 @@ public:
     // Lifecycle hook: close and tear down every UI window owned by a plugin. PluginManager invokes
     // this after plugin teardown and also for bulk unload during application shutdown.
     static void close_windows_for_plugin(const std::string& plugin_key);
+
+    // Clear application-wide callback slots on the UI thread before Python is finalized.
+    static void clear_callbacks();
 };
 
 } // namespace Slic3r

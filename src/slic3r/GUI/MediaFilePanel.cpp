@@ -1,3 +1,4 @@
+#include "Branding.hpp"
 #include "MediaFilePanel.h"
 #include "ImageGrid.h"
 #include "I18N.hpp"
@@ -145,11 +146,11 @@ MediaFilePanel::MediaFilePanel(wxWindow * parent)
     m_button_delete->SetTextColorNormal(wxColor("#FF6F00"));
     m_button_management->SetBorderWidth(0);
     m_button_management->SetBackgroundColorNormal(wxColor("#009688"));
-    m_button_management->SetTextColorNormal(*wxWHITE);
+    m_button_management->SetTextColorNormal(wxColour(Branding::accent_foreground));
     m_button_management->Enable(false);
     m_button_refresh->SetBorderWidth(0);
     m_button_refresh->SetBackgroundColorNormal(wxColor("#009688"));
-    m_button_refresh->SetTextColorNormal(*wxWHITE);
+    m_button_refresh->SetTextColorNormal(wxColour(Branding::accent_foreground));
     m_button_refresh->Enable(false);
 
     wxBoxSizer *manage_sizer = new wxBoxSizer(wxHORIZONTAL);

@@ -440,6 +440,7 @@ void GLModel::init_from(Geometry&& data)
         return;
     }
 
+    ++m_geometry_revision;
     m_render_data.geometry = std::move(data);
 
     // update bounding box
@@ -472,6 +473,7 @@ void GLModel::init_from(const indexed_triangle_set& its)
         return;
     }
 
+    ++m_geometry_revision;
     Geometry& data = m_render_data.geometry;
     data.format = { Geometry::EPrimitiveType::Triangles, Geometry::EVertexLayout::P3N3 };
     data.reserve_vertices(3 * its.indices.size());
@@ -533,6 +535,7 @@ void GLModel::init_from(const Polygons& polygons, float z)
         return;
     }
 
+    ++m_geometry_revision;
     Geometry& data = m_render_data.geometry;
     data.format = { Geometry::EPrimitiveType::Lines, Geometry::EVertexLayout::P3 };
 
@@ -588,6 +591,7 @@ bool GLModel::init_from_file(const std::string& filename)
 
 void GLModel::reset()
 {
+    ++m_geometry_revision;
     // release gpu memory
     if (m_render_data.ibo_id > 0) {
         glsafe(::glDeleteBuffers(1, &m_render_data.ibo_id));

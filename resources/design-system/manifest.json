@@ -1,0 +1,69 @@
+{
+  "source": "User-supplied porca-design-system",
+  "fonts": [
+    {
+      "file": "Figtree-400.ttf",
+      "sha256": "adb56988c1cde2015ddf38edf28ee9df426e8bc70394ecb6fd23362fe54a2b87",
+      "family": "Figtree",
+      "weight": 400,
+      "unicode_characters": 222
+    },
+    {
+      "file": "Figtree-500.ttf",
+      "sha256": "1b0dc6998b282be82e86c1a3f0560d450f1848ea72fa4496a59f5eed907c17b7",
+      "family": "Figtree",
+      "weight": 500,
+      "unicode_characters": 222
+    },
+    {
+      "file": "Figtree-600.ttf",
+      "sha256": "f10b2be322510afa1b55be46817cf27dc038d23d0902e5ef7284eba6e8a75df4",
+      "family": "Figtree",
+      "weight": 600,
+      "unicode_characters": 222
+    },
+    {
+      "file": "Figtree-650.ttf",
+      "sha256": "01680549f2cf0fa397240b55e7b2983366920e663c37c266e876eedcc2e04698",
+      "family": "Figtree",
+      "weight": 650,
+      "unicode_characters": 222
+    },
+    {
+      "file": "Figtree-700.ttf",
+      "sha256": "ba37ad14a3a7e83b4a1b4120510ab3c1fd2e5dd9fcc7a9978741a8ba8d0b00dc",
+      "family": "Figtree",
+      "weight": 700,
+      "unicode_characters": 222
+    },
+    {
+      "file": "JetBrainsMono-400.ttf",
+      "sha256": "5dae49cd56d58bc00ca633687c5e328204a06cee2fd22094856978f79568df44",
+      "family": "JetBrains Mono",
+      "weight": 400,
+      "unicode_characters": 229
+    },
+    {
+      "file": "JetBrainsMono-500.ttf",
+      "sha256": "2e06a34dc35b04dcf461c8f21a9c597aabe4a17de27022234e58493cbfe3f16e",
+      "family": "JetBrains Mono",
+      "weight": 500,
+      "unicode_characters": 229
+    },
+    {
+      "file": "Nunito-800.ttf",
+      "sha256": "a93433bfbddeb2abb47ad3e21e32f6edb16b7e5468a8d0bebb9bc5cdcb5f96d8",
+      "family": "Nunito",
+      "weight": 800,
+      "unicode_characters": 231
+    },
+    {
+      "file": "Nunito-900.ttf",
+      "sha256": "0d85157ef8fea7ad1c6e3679b9f5d898ed6cc4ddb6c4148759dcb36d2ff370b7",
+      "family": "Nunito",
+      "weight": 900,
+      "unicode_characters": 231
+    }
+  ],
+  "tokens_sha256": "b908f4740bd7c1eab5c6398c33580e8578d0fe759fb503f7c8fbe65f861dd6c8"
+}

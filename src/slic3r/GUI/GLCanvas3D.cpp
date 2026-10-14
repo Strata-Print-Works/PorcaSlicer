@@ -1,3 +1,4 @@
+#include "ToolbarStyle.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Point.hpp"
 #include <limits>
@@ -65,6 +66,8 @@
 #include <string_view>
 #include "slic3r/GUI/Selection.hpp"
 #include "GLCanvas3D.hpp"
+#include "ViewportLighting.hpp"
+#include <Eigen/Geometry>
 #ifdef SLIC3R_CAD
 #include "slic3r/GUI/CAD/DesignSketchTool.hpp"   // Design tab: interactive 2D sketch tool
 #endif
@@ -1645,6 +1648,7 @@ GLCanvas3D::~GLCanvas3D()
 {
     if (_set_current()) {
         m_scene_cache.reset();
+        m_studio_environment.reset();
         m_frame_profiler.reset();
         if (m_fxaa_texture_id != 0) {
             glsafe(::glDeleteTextures(1, &m_fxaa_texture_id));
@@ -2779,6 +2783,11 @@ void GLCanvas3D::_render_scene(const Camera& camera, const Size& cnv_size)
     /* view3D render*/
     int hover_id = (m_hover_plate_idxs.size() > 0)?m_hover_plate_idxs.front():-1;
     if (m_canvas_type == ECanvasType::CanvasView3D) {
+        const bool plastic = _is_prepare_plastic_enabled();
+        if (plastic) {
+            _render_shadows(camera.get_view_matrix(), camera.get_projection_matrix(), true);
+            m_frame_profiler.mark("shadows");
+        }
         if (!m_design_canvas && show_bed && wxGetApp().plater()->get_partplate_list().independent_setups())
             _render_workspace_plane(camera.get_view_matrix(), camera.get_projection_matrix());
         // m_show_bed gates the plate list too: hiding the bed but leaving its grid and outline
@@ -2802,8 +2811,10 @@ void GLCanvas3D::_render_scene(const Camera& camera, const Size& cnv_size)
         
         //BBS: add outline logic
         // Depth pass for object-on-object and self shadows; consumed by the gouraud shader below.
-        _render_shadows(camera.get_view_matrix(), camera.get_projection_matrix());
-        m_frame_profiler.mark("shadows");
+        if (!plastic) {
+            _render_shadows(camera.get_view_matrix(), camera.get_projection_matrix());
+            m_frame_profiler.mark("shadows");
+        }
         _render_objects(GLVolumeCollection::ERenderType::Opaque, !m_gizmos.is_running());
         m_frame_profiler.mark("objects");
         _render_sla_slices();
@@ -7454,14 +7465,16 @@ void GLCanvas3D::_update_slice_error_status()
 void GLCanvas3D::_switch_toolbars_icon_filename()
 {
     BackgroundTexture::Metadata background_data;
-    background_data.filename = m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png";
-    background_data.left = 16;
-    background_data.top = 16;
-    background_data.right = 16;
-    background_data.bottom = 16;
+    const bool token_toolbar = m_canvas_type == CanvasView3D && !m_design_canvas;
+    background_data.filename = token_toolbar ? (m_is_dark ? "porca_toolbar_dark.png" : "porca_toolbar_light.png") :
+        (m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png");
+    background_data.left = background_data.top = background_data.right = background_data.bottom = token_toolbar ? 90 : 16;
     m_main_toolbar.init(background_data);
     m_assemble_view_toolbar.init(background_data);
     m_separator_toolbar.init(background_data);
+    // Sidebar chrome keeps its own background and hit geometry.
+    background_data.filename = m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png";
+    background_data.left = background_data.top = background_data.right = background_data.bottom = 16;
     collapse_toolbar().init(background_data);
 
     // main toolbar
@@ -7541,11 +7554,10 @@ bool GLCanvas3D::_init_main_toolbar()
         return true;
 
     BackgroundTexture::Metadata background_data;
-    background_data.filename = m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png";
-    background_data.left = 16;
-    background_data.top = 16;
-    background_data.right = 16;
-    background_data.bottom = 16;
+    const bool token_toolbar = m_canvas_type == CanvasView3D && !m_design_canvas;
+    background_data.filename = token_toolbar ? (m_is_dark ? "porca_toolbar_dark.png" : "porca_toolbar_light.png") :
+        (m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png");
+    background_data.left = background_data.top = background_data.right = background_data.bottom = token_toolbar ? 90 : 16;
 
     if (!m_main_toolbar.init(background_data))
     {
@@ -7788,11 +7800,10 @@ bool GLCanvas3D::_init_assemble_view_toolbar()
         return true;
 
     BackgroundTexture::Metadata background_data;
-    background_data.filename = m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png";
-    background_data.left = 16;
-    background_data.top = 16;
-    background_data.right = 16;
-    background_data.bottom = 16;
+    const bool token_toolbar = m_canvas_type == CanvasView3D && !m_design_canvas;
+    background_data.filename = token_toolbar ? (m_is_dark ? "porca_toolbar_dark.png" : "porca_toolbar_light.png") :
+        (m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png");
+    background_data.left = background_data.top = background_data.right = background_data.bottom = token_toolbar ? 90 : 16;
 
     if (!m_assemble_view_toolbar.init(background_data))
     {
@@ -7896,10 +7907,7 @@ bool GLCanvas3D::_init_collapse_toolbar()
     // Its owner laid it out; the background needs the GL context.
     BackgroundTexture::Metadata background_data;
     background_data.filename = m_is_dark ? "toolbar_background_dark.png" : "toolbar_background.png";
-    background_data.left = 16;
-    background_data.top = 16;
-    background_data.right = 16;
-    background_data.bottom = 16;
+    background_data.left = background_data.top = background_data.right = background_data.bottom = 16;
     return m_collapse_toolbar->init(background_data);
 }
 
@@ -8560,11 +8568,44 @@ bool GLCanvas3D::_is_realistic_view_enabled() const
     return m_canvas_type != ECanvasType::CanvasPreview || cfg->get_bool(SETTING_OPENGL_REALISTIC_PREVIEW);
 }
 
+// Above the front left of the plate.
+static const Vec3d STATIC_LIGHT_DIR = Vec3d(-0.4, -0.6, 1.0).normalized();
+
+bool GLCanvas3D::_is_prepare_plastic_enabled() const
+{
+    const AppConfig* cfg = wxGetApp().app_config;
+    const bool supported = wxGetApp().get_shader("prepare_plastic") != nullptr &&
+        wxGetApp().get_shader("prepare_flat_receiver") != nullptr &&
+        wxGetApp().get_shader("prepare_bed_receiver") != nullptr;
+    return cfg != nullptr && prepare_plastic_enabled(cfg->get_bool(SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE),
+        cfg->get_bool(SETTING_OPENGL_REALISTIC_MODE), m_canvas_type == CanvasView3D,
+        m_design_canvas, supported);
+}
+
+ShadowRenderContext GLCanvas3D::_prepare_shadow_context() const
+{
+    ShadowRenderContext shadow;
+    if (!_is_prepare_plastic_enabled())
+        return shadow;
+    if (m_shadow_map_valid) {
+        shadow.texture = m_shadow_map_texture_id;
+        shadow.size = m_shadow_map_size;
+    }
+    shadow.light_vp = m_shadow_light_vp;
+    shadow.depth_bias = m_shadow_depth_bias;
+    shadow.receiver_bounds = m_shadow_plate_bounds;
+    const Matrix3d rotation = wxGetApp().plater()->get_camera().get_view_matrix().matrix().block<3, 3>(0, 0);
+    shadow.light_direction_eye = _shadow_mode() == EShadowMode::Orbit ?
+        Vec3f(Vec3f(-0.4574957f, 0.4574957f, 0.7624929f).normalized()) :
+        Vec3f((rotation * STATIC_LIGHT_DIR).cast<float>());
+    return shadow;
+}
+
 bool GLCanvas3D::_is_ssao_enabled() const
 {
     if (wxGetApp().app_config == nullptr)
         return false;
-    return _is_realistic_view_enabled() &&
+    return _is_realistic_view_enabled() && !_is_prepare_plastic_enabled() &&
            wxGetApp().app_config->get_bool(SETTING_OPENGL_PHONG_SSAO);
 }
 
@@ -8591,8 +8632,6 @@ bool GLCanvas3D::_is_fps_overlay_enabled() const
     return !m_benchmarking && wxGetApp().app_config != nullptr && wxGetApp().app_config->get_bool(SETTING_OPENGL_SHOW_FPS_OVERLAY);
 }
 
-// Above the front left of the plate.
-static const Vec3d STATIC_LIGHT_DIR = Vec3d(-0.4, -0.6, 1.0).normalized();
 
 std::optional<Vec3d> GLCanvas3D::_static_light_dir_eye() const
 {
@@ -8608,7 +8647,7 @@ GLCanvas3D::EShadowMode GLCanvas3D::_shadow_mode() const
     return mode == "static" ? EShadowMode::Static : mode == "orbit" ? EShadowMode::Orbit : EShadowMode::Off;
 }
 
-size_t GLCanvas3D::_shadow_casters_signature(bool toolpath_casters) const
+size_t GLCanvas3D::_shadow_casters_signature(bool toolpath_casters, bool geometry_revision) const
 {
     if (toolpath_casters)
         return m_gcode_viewer.shadow_casters_signature();
@@ -8618,6 +8657,10 @@ size_t GLCanvas3D::_shadow_casters_signature(bool toolpath_casters) const
         if (volume == nullptr || !volume->is_active || !volume->printable || volume->is_modifier || volume->is_wipe_tower)
             continue;
         boost::hash_combine(hash, volume);
+        if (geometry_revision) {
+            boost::hash_combine(hash, volume->model.geometry_revision());
+            boost::hash_combine(hash, volume->model.is_render_disabled());
+        }
         boost::hash_combine(hash, volume->model.vertices_count());
         boost::hash_combine(hash, volume->model.indices_count());
         const BoundingBoxf3& bb = volume->model.get_bounding_box();
@@ -8861,6 +8904,22 @@ SceneCache::Key GLCanvas3D::_scene_cache_key(const Camera& camera) const
     const GLGizmoBase* gizmo = m_gizmos.get_current();
     key.gizmo_hover_id = gizmo != nullptr ? gizmo->get_hover_id() : -1;
     key.render_preview = m_render_preview;
+    if (const AppConfig* cfg = wxGetApp().app_config) {
+        for (const char* setting : {SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE, SETTING_OPENGL_REALISTIC_MODE,
+                SETTING_OPENGL_REALISTIC_PHONG, SETTING_OPENGL_REALISTIC_SHADOWS,
+                SETTING_OPENGL_PHONG_SSAO, SETTING_OPENGL_FXAA_ENABLED})
+            boost::hash_combine(key.render_settings_signature, cfg->get(setting));
+        boost::hash_combine(key.render_settings_signature, GUI_App::dark_mode());
+        if (_is_prepare_plastic_enabled()) {
+            // Profile names can change a finish without changing a mesh or color.
+            boost::hash_combine(key.render_settings_signature, filament_surface_signature(m_config));
+            auto& plates = wxGetApp().plater()->get_partplate_list();
+            if (plates.independent_setups())
+                for (int i = 0; i < plates.get_plate_count(); ++i)
+                    if (i != plates.get_curr_plate_index())
+                        boost::hash_combine(key.render_settings_signature, filament_surface_signature(&plates.get_plate(i)->print_setup().config));
+        }
+    }
     return key;
 }
 
@@ -8984,11 +9043,18 @@ void GLCanvas3D::_render_workspace_plane(const Transform3d& view_matrix, const T
         build_grid(m_workspace_grid_minor, spacing, false);
         build_grid(m_workspace_grid_major, spacing * 5.0, true);
     }
-    auto* shader = wxGetApp().get_shader("flat");
+    const ShadowRenderContext shadow = _prepare_shadow_context();
+    const bool plastic = _is_prepare_plastic_enabled();
+    const ShadowTextureBinding binding(plastic ? &shadow : nullptr);
+    auto* shader = wxGetApp().get_shader(plastic ? "prepare_flat_receiver" : "flat");
     if (!shader) return;
     shader->start_using();
     shader->set_uniform("view_model_matrix", view_matrix);
     shader->set_uniform("projection_matrix", projection_matrix);
+    if (plastic) {
+        shadow.set_uniforms(*shader);
+        shader->set_uniform("shadow_world_matrix", Transform3d::Identity());
+    }
     glsafe(::glEnable(GL_DEPTH_TEST));
     const bool dark = GUI_App::dark_mode();
     m_workspace_surface.set_color(dark ? ColorRGBA(0.27f, 0.285f, 0.31f, 1.0f) : ColorRGBA(0.91f, 0.925f, 0.937f, 1.0f));
@@ -9027,7 +9093,10 @@ void GLCanvas3D::_render_bed(const Transform3d& view_matrix, const Transform3d& 
     } else {
         m_bed.set_axes_mode(m_main_toolbar.is_enabled());
     }
-    m_bed.render(*this, view_matrix, projection_matrix, bottom, scale_factor, show_axes);
+    const ShadowRenderContext shadow = _prepare_shadow_context();
+    const ShadowRenderContext* context = _is_prepare_plastic_enabled() ? &shadow : nullptr;
+    const ShadowTextureBinding binding(context);
+    m_bed.render(*this, view_matrix, projection_matrix, bottom, scale_factor, show_axes, context);
 }
 
 void GLCanvas3D::_render_platelist(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_current, bool only_body, int hover_id, bool render_cali, bool show_grid)
@@ -9038,7 +9107,11 @@ void GLCanvas3D::_render_platelist(const Transform3d& view_matrix, const Transfo
     PartPlate* curr_plate = plate_list.get_curr_plate();
     const Transform3d plate_view_matrix = m_design_canvas && curr_plate != nullptr ?
         Transform3d(view_matrix * Geometry::translation_transform(-curr_plate->get_origin())) : view_matrix;
-    plate_list.render(plate_view_matrix, projection_matrix, bottom, only_current, only_body, hover_id, render_cali, show_grid, !m_plate_chrome_enabled);
+    const ShadowRenderContext shadow = _prepare_shadow_context();
+    const ShadowRenderContext* context = _is_prepare_plastic_enabled() ? &shadow : nullptr;
+    const ShadowTextureBinding binding(context);
+    plate_list.render(plate_view_matrix, projection_matrix, bottom, only_current, only_body, hover_id,
+        render_cali, show_grid, !m_plate_chrome_enabled, context);
 }
 
 BoundingBoxf3 GLCanvas3D::_current_plate_box() const
@@ -9151,7 +9224,7 @@ void GLCanvas3D::_render_cad_grid(const Transform3d& view_matrix, const Transfor
     glsafe(::glDisable(GL_BLEND));
 }
 
-void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool map_only)
 {
     if (wxGetApp().app_config == nullptr)
         return;
@@ -9209,87 +9282,98 @@ void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform
         if (!obj_bb.defined)
             return; // no objects to cast shadows
 
-        // Orthographic light-space basis (z points toward the light).
-        const Vec3d up     = (std::abs(dir_to_light.z()) > 0.99) ? Vec3d::UnitY() : Vec3d::UnitZ();
-        const Vec3d z_axis = dir_to_light;
-        const Vec3d x_axis = up.cross(z_axis).normalized();
-        const Vec3d y_axis = z_axis.cross(x_axis).normalized();
-
-        // Fit the frustum to the object AABB *and* the object's shadow projected onto the plate
-        // (clamped to the plate footprint). This keeps the map tight/high-res for short shadows
-        // while still covering long shadows at grazing light angles, which previously fell outside
-        // the map and were clipped.
-        const Vec3d ray_dir = -dir_to_light; // direction the shadow travels
-        const BoundingBoxf3 plate_bb = m_bed.build_volume().valid() ? m_bed.build_volume().bounding_volume() : obj_bb;
-
-        Vec3d lmin(DBL_MAX, DBL_MAX, DBL_MAX);
-        Vec3d lmax(-DBL_MAX, -DBL_MAX, -DBL_MAX);
-        auto enclose = [&](const Vec3d& p) {
-            const Vec3d lp(x_axis.dot(p), y_axis.dot(p), z_axis.dot(p));
-            lmin = lmin.cwiseMin(lp);
-            lmax = lmax.cwiseMax(lp);
-        };
-        // The plate area a shadow can reach: the casters' footprint and where their corners land on z = 0.
-        Vec2d reach_min(DBL_MAX, DBL_MAX);
-        Vec2d reach_max(-DBL_MAX, -DBL_MAX);
-        auto reach = [&](const Vec3d& p) {
-            reach_min = reach_min.cwiseMin(Vec2d(p.x(), p.y()));
-            reach_max = reach_max.cwiseMax(Vec2d(p.x(), p.y()));
-        };
-        for (int i = 0; i < 8; ++i) {
-            const Vec3d corner((i & 1) ? obj_bb.max.x() : obj_bb.min.x(),
-                               (i & 2) ? obj_bb.max.y() : obj_bb.min.y(),
-                               (i & 4) ? obj_bb.max.z() : obj_bb.min.z());
-            enclose(corner);
-            reach(corner);
-            // Where this corner's shadow lands on z = 0, clamped to the plate so a grazing angle
-            // (t -> infinity) stays bounded.
-            if (ray_dir.z() < -1e-6) {
-                const double t = -corner.z() / ray_dir.z();
-                Vec3d s = corner + t * ray_dir;
-                s.x() = std::min(std::max(s.x(), plate_bb.min.x()), plate_bb.max.x());
-                s.y() = std::min(std::max(s.y(), plate_bb.min.y()), plate_bb.max.y());
-                s.z() = 0.0;
-                enclose(s);
-                reach(s);
-            }
-        }
-
-        // Light "camera" placed just past the nearest enclosed point, looking toward the scene.
-        const double range  = lmax.z() - lmin.z();
-        const double margin = std::max(1.0, 0.05 * range);
-        const double cx     = 0.5 * (lmin.x() + lmax.x());
-        const double cy     = 0.5 * (lmin.y() + lmax.y());
-        const Vec3d  eye     = x_axis * cx + y_axis * cy + z_axis * (lmax.z() + margin);
-
+        const unsigned int size = 2048;
         Matrix4d light_view = Matrix4d::Identity();
-        light_view.block<1, 3>(0, 0) = x_axis.transpose();
-        light_view.block<1, 3>(1, 0) = y_axis.transpose();
-        light_view.block<1, 3>(2, 0) = z_axis.transpose();
-        light_view(0, 3) = -x_axis.dot(eye);
-        light_view(1, 3) = -y_axis.dot(eye);
-        light_view(2, 3) = -z_axis.dot(eye);
-
-        // Ortho fit to the light-space extent (symmetric in X/Y around cx,cy; +2% edge padding).
-        const double halfx  = std::max(0.5 * (lmax.x() - lmin.x()), 1.0) * 1.02;
-        const double halfy  = std::max(0.5 * (lmax.y() - lmin.y()), 1.0) * 1.02;
-        const double near_z = margin * 0.5;
-        const double far_z  = range + margin * 1.5;
         Matrix4d light_proj = Matrix4d::Identity();
-        light_proj(0, 0) = 1.0 / halfx;
-        light_proj(1, 1) = 1.0 / halfy;
-        light_proj(2, 2) = -2.0 / (far_z - near_z);
-        light_proj(2, 3) = -(far_z + near_z) / (far_z - near_z);
+        Vec3d eye = Vec3d::Zero();
+        if (map_only) {
+            const auto fit = fit_workspace_shadow(obj_bb, dir_to_light, size);
+            if (!fit)
+                return;
+            light_view = fit->view.matrix();
+            light_proj = fit->projection.matrix();
+            m_shadow_depth_bias = fit->depth_bias;
+            m_shadow_plate_bounds = fit->receiver_bounds;
+        } else {
+            // Orthographic light-space basis (z points toward the light).
+            const Vec3d up     = (std::abs(dir_to_light.z()) > 0.99) ? Vec3d::UnitY() : Vec3d::UnitZ();
+            const Vec3d z_axis = dir_to_light;
+            const Vec3d x_axis = up.cross(z_axis).normalized();
+            const Vec3d y_axis = z_axis.cross(x_axis).normalized();
 
+            // Fit the frustum to the object AABB *and* the object's shadow projected onto the plate
+            // (clamped to the plate footprint). This keeps the map tight/high-res for short shadows
+            // while still covering long shadows at grazing light angles, which previously fell outside
+            // the map and were clipped.
+            const Vec3d ray_dir = -dir_to_light; // direction the shadow travels
+            const BoundingBoxf3 plate_bb = m_bed.build_volume().valid() ? m_bed.build_volume().bounding_volume() : obj_bb;
+
+            Vec3d lmin(DBL_MAX, DBL_MAX, DBL_MAX);
+            Vec3d lmax(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+            auto enclose = [&](const Vec3d& p) {
+                const Vec3d lp(x_axis.dot(p), y_axis.dot(p), z_axis.dot(p));
+                lmin = lmin.cwiseMin(lp);
+                lmax = lmax.cwiseMax(lp);
+            };
+            // The plate area a shadow can reach: the casters' footprint and where their corners land on z = 0.
+            Vec2d reach_min(DBL_MAX, DBL_MAX);
+            Vec2d reach_max(-DBL_MAX, -DBL_MAX);
+            auto reach = [&](const Vec3d& p) {
+                reach_min = reach_min.cwiseMin(Vec2d(p.x(), p.y()));
+                reach_max = reach_max.cwiseMax(Vec2d(p.x(), p.y()));
+            };
+            for (int i = 0; i < 8; ++i) {
+                const Vec3d corner((i & 1) ? obj_bb.max.x() : obj_bb.min.x(),
+                                   (i & 2) ? obj_bb.max.y() : obj_bb.min.y(),
+                                   (i & 4) ? obj_bb.max.z() : obj_bb.min.z());
+                enclose(corner);
+                reach(corner);
+                // Where this corner's shadow lands on z = 0, clamped to the plate so a grazing angle
+                // (t -> infinity) stays bounded.
+                if (ray_dir.z() < -1e-6) {
+                    const double t = -corner.z() / ray_dir.z();
+                    Vec3d s = corner + t * ray_dir;
+                    s.x() = std::min(std::max(s.x(), plate_bb.min.x()), plate_bb.max.x());
+                    s.y() = std::min(std::max(s.y(), plate_bb.min.y()), plate_bb.max.y());
+                    s.z() = 0.0;
+                    enclose(s);
+                    reach(s);
+                }
+            }
+
+            // Light "camera" placed just past the nearest enclosed point, looking toward the scene.
+            const double range  = lmax.z() - lmin.z();
+            const double margin = std::max(1.0, 0.05 * range);
+            const double cx     = 0.5 * (lmin.x() + lmax.x());
+            const double cy     = 0.5 * (lmin.y() + lmax.y());
+            eye = x_axis * cx + y_axis * cy + z_axis * (lmax.z() + margin);
+
+            light_view = Matrix4d::Identity();
+            light_view.block<1, 3>(0, 0) = x_axis.transpose();
+            light_view.block<1, 3>(1, 0) = y_axis.transpose();
+            light_view.block<1, 3>(2, 0) = z_axis.transpose();
+            light_view(0, 3) = -x_axis.dot(eye);
+            light_view(1, 3) = -y_axis.dot(eye);
+            light_view(2, 3) = -z_axis.dot(eye);
+
+            // Ortho fit to the light-space extent (symmetric in X/Y around cx,cy; +2% edge padding).
+            const double halfx  = std::max(0.5 * (lmax.x() - lmin.x()), 1.0) * 1.02;
+            const double halfy  = std::max(0.5 * (lmax.y() - lmin.y()), 1.0) * 1.02;
+            const double near_z = margin * 0.5;
+            const double far_z  = range + margin * 1.5;
+            light_proj = Matrix4d::Identity();
+            light_proj(0, 0) = 1.0 / halfx;
+            light_proj(1, 1) = 1.0 / halfy;
+            light_proj(2, 2) = -2.0 / (far_z - near_z);
+            light_proj(2, 3) = -(far_z + near_z) / (far_z - near_z);
+
+            // Padded by the filter's 2 texel reach, stretched where the light grazes the plate.
+            const double reach_margin = 3.0 * 2.0 * std::max(halfx, halfy) / size / std::max(0.1, std::abs(dir_to_light.z()));
+            m_shadow_plate_bounds = { float(reach_min.x() - reach_margin), float(reach_min.y() - reach_margin),
+                                      float(reach_max.x() + reach_margin), float(reach_max.y() + reach_margin) };
+        }
         m_shadow_light_vp = Transform3d(light_proj * light_view);
 
-        // Create / resize the depth texture and FBO
-        const unsigned int size = 2048;
-
-        // Padded by the filter's 2 texel reach, stretched where the light grazes the plate.
-        const double reach_margin = 3.0 * 2.0 * std::max(halfx, halfy) / size / std::max(0.1, std::abs(dir_to_light.z()));
-        m_shadow_plate_bounds = { float(reach_min.x() - reach_margin), float(reach_min.y() - reach_margin),
-                                  float(reach_max.x() + reach_margin), float(reach_max.y() + reach_margin) };
         if (m_shadow_map_texture_id == 0) {
             glsafe(::glGenTextures(1, &m_shadow_map_texture_id));
             glsafe(::glBindTexture(GL_TEXTURE_2D, m_shadow_map_texture_id));
@@ -9309,12 +9393,25 @@ void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform
         if (m_shadow_map_fbo == 0)
             glsafe(::glGenFramebuffers(1, &m_shadow_map_fbo));
 
+        GLGizmoBase* gizmo = m_gizmos.get_current();
+        const ClippingPlane caster_clip = gizmo != nullptr && !gizmo->apply_clipping_plane() ?
+            ClippingPlane::ClipsNothing() : _get_volumes_clipping_plane();
+        const Vec2d caster_z_range = m_use_clipping_planes ?
+            Vec2d(-m_clipping_planes[0].get_data()[3], m_clipping_planes[1].get_data()[3]) :
+            Vec2d(-FLT_MAX, FLT_MAX);
         // A static light keeps the map until its frustum or the casters change.
         size_t cache_key = 0;
         if (mode == EShadowMode::Static) {
-            cache_key = _shadow_casters_signature(toolpath_casters);
+            cache_key = _shadow_casters_signature(toolpath_casters, map_only);
             for (int i = 0; i < 16; ++i)
                 boost::hash_combine(cache_key, m_shadow_light_vp.matrix().data()[i]);
+            boost::hash_combine(cache_key, map_only);
+            if (map_only) {
+                for (int i = 0; i < 4; ++i)
+                    boost::hash_combine(cache_key, caster_clip.get_data()[i]);
+                boost::hash_combine(cache_key, caster_z_range.x());
+                boost::hash_combine(cache_key, caster_z_range.y());
+            }
         }
         if (cache_key != 0 && cache_key == m_shadow_map_key)
             m_shadow_map_valid = true;
@@ -9354,14 +9451,20 @@ void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform
                 if (toolpath_casters)
                     m_gcode_viewer.render_shadow_casters(Transform3d(light_view), Transform3d(light_proj), eye);
                 // Only this branch draws through "flat"; the toolpaths bring their own program.
-                else if (GLShaderProgram* shader = wxGetApp().get_shader("flat"); shader != nullptr) {
+                else if (GLShaderProgram* shader = wxGetApp().get_shader(map_only ? "flat_clip" : "flat"); shader != nullptr) {
                     shader->start_using();
                     shader->set_uniform("projection_matrix", Transform3d(light_proj));
+                    if (map_only) {
+                        shader->set_uniform("clipping_plane", caster_clip.get_data());
+                        shader->set_uniform("z_range", caster_z_range);
+                    }
                     for (GLVolume* volume : m_volumes.volumes) {
                         if (volume == nullptr || !volume->is_active || !volume->printable || volume->is_modifier || volume->is_wipe_tower)
                             continue;
                         const Transform3d view_model = Transform3d(light_view) * volume->world_matrix();
                         shader->set_uniform("view_model_matrix", view_model);
+                        if (map_only)
+                            shader->set_uniform("volume_world_matrix", volume->world_matrix());
                         volume->model.render(shader);
                     }
                     shader->stop_using();
@@ -9392,6 +9495,10 @@ void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform
     // Unified plate shadow: draw the build-plate footprint and darken it wherever the same
     // depth shadow map (built above) says the light is occluded. This replaces the old planar
     // stencil projection so plate, object and self shadows all come from one technique.
+    // Enhanced receivers sample the map during their own surface draw.
+    if (map_only)
+        return;
+
     // ----------------------------------------------------------------------------------
     if (!m_shadow_map_valid)
         return;
@@ -9579,7 +9686,9 @@ void GLCanvas3D::_render_objects(GLVolumeCollection::ERenderType type, bool with
 
     const bool realistic_mode = _is_realistic_view_enabled();
     const bool realistic_phong = wxGetApp().app_config != nullptr && wxGetApp().app_config->get_bool(SETTING_OPENGL_REALISTIC_PHONG);
-    const std::string shader_name = (m_studio_lighting || (realistic_mode && realistic_phong)) ? "phong" : "gouraud";
+    const bool plastic = _is_prepare_plastic_enabled() && type == GLVolumeCollection::ERenderType::Opaque;
+    const std::string shader_name = plastic ? "prepare_plastic" :
+        (m_studio_lighting || (realistic_mode && realistic_phong)) ? "phong" : "gouraud";
     GLShaderProgram* shader = wxGetApp().get_shader(shader_name);
     if (shader == nullptr && shader_name != "gouraud")
         shader = wxGetApp().get_shader("gouraud");
@@ -9599,6 +9708,41 @@ void GLCanvas3D::_render_objects(GLVolumeCollection::ERenderType type, bool with
         // Set on every use: the program is shared, so a canvas that leaves it unset would inherit
         // the last canvas's choice.
         shader->set_uniform("lighting_model", studio ? 1 : 0);
+        GLint previous_radiance = 0, previous_brdf = 0, previous_active = 0;
+        if (plastic) {
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &previous_active);
+            glActiveTexture(GL_TEXTURE2);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_radiance);
+            glActiveTexture(GL_TEXTURE3);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_brdf);
+            glActiveTexture(previous_active);
+            const Camera& camera = wxGetApp().plater()->get_camera();
+            const Matrix3d rotation = camera.get_view_matrix().matrix().block<3, 3>(0, 0);
+            const ShadowRenderContext shadow = _prepare_shadow_context();
+            const Vec3d world_key = rotation.transpose() * shadow.light_direction_eye.cast<double>();
+            const Matrix3d room_rotation = Eigen::Quaterniond::FromTwoVectors(STATIC_LIGHT_DIR, world_key).toRotationMatrix();
+            shader->set_uniform("inverse_view_rotation", Matrix3f(rotation.transpose().cast<float>()));
+            shader->set_uniform("environment_rotation", Matrix3f(room_rotation.transpose().cast<float>()));
+            shader->set_uniform("plastic_fill_dir", Vec3f((rotation * room_rotation * Vec3d(0.8, 0.3, 0.55).normalized()).cast<float>()));
+            shader->set_uniform("world_up_eye", Vec3f((rotation * room_rotation * Vec3d::UnitZ()).cast<float>()));
+            shader->set_uniform("plastic_layer_up_eye", Vec3f((rotation * Vec3d::UnitZ()).cast<float>()));
+            shader->set_uniform("plastic_orthographic", camera.get_type() == Camera::EType::Ortho);
+#if !SLIC3R_OPENGL_ES
+            shader->set_uniform("plastic_encode_srgb", !glIsEnabled(GL_FRAMEBUFFER_SRGB));
+#endif
+            shader->set_uniform("studio_radiance", 2);
+            shader->set_uniform("studio_brdf", 3);
+            const bool environment = m_studio_environment.ensure_loaded();
+            shader->set_uniform("studio_environment_enabled", environment);
+            if (environment) {
+                glsafe(::glActiveTexture(GL_TEXTURE2));
+                glsafe(::glBindTexture(GL_TEXTURE_2D, m_studio_environment.radiance_texture()));
+                glsafe(::glActiveTexture(GL_TEXTURE3));
+                glsafe(::glBindTexture(GL_TEXTURE_2D, m_studio_environment.brdf_texture()));
+                glsafe(::glActiveTexture(GL_TEXTURE0));
+            }
+            shadow.set_uniforms(*shader);
+        }
         if (studio) {
             const Transform3d& view = wxGetApp().plater()->get_camera().get_view_matrix();
             shader->set_uniform("world_up_eye", Vec3f((view.matrix().block<3, 3>(0, 0) * Vec3d::UnitZ()).cast<float>()));
@@ -9613,11 +9757,12 @@ void GLCanvas3D::_render_objects(GLVolumeCollection::ERenderType type, bool with
             shader->set_uniform("shadow_map", 4);
             shader->set_uniform("shadow_light_vp", m_shadow_light_vp);
             shader->set_uniform("shadow_map_texel", 1.0f / static_cast<float>(m_shadow_map_size));
-            shader->set_uniform("shadow_intensity", 0.35f);
+            shader->set_uniform("shadow_intensity", plastic ? 0.85f : 0.35f);
         }
         else
             shader->set_uniform("shadow_intensity", 0.0f);
-        const std::optional<Vec3d> static_light = _static_light_dir_eye();
+        const std::optional<Vec3d> static_light = plastic ?
+            std::optional<Vec3d>(_prepare_shadow_context().light_direction_eye.cast<double>()) : _static_light_dir_eye();
         shader->set_uniform("use_static_light", static_light.has_value());
         if (static_light.has_value())
             shader->set_uniform("static_light_dir", *static_light);
@@ -9717,6 +9862,13 @@ void GLCanvas3D::_render_objects(GLVolumeCollection::ERenderType type, bool with
             glsafe(::glActiveTexture(GL_TEXTURE0));
         }
         shader->set_uniform("use_static_light", false);
+        if (plastic) {
+            glsafe(::glActiveTexture(GL_TEXTURE2));
+            glsafe(::glBindTexture(GL_TEXTURE_2D, previous_radiance));
+            glsafe(::glActiveTexture(GL_TEXTURE3));
+            glsafe(::glBindTexture(GL_TEXTURE_2D, previous_brdf));
+            glsafe(::glActiveTexture(previous_active));
+        }
 
         shader->stop_using();
     }
@@ -9990,7 +10142,8 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
     Size cnv_size = get_canvas_size();
 
     //BBS: GUI refactor: GLToolbar
-    int size_i = int(GLToolbar::Default_Icons_Size * scale);
+    const float base_size = m_canvas_type == CanvasView3D && !m_design_canvas ? DesignSystem::control_md : GLToolbar::Default_Icons_Size;
+    int size_i = int(base_size * scale);
     // force even size
     if (size_i % 2 != 0)
         size_i -= 1;
@@ -9998,10 +10151,18 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
 
     // Set current size for all top toolbars. It will be used for next calculations
     //BBS: GUI refactor: GLToolbar
+    const float inset = DesignSystem::space_4 * get_scale();
+    if (m_canvas_type == CanvasView3D && !m_design_canvas) {
+        for (GLToolbar* toolbar : {&m_main_toolbar, &m_assemble_view_toolbar, &m_separator_toolbar}) {
+            toolbar->set_border(inset);
+            toolbar->set_gap_size(inset);
+            toolbar->set_separator_size(inset);
+        }
+    }
     m_main_toolbar.set_icons_size(size);
     m_assemble_view_toolbar.set_icons_size(size);
     m_separator_toolbar.set_icons_size(size);
-    collapse_toolbar.set_icons_size(size / 2.0);
+    collapse_toolbar.set_icons_size(GLToolbar::Default_Icons_Size * scale / 2.0);
     m_gizmos.set_overlay_icon_size(size);
 
     //BBS: GUI refactor: GLToolbar
@@ -10013,7 +10174,7 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
     float noitems_width = top_tb_width - size * items_cnt; // width of separators and borders in top toolbars
 
     // calculate scale needed for items in all top toolbars
-    float new_h_scale = (cnv_size.get_width() - noitems_width) / (items_cnt * GLToolbar::Default_Icons_Size);
+    float new_h_scale = (cnv_size.get_width() - noitems_width) / (items_cnt * base_size);
 
     //for protect
     if (new_h_scale <= 0) {
@@ -10028,7 +10189,7 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
     float noitems_width = top_tb_width - size * items_cnt; // width of separators and borders in top toolbars
 
     // calculate scale needed for items in all top toolbars
-    float new_h_scale = (cnv_size.get_width() - noitems_width) / (items_cnt * GLToolbar::Default_Icons_Size);
+    float new_h_scale = (cnv_size.get_width() - noitems_width) / (items_cnt * base_size);
 
     //items_cnt = m_main_toolbar.get_visible_items_cnt() + m_gizmos.get_selectable_icons_cnt() + 3; // +3 means a place for top and view toolbars and separators in gizmos toolbar
 
@@ -10105,9 +10266,9 @@ void GLCanvas3D::_render_overlay_toolbars()
 {
     glsafe(::glDisable(GL_DEPTH_TEST));
 
+    _render_main_toolbar();
     _render_separator_toolbar_right();
     _render_separator_toolbar_left();
-    _render_main_toolbar();
     _render_collapse_toolbar();
     _render_assemble_view_toolbar();
     //BBS: GUI refactor: GLToolbar
@@ -10315,10 +10476,13 @@ void GLCanvas3D::_render_main_toolbar()
         return;
 
     const Size cnv_size = get_canvas_size();
-    const float top = 0.5f * (float)cnv_size.get_height();
+    const float top = 0.5f * (float)cnv_size.get_height() - DesignSystem::toolbar_top_inset(*this);
 
     const float left = -0.5f * cnv_size.get_width() + get_main_toolbar_offset();
     m_main_toolbar.set_position(top, left);
+    if (m_canvas_type == CanvasView3D && !m_design_canvas)
+        m_main_toolbar.render_surface(*this, m_main_toolbar.get_width() + m_separator_toolbar.get_width() +
+            m_gizmos.get_scaled_total_width() + m_assemble_view_toolbar.get_width());
     m_main_toolbar.render(*this);
     if (m_toolbar_highlighter.m_render_arrow)
         m_main_toolbar.render_arrow(*this, m_toolbar_highlighter.m_toolbar_item);
@@ -10771,7 +10935,7 @@ void GLCanvas3D::_render_assemble_view_toolbar() const
     const Size cnv_size = get_canvas_size();
     const float gizmo_width = m_gizmos.get_scaled_total_width();
     const float separator_width = m_separator_toolbar.get_width();
-    const float top = 0.5f * (float)cnv_size.get_height();
+    const float top = 0.5f * (float)cnv_size.get_height() - DesignSystem::toolbar_top_inset(*this);
     const float main_toolbar_left = -0.5f * cnv_size.get_width() + get_main_toolbar_offset();
     const float left = main_toolbar_left + (m_main_toolbar.get_width() + gizmo_width + separator_width);
 
@@ -11188,7 +11352,7 @@ void GLCanvas3D::_render_separator_toolbar_right() const
     const Size cnv_size = get_canvas_size();
     const float gizmo_width = m_gizmos.get_scaled_total_width();
     const float separator_width = m_separator_toolbar.get_width();
-    const float top = 0.5f * (float)cnv_size.get_height();
+    const float top = 0.5f * (float)cnv_size.get_height() - DesignSystem::toolbar_top_inset(*this);
     const float main_toolbar_left = -0.5f * cnv_size.get_width() + get_main_toolbar_offset();
     const float left = main_toolbar_left + (m_main_toolbar.get_width() + gizmo_width + separator_width / 2);
 
@@ -11202,7 +11366,7 @@ void GLCanvas3D::_render_separator_toolbar_left() const
         return;
 
     const Size cnv_size = get_canvas_size();
-    const float top = 0.5f * (float)cnv_size.get_height();
+    const float top = 0.5f * (float)cnv_size.get_height() - DesignSystem::toolbar_top_inset(*this);
     const float main_toolbar_left = -0.5f * cnv_size.get_width() + get_main_toolbar_offset();
     const float left = main_toolbar_left + (m_main_toolbar.get_width());
 

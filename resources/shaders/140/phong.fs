@@ -75,6 +75,23 @@ uniform PrintVolumeDetection print_volume;
 uniform float z_far;
 uniform float z_near;
 uniform bool enable_ssao;
+#ifdef PORCA_PLASTIC
+uniform sampler2D studio_radiance;
+uniform sampler2D studio_brdf;
+uniform bool studio_environment_enabled;
+uniform mat3 inverse_view_rotation;
+uniform mat3 environment_rotation;
+uniform vec3 plastic_fill_dir;
+uniform bool plastic_orthographic;
+uniform bool plastic_encode_srgb;
+uniform bool plastic_material;
+uniform int plastic_finish; // SurfaceFinish: satin, matte, silk, carbon fiber, galaxy, wood.
+uniform vec3 plastic_layer_up_eye;
+uniform mat3 view_normal_matrix;
+in vec3 plastic_surface_position;
+uniform float shadow_depth_bias;
+#endif
+
 // 1 = the Design tab's studio lighting (studio_shade below); 0 = the two-light model above, which
 // every other canvas keeps. world_up_eye is world +Z in eye space, for the hemisphere ambient.
 uniform int lighting_model;
@@ -260,7 +277,11 @@ float shadow_shade()
     // suppresses self-shadow acne without discarding real shadows cast by other objects onto
     // back-facing surfaces (e.g. the shaded back/tip of a cone sitting inside a larger shadow).
     float NdotL = dot(normalize(eye_normal), top_light_dir());
+    #ifdef PORCA_PLASTIC
+    float bias = shadow_depth_bias * mix(1.0, 5.0, clamp(1.0 - NdotL, 0.0, 1.0));
+#else
     float bias = mix(0.0004, 0.004, clamp(1.0 - NdotL, 0.0, 1.0));
+#endif
     // 5x5 PCF: softens shadow edges into a smooth penumbra and blurs residual facet acne.
     float sum = 0.0;
     for (int x = -2; x <= 2; ++x) {
@@ -292,6 +313,156 @@ vec3 studio_shade(vec3 base, vec3 n, vec3 v)
     float rim = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 3.0);
     return base * diffuse * (1.0 - 0.30 * rim) + vec3(spec + 0.08 * rim);
 }
+
+#ifdef PORCA_PLASTIC
+const float PLASTIC_PI = 3.14159265;
+float plastic_roughness()
+{
+    if (plastic_finish == 1) return 0.80;
+    if (plastic_finish == 2) return 0.22;
+    if (plastic_finish == 3) return 0.88;
+    if (plastic_finish == 4) return 0.50;
+    if (plastic_finish == 5) return 0.78;
+    return 0.46;
+}
+
+float plastic_hash(vec3 p)
+{
+    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+float plastic_noise(vec3 p)
+{
+    vec3 cell = floor(p);
+    vec3 w = fract(p);
+    w = w * w * (3.0 - 2.0 * w);
+    return mix(mix(mix(plastic_hash(cell), plastic_hash(cell + vec3(1,0,0)), w.x),
+                   mix(plastic_hash(cell + vec3(0,1,0)), plastic_hash(cell + vec3(1,1,0)), w.x), w.y),
+               mix(mix(plastic_hash(cell + vec3(0,0,1)), plastic_hash(cell + vec3(1,0,1)), w.x),
+                   mix(plastic_hash(cell + vec3(0,1,1)), plastic_hash(cell + vec3(1,1,1)), w.x), w.y), w.z);
+}
+
+vec3 plastic_tangent(vec3 n)
+{
+    vec3 t = cross(plastic_layer_up_eye, n);
+    if (dot(t, t) < 0.00001)
+        t = cross(transpose(inverse_view_rotation) * vec3(1,0,0), n);
+    return normalize(t);
+}
+
+vec3 plastic_linear(vec3 c)
+{
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+}
+
+vec3 plastic_display(vec3 c)
+{
+    // Bounded, shader-local tone mapping. UI and diagnostic marks remain outside it.
+    c = c / (vec3(1.0) + c);
+    return plastic_encode_srgb ? mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055,
+                                    step(vec3(0.0031308), c)) : c;
+}
+
+vec3 plastic_fresnel(float vh)
+{
+    return vec3(0.04) + vec3(0.96) * pow(1.0 - clamp(vh, 0.0, 1.0), 5.0);
+}
+
+vec3 plastic_light(vec3 base, vec3 n, vec3 v, vec3 l, float roughness)
+{
+    float nl = max(dot(n, l), 0.0);
+    float nv = max(dot(n, v), 0.001);
+    vec3 half_sum = l + v;
+    vec3 h = half_sum * inversesqrt(max(dot(half_sum, half_sum), 0.000001));
+    float nh = max(dot(n, h), 0.0);
+    float vh = max(dot(v, h), 0.0);
+    float alpha = roughness * roughness;
+    float a2 = alpha * alpha;
+    float denominator = nh * nh * (a2 - 1.0) + 1.0;
+    float distribution = a2 / max(PLASTIC_PI * denominator * denominator, 0.00001);
+    float visibility = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2) +
+                                 nv * sqrt(nl * nl * (1.0 - a2) + a2), 0.00001);
+    if (plastic_finish == 2) {
+        vec3 t = plastic_tangent(n);
+        vec3 b = cross(n, t);
+        float ax = max(alpha, 0.04);
+        float ay = 0.32;
+        float hx = dot(h, t) / ax;
+        float hy = dot(h, b) / ay;
+        float d = hx * hx + hy * hy + nh * nh;
+        distribution = 1.0 / max(PLASTIC_PI * ax * ay * d * d, 0.00001);
+        vec2 vl = vec2(ax * dot(v, t), ay * dot(v, b));
+        vec2 ll = vec2(ax * dot(l, t), ay * dot(l, b));
+        visibility = 0.5 / max(nl * sqrt(dot(vl, vl) + nv * nv) +
+                               nv * sqrt(dot(ll, ll) + nl * nl), 0.00001);
+    }
+    vec3 f = plastic_fresnel(vh);
+    return ((vec3(1.0) - f) * base / PLASTIC_PI + distribution * visibility * f) * nl;
+}
+
+vec3 plastic_room(vec3 direction, float roughness)
+{
+    direction = normalize(environment_rotation * inverse_view_rotation * direction);
+    vec2 uv = vec2(atan(direction.y, direction.x) / (2.0 * PLASTIC_PI) + 0.5,
+                   acos(clamp(direction.z, -1.0, 1.0)) / PLASTIC_PI);
+    // Eight 256x128 longitude/latitude tiles, each surrounded by a pixel gutter.
+    float level = clamp(roughness, 0.0, 1.0) * 7.0;
+    float lo = floor(level);
+    float hi = min(lo + 1.0, 7.0);
+    vec2 tile_uv = vec2((1.0 + uv.x * 256.0) / 258.0, (1.0 + uv.y * 128.0) / 130.0);
+    vec4 a = texture(studio_radiance, vec2(tile_uv.x, (lo + tile_uv.y) / 8.0));
+    vec4 b = texture(studio_radiance, vec2(tile_uv.x, (hi + tile_uv.y) / 8.0));
+    // Decode before blending roughness levels; alpha stores radiance range, not opacity.
+    return mix(a.rgb * a.a * 8.0, b.rgb * b.a * 8.0, fract(level));
+}
+
+vec3 plastic_shade(vec3 color, vec3 n, vec3 v, float key_visibility)
+{
+    vec3 base = plastic_linear(color);
+    float roughness = plastic_roughness();
+    float flake = 0.0;
+    if (plastic_finish == 3) {
+        vec3 p = plastic_surface_position * 7.0;
+        float detail = 1.0 - smoothstep(0.5, 1.5, length(fwidth(p)));
+        float grain = plastic_noise(p);
+        base *= mix(1.0, 0.93 + 0.10 * grain, detail);
+        roughness = clamp(roughness + (grain - 0.5) * 0.08 * detail, 0.75, 0.98);
+    } else if (plastic_finish == 4) {
+        vec3 p = plastic_surface_position * 2.5;
+        vec3 cell = floor(p);
+        float seed = plastic_hash(cell);
+        vec3 centre = vec3(plastic_hash(cell + 11.0), plastic_hash(cell + 23.0), plastic_hash(cell + 37.0));
+        float detail = 1.0 - smoothstep(0.35, 1.1, length(fwidth(p)));
+        flake = step(0.86, seed) * (1.0 - smoothstep(0.14, 0.30, length(fract(p) - centre))) * detail;
+        vec3 tilt = vec3(plastic_hash(cell + 43.0), plastic_hash(cell + 59.0), plastic_hash(cell + 71.0)) - 0.5;
+        tilt = view_normal_matrix * tilt;
+        tilt *= inversesqrt(max(dot(tilt, tilt), 0.00001));
+        n = normalize(n + tilt * flake * 0.65);
+        roughness = mix(roughness, 0.12, flake);
+    } else if (plastic_finish == 5) {
+        vec3 p = plastic_surface_position;
+        float grain_phase = p.x * 3.0 + plastic_noise(vec3(p.x * 0.15, p.y * 0.15, p.z * 0.025)) * 4.0;
+        float detail = 1.0 - smoothstep(0.8, 2.0, fwidth(grain_phase));
+        base *= 1.0 - (0.5 + 0.5 * sin(grain_phase)) * 0.12 * detail;
+    }
+    vec3 key = plastic_light(base, n, v, top_light_dir(), roughness) * 2.5 * key_visibility;
+    vec3 fill = plastic_light(base, n, v, normalize(plastic_fill_dir), roughness) * 0.65;
+    float hemi = clamp(dot(n, normalize(world_up_eye)) * 0.5 + 0.5, 0.0, 1.0);
+    vec3 indirect = base * mix(vec3(0.12, 0.11, 0.10), vec3(0.32, 0.34, 0.37), hemi);
+    if (studio_environment_enabled) {
+        vec2 brdf = texture(studio_brdf, vec2(max(dot(n, v), 0.0), roughness)).rg;
+        vec3 reflection = reflect(-v, n);
+        vec3 room = plastic_room(reflection, roughness);
+        if (plastic_finish == 2) {
+            vec3 stretch = cross(n, plastic_tangent(n)) * 0.22;
+            room = (room + plastic_room(normalize(reflection + stretch), 0.32) +
+                           plastic_room(normalize(reflection - stretch), 0.32)) / 3.0;
+        }
+        indirect += room * (vec3(0.04) * brdf.x + brdf.y) * (1.0 + flake * 4.0);
+    }
+    return plastic_display(key + fill + indirect);
+}
+#endif
 
 void main()
 {
@@ -334,6 +505,10 @@ void main()
 
     vec3 normal = normalize(eye_normal);
     vec3 view_dir = normalize(-eye_position);
+#ifdef PORCA_PLASTIC
+    if (plastic_orthographic)
+        view_dir = vec3(0.0, 0.0, 1.0);
+#endif
 
     float NdotL_top = max(dot(normal, top_light_dir()), 0.0);
     float diffuse = INTENSITY_AMBIENT + NdotL_top * LIGHT_TOP_DIFFUSE;
@@ -351,6 +526,15 @@ void main()
     float shade = shadow_shade();
     vec3 lit = (lighting_model == 1) ? studio_shade(color.rgb, normal, view_dir)
                                      : (vec3(specular) + window_reflection + color.rgb * diffuse) * PHONG_BRIGHTNESS;
+#ifdef PORCA_PLASTIC
+    if (plastic_material) {
+        lit = plastic_shade(color.rgb, normal, view_dir, shade);
+        // Preserve explicit diagnostic colors instead of tone mapping them into a finish.
+        if (slope.actived || use_color_clip_plane)
+            lit = color.rgb;
+        shade = 1.0; // Only the key was occluded, never fill or room reflections.
+    }
+#endif
 
     if (is_outline) {
         vec3 shaded_rgb = lit * shade;

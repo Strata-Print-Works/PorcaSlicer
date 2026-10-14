@@ -1,0 +1,204 @@
+{
+ "themes": {
+  "dark": {
+   "coral": "#FF7B7B",
+   "charcoal": "#1E1E1E",
+   "cream": "#FAF7F2",
+   "bg": "#161514",
+   "surface": "#1E1E1E",
+   "surface-raised": "#282726",
+   "surface-hover": "#2E2D2B",
+   "field": "#131312",
+   "viewport": "#2A2928",
+   "line": "#302E2C",
+   "line-control": "#78736D",
+   "ink": "#F3EFE9",
+   "ink-muted": "#A8A29B",
+   "ink-disabled": "#5E5A56",
+   "primary": "#FF7B7B",
+   "primary-hover": "#FF9494",
+   "primary-pressed": "#F06A6A",
+   "on-primary": "#1E1E1E",
+   "accent": "#FF7B7B",
+   "accent-ink": "#FF9A9A",
+   "accent-soft": "#3B2524",
+   "on-accent": "#1E1E1E",
+   "focus": "#FF7B7B",
+   "success": "#4FD1B5",
+   "success-soft": "#14302A",
+   "warning": "#F2C14E",
+   "warning-soft": "#36301A",
+   "danger": "#FF8A4C",
+   "danger-soft": "#3A2216",
+   "info": "#7DB3FF",
+   "info-soft": "#18263D",
+   "plate": "#1B1A19",
+   "plate-grid": "#34322F",
+   "axis-x": "#E5484D",
+   "axis-y": "#46A758",
+   "axis-z": "#3E8BFF",
+   "scrim": "rgba(8, 8, 8, 0.62)"
+  },
+  "light": {
+   "coral": "#FF7B7B",
+   "charcoal": "#1E1E1E",
+   "cream": "#FAF7F2",
+   "bg": "#EFEAE2",
+   "surface": "#FAF7F2",
+   "surface-raised": "#FFFFFF",
+   "surface-hover": "#F1ECE4",
+   "field": "#FFFFFF",
+   "viewport": "#E6E1D9",
+   "line": "#E5DFD5",
+   "line-control": "#8C857D",
+   "ink": "#1E1E1E",
+   "ink-muted": "#645E57",
+   "ink-disabled": "#B5AEA5",
+   "primary": "#FF7B7B",
+   "primary-hover": "#F46B6B",
+   "primary-pressed": "#E85E5E",
+   "on-primary": "#1E1E1E",
+   "accent": "#D9545A",
+   "accent-ink": "#B4384A",
+   "accent-soft": "#FFE6E3",
+   "on-accent": "#FFFFFF",
+   "focus": "#B4384A",
+   "success": "#0E7563",
+   "success-soft": "#DDF4EE",
+   "warning": "#7A5A00",
+   "warning-soft": "#FCEFD3",
+   "danger": "#B4410A",
+   "danger-soft": "#FDE7DC",
+   "info": "#2459B8",
+   "info-soft": "#E3ECFB",
+   "plate": "#D3CCC2",
+   "plate-grid": "#BAB2A7",
+   "axis-x": "#D13438",
+   "axis-y": "#287A36",
+   "axis-z": "#2A6FDB",
+   "scrim": "rgba(30, 30, 30, 0.36)"
+  }
+ },
+ "shadow": {
+  "dark": {
+   "shadow-raised": "0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4)",
+   "shadow-popover": "0 0 0 1px rgba(255, 255, 255, 0.07), 0 12px 32px rgba(0, 0, 0, 0.55)",
+   "shadow-dialog": "0 0 0 1px rgba(255, 255, 255, 0.08), 0 24px 64px rgba(0, 0, 0, 0.6)"
+  },
+  "light": {
+   "shadow-raised": "0 1px 2px rgba(40, 30, 20, 0.08)",
+   "shadow-popover": "0 0 0 1px rgba(40, 30, 20, 0.08), 0 12px 32px rgba(40, 30, 20, 0.16)",
+   "shadow-dialog": "0 0 0 1px rgba(40, 30, 20, 0.08), 0 24px 64px rgba(40, 30, 20, 0.22)"
+  }
+ },
+ "spacing": {
+  "space-2": "2px",
+  "space-4": "4px",
+  "space-6": "6px",
+  "space-8": "8px",
+  "space-12": "12px",
+  "space-16": "16px",
+  "space-24": "24px",
+  "space-32": "32px"
+ },
+ "radius": {
+  "radius-xs": "3px",
+  "radius-sm": "5px",
+  "radius-md": "7px",
+  "radius-lg": "10px",
+  "radius-xl": "16px",
+  "radius-pill": "999px"
+ },
+ "size": {
+  "control-sm": "24px",
+  "control-md": "28px",
+  "control-lg": "34px",
+  "row-height": "32px",
+  "icon-sm": "14px",
+  "icon-md": "16px",
+  "icon-lg": "20px",
+  "topbar-height": "44px",
+  "sidebar-width": "360px"
+ },
+ "type": {
+  "display-xl": {
+   "name": "display-xl",
+   "fontSize": "40px",
+   "lineHeight": "40px",
+   "fontWeight": 900,
+   "letterSpacing": "-0.01em",
+   "family": "\"Nunito\", ui-rounded, system-ui, sans-serif"
+  },
+  "display": {
+   "name": "display",
+   "fontSize": "24px",
+   "lineHeight": "28px",
+   "fontWeight": 800,
+   "family": "\"Nunito\", ui-rounded, system-ui, sans-serif"
+  },
+  "title": {
+   "name": "title",
+   "fontSize": "17px",
+   "lineHeight": "22px",
+   "fontWeight": 800,
+   "family": "\"Nunito\", ui-rounded, system-ui, sans-serif"
+  },
+  "heading": {
+   "name": "heading",
+   "fontSize": "14px",
+   "lineHeight": "20px",
+   "fontWeight": 650,
+   "family": "\"Figtree\", system-ui, -apple-system, \"Segoe UI\", sans-serif"
+  },
+  "body": {
+   "name": "body",
+   "fontSize": "13px",
+   "lineHeight": "18px",
+   "fontWeight": 400,
+   "family": "\"Figtree\", system-ui, -apple-system, \"Segoe UI\", sans-serif"
+  },
+  "body-strong": {
+   "name": "body-strong",
+   "fontSize": "13px",
+   "lineHeight": "18px",
+   "fontWeight": 600,
+   "family": "\"Figtree\", system-ui, -apple-system, \"Segoe UI\", sans-serif"
+  },
+  "label": {
+   "name": "label",
+   "fontSize": "12px",
+   "lineHeight": "16px",
+   "fontWeight": 500,
+   "family": "\"Figtree\", system-ui, -apple-system, \"Segoe UI\", sans-serif"
+  },
+  "caption": {
+   "name": "caption",
+   "fontSize": "11px",
+   "lineHeight": "14px",
+   "fontWeight": 500,
+   "family": "\"Figtree\", system-ui, -apple-system, \"Segoe UI\", sans-serif"
+  },
+  "overline": {
+   "name": "overline",
+   "fontSize": "11px",
+   "lineHeight": "14px",
+   "fontWeight": 700,
+   "letterSpacing": "0.08em",
+   "family": "\"Figtree\", system-ui, -apple-system, \"Segoe UI\", sans-serif"
+  },
+  "mono": {
+   "name": "mono",
+   "fontSize": "12px",
+   "lineHeight": "18px",
+   "fontWeight": 400,
+   "family": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace"
+  },
+  "mono-sm": {
+   "name": "mono-sm",
+   "fontSize": "11px",
+   "lineHeight": "16px",
+   "fontWeight": 500,
+   "family": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", Menlo, monospace"
+  }
+ }
+}

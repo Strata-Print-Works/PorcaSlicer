@@ -42,6 +42,7 @@
 #include "3DScene.hpp"
 #include "GLModel.hpp"
 #include "3DBed.hpp"
+#include "ViewportLighting.hpp"
 #include "MeshUtils.hpp"
 #include "libslic3r/ParameterUtils.hpp"
 
@@ -189,7 +190,7 @@ private:
     std::unique_ptr<Bed3D> m_inactive_bed;
     DynamicPrintConfig m_inactive_bed_config;
     std::string m_inactive_bed_model;
-    bool render_inactive_bed_model(const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    bool render_inactive_bed_model(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow);
 
     float m_scale_factor{ 1.0f };
     GLUquadricObject* m_quadric;
@@ -558,7 +559,7 @@ public:
     bool belt_open_y() const;
     void open_belt_y(BoundingBoxf3 &box) const { if (this->belt_open_y()) { box.min.y() = -1e5; box.max.y() = 1e5; } }
 
-    void render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_body = false, bool force_background_color = false, HeightLimitMode mode = HEIGHT_LIMIT_NONE, int hover_id = -1, bool render_cali = false, bool show_grid = true, bool hide_chrome = false);
+    void render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_body = false, bool force_background_color = false, HeightLimitMode mode = HEIGHT_LIMIT_NONE, int hover_id = -1, bool render_cali = false, bool show_grid = true, bool hide_chrome = false, const ShadowRenderContext* shadow = nullptr);
 
     void set_selected();
     void set_unselected();
@@ -1027,7 +1028,7 @@ public:
 
     /*rendering related functions*/
     void on_change_color_mode(bool is_dark) { m_is_dark = is_dark; }
-    void render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_current = false, bool only_body = false, int hover_id = -1, bool render_cali = false, bool show_grid = true, bool hide_chrome = false);
+    void render(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_current = false, bool only_body = false, int hover_id = -1, bool render_cali = false, bool show_grid = true, bool hide_chrome = false, const ShadowRenderContext* shadow = nullptr);
     void set_render_option(bool bedtype_texture, bool plate_settings);
     void set_render_cali(bool value = true) { render_cali_logo = value; }
     void render_hover_tooltip() const;

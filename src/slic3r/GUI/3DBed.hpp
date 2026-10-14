@@ -20,6 +20,7 @@ namespace Slic3r {
 namespace GUI {
 
 class GLCanvas3D;
+struct ShadowRenderContext;
 
 /*
 class GeometryBuffer
@@ -165,11 +166,11 @@ public:
     bool contains(const Point& point) const;
     Point point_projection(const Point& point) const;
 
-    void render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes);
+    void render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes, const ShadowRenderContext* shadow = nullptr);
 
     // Draw only the physical bed mesh for a plate with its own display context.
     // Returns false when no mesh is available, allowing the caller's polygon fallback.
-    bool render_model_only(const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    bool render_model_only(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow = nullptr);
     void on_change_color_mode(bool is_dark);
 
 private:
@@ -182,13 +183,13 @@ private:
     void update_bed_triangles();
     static std::tuple<Type, std::string, std::string> detect_type(const Pointfs& shape);
     void render_internal(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor,
-        bool show_axes);
+        bool show_axes, const ShadowRenderContext* shadow = nullptr);
     void render_axes();
-    void render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom);
+    void render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, const ShadowRenderContext* shadow = nullptr);
     //void render_texture(bool bottom, GLCanvas3D& canvas);
-    void render_model(const Transform3d& view_matrix, const Transform3d& projection_matrix);
-    void render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom);
-    void render_default(bool bottom, const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    void render_model(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow = nullptr);
+    void render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, const ShadowRenderContext* shadow = nullptr);
+    void render_default(bool bottom, const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow = nullptr);
     void render_gravity_arrow(const Transform3d& view_matrix, const Transform3d& projection_matrix);
 
     // BBS: remove the bed picking logic

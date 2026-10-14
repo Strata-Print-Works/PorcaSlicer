@@ -3,6 +3,7 @@
 #include "libslic3r/Point.hpp"
 
 #include <array>
+#include <cstddef>
 #include <vector>
 
 namespace Slic3r {
@@ -25,9 +26,11 @@ public:
         std::vector<int> hover_plate_icon_idxs;
         int gizmo_hover_id{ -1 };
         bool render_preview{ true };
+        size_t render_settings_signature{0};
 
         bool operator == (const Key& other) const {
-            return size == other.size && render_preview == other.render_preview &&
+            return render_settings_signature == other.render_settings_signature &&
+                   size == other.size && render_preview == other.render_preview &&
                    gizmo_hover_id == other.gizmo_hover_id &&
                    sinking_hover_volume_idxs == other.sinking_hover_volume_idxs &&
                    hover_plate_icon_idxs == other.hover_plate_icon_idxs &&
