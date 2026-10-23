@@ -7,6 +7,8 @@
 <title>homepage</title>
 <link rel="stylesheet" type="text/css" href="../include/global.css" />	<!-- ORCA One for all-->
 <link rel="stylesheet" type="text/css" href="./css/home.css" />
+<link rel="stylesheet" type="text/css" href="./css/light.css" />
+<link rel="stylesheet" type="text/css" href="./css/theme.css" />
 <link rel="stylesheet" type="text/css" href="./css/dark.css" />	
 
 <script type="text/javascript" src="../include/jquery-3.6.0.min.js"></script>
@@ -86,21 +88,21 @@
 	</div>
 
 	<div id="BtnArea">
-	    <div menu="recent" class="BtnItem BtnItemSelected" onClick="GotoMenu('recent')">
-			<div class="BtnIcon "><img class="LeftIcon" src="img/i2.png" /></div>
-			<div data-i18n="recent">Recent</div> 
-		</div>
-	    <div class="BtnItem BtnShortcut" onClick="OpenUrlInLocalBrowser('https://cloud.orcaslicer.com')">
-			<div class="BtnIcon "><img class="ShortcutBrandIcon" src="../image/logo.png" /></div>
-			<div class="ShortcutTextRow">
-				<div>OrcaCloud</div>
+	    <button type="button" menu="recent" class="BtnItem BtnItemSelected" onClick="GotoMenu('recent')" aria-current="page">
+			<span class="BtnIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 6v6h5"/></svg></span>
+			<span data-i18n="recent">Recent</span>
+		</button>
+	    <button type="button" class="BtnItem BtnShortcut" onClick="OpenUrlInLocalBrowser('https://cloud.orcaslicer.com')">
+			<span class="BtnIcon "><img class="ShortcutBrandIcon" src="../image/logo.png" /></span>
+			<span class="ShortcutTextRow">
+				<span>OrcaCloud</span>
 				<svg class="ShortcutMark" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 					<path d="M6 3.5H3.5C2.95 3.5 2.5 3.95 2.5 4.5V12.5C2.5 13.05 2.95 13.5 3.5 13.5H11.5C12.05 13.5 12.5 13.05 12.5 12.5V10" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
 					<path d="M8.5 3.5H13.5V8.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
 					<path d="M13.5 3.5L7 10" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>
-			</div>
-		</div>
+			</span>
+		</button>
 
 	</div>
 </div>
@@ -116,27 +118,21 @@
 				<div class="MenuDesc trans"  tid="t91">Download 3D Models</div>
 			</div>
 		</div>	-->	
-		<div class="MenuItem" onClick="OnClickNewProject()">
-			<div class="MenuIcon"><img src="img/i4.png"></div>
-			<div>
-				<div class="TextS1" data-i18n="new_project">New Project</div>
-				<div class="MenuDesc" data-i18n="create_new_project">Create new project</div>
-			</div>
-		</div>
-		<div class="MenuItem" onClick="OnClickOpenProject()">
-			<div class="MenuIcon"><img src="img/i5.png"></div>
-			<div>
-				<div class="TextS1" data-i18n="open_project">Open Project</div>
-				<div class="MenuDesc">3mf</div>
-			</div>
-		</div>		
+        <button type="button" class="MenuItem" onClick="OnClickNewProject()">
+            <span class="MenuIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 7v10M7 12h10"/></svg></span>
+            <span class="TextS1" data-i18n="new_project">New Project</span>
+        </button>
+        <button type="button" class="MenuItem" onClick="OnClickOpenProject()">
+            <span class="MenuIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v2M3 8h5l2 3h11l-2 10H5z"/></svg></span>
+            <span class="TextS1" data-i18n="open_project">Open Project</span>
+        </button>
 	</div>
 	
 	<div id="DebugText"></div>	
 	<div id="RecentFileArea">
 		<div id="RecentTitleBlock">
 		    <div id="RecentTitle" class="Content-Title TextS1" data-i18n="recently_opened">Recently opened</div>
-			<div id="RecentClearAllBtn" class="ButtonStyleRegular ButtonTypeWindow" onClick="OnDeleteAllRecentFiles()" data-i18n="clear_all">Clear all</div>
+			<button type="button" id="RecentClearAllBtn" class="ButtonStyleRegular ButtonTypeWindow" onClick="OnDeleteAllRecentFiles()" data-i18n="clear_all">Clear all</button>
 		</div>
 		<div id="FileList">
 <!--		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
@@ -216,15 +212,15 @@
 	
     <div style="height: 14px;"></div>	
 	
-	<div id="recnet_context_menu">
-		<div id="CT_Delete_Bar" class="CT_Item" onClick="OnDeleteRecentFile()">
-			<div class="CT_Icon CT_Delete"></div>
-			<div class="CT_Text" data-i18n="remove">Remove</div>
-		</div>
-		<div id="CT_Folder_Bar" class="CT_Item " onClick="OnExploreRecentFile()" >
-			<div class="CT_Icon CT_Explore"></div>
-			<div class="CT_Text" data-i18n="open_containing_folder">Open Containing Folder</div>
-		</div>				
+	<div id="recnet_context_menu" role="menu">
+		<button type="button" role="menuitem" id="CT_Delete_Bar" class="CT_Item" onClick="OnDeleteRecentFile()">
+			<span class="CT_Icon CT_Delete"></span>
+			<span class="CT_Text" data-i18n="remove">Remove</span>
+		</button>
+		<button type="button" role="menuitem" id="CT_Folder_Bar" class="CT_Item " onClick="OnExploreRecentFile()" >
+			<span class="CT_Icon CT_Explore"></span>
+			<span class="CT_Text" data-i18n="open_containing_folder">Open Containing Folder</span>
+		</button>
     </div>
 	
 	
@@ -234,27 +230,13 @@
 </body>
 <script type="text/javascript">
 	//HandleStudio(TestData);
-    document.onkeydown = function (event) {
-		var e = event || window.event || arguments.callee.caller.arguments[0];
-
-		if (e.ctrlKey && e.metaKey)
-			OutputKey(e.keyCode, true, false, true);
-		else if (e.ctrlKey)
-			OutputKey(e.keyCode, true, false, false);
-		else if (e.metaKey)
-			OutputKey(e.keyCode, false, false, true);
-
-		if (e.shiftKey && e.ctrlKey)
-			OutputKey(e.keyCode, true, true, false);
-
-		if (e.shiftKey && e.metaKey)
-			OutputKey(e.keyCode, false, true, true);
-
-		if (window.event) {
-			try { e.keyCode = 0; } catch (e) { }
-			e.returnValue = false;
-		}
-	};
+    document.addEventListener('keydown', function (event) {
+        // Forward app shortcuts while leaving Tab, Enter and Space to page controls.
+        if (event.ctrlKey || event.metaKey) {
+            OutputKey(event.keyCode, event.ctrlKey, event.shiftKey, event.metaKey);
+            event.preventDefault();
+        }
+    });
 
 	window.addEventListener('mousewheel', function (event) {
 		if (event.ctrlKey === true || event.metaKey) {

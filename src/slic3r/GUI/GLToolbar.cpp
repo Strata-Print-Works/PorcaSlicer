@@ -1,4 +1,5 @@
 #include "ToolbarStyle.hpp"
+#include "LiveToolbarStyle.hpp"
 #include <algorithm>
 #include "libslic3r/Point.hpp"
 
@@ -16,6 +17,7 @@
 #include <cassert>
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <vector>
 #include <utility>
 #include <wx/event.h>
@@ -552,8 +554,9 @@ void GLToolbar::render(const GLCanvas3D& parent,GLToolbarItem::EType type)
     if (!m_enabled || m_items.empty())
         return;
 
-    const bool tokens = parent.get_canvas_type() == GLCanvas3D::CanvasView3D && !parent.is_design_canvas() &&
-        (m_name == "Main" || m_name == "Assembly_View" || m_name == "Separator");
+    const bool tokens = m_name == "Collapse" ||
+        (parent.get_canvas_type() == GLCanvas3D::CanvasView3D && !parent.is_design_canvas() &&
+         (m_name == "Main" || m_name == "Assembly_View" || m_name == "Separator"));
     if (tokens != m_design_tokens) { m_design_tokens = tokens; m_icons_texture_dirty = true; }
     if (m_icons_texture_dirty)
         generate_icons_texture();
@@ -1257,9 +1260,11 @@ int GLToolbar::contains_mouse_vertical(const Vec2d& mouse_pos, const GLCanvas3D&
 
 void GLToolbar::render_background(float left, float top, float right, float bottom, float border_w, float border_h, bool full_corners) const
 {
-    const unsigned int tex_id = m_background_texture.texture.get_id();
-    const float tex_width = (float)m_background_texture.texture.get_width();
-    const float tex_height = (float)m_background_texture.texture.get_height();
+    const bool live = full_corners && m_live_background_texture;
+    const auto& texture = live ? *m_live_background_texture : m_background_texture.texture;
+    const unsigned int tex_id = texture.get_id();
+    const float tex_width = (float)texture.get_width();
+    const float tex_height = (float)texture.get_height();
     if (tex_id != 0 && tex_width > 0.0f && tex_height > 0.0f) {
         const float inv_tex_width  = 1.0f / tex_width;
         const float inv_tex_height = 1.0f / tex_height;
@@ -1271,13 +1276,14 @@ void GLToolbar::render_background(float left, float top, float right, float bott
 
         const float left_uv   = 0.0f;
         const float right_uv  = 1.0f;
-        const float top_uv    = 1.0f;
-        const float bottom_uv = 0.0f;
+        // Generated pixels are top-first; the legacy background uses reversed V.
+        const float top_uv    = live ? 0.0f : 1.0f;
+        const float bottom_uv = live ? 1.0f : 0.0f;
 
-        const float internal_left_uv = (float)m_background_texture.metadata.left * inv_tex_width;
-        const float internal_right_uv = 1.0f - (float)m_background_texture.metadata.right * inv_tex_width;
-        const float internal_top_uv = 1.0f - (float)m_background_texture.metadata.top * inv_tex_height;
-        const float internal_bottom_uv = (float)m_background_texture.metadata.bottom * inv_tex_height;
+        const float internal_left_uv = (live ? m_live_background_edge : (float)m_background_texture.metadata.left) * inv_tex_width;
+        const float internal_right_uv = 1.0f - (live ? m_live_background_edge : (float)m_background_texture.metadata.right) * inv_tex_width;
+        const float internal_top_uv = live ? m_live_background_edge * inv_tex_height : 1.0f - (float)m_background_texture.metadata.top * inv_tex_height;
+        const float internal_bottom_uv = live ? 1.0f - m_live_background_edge * inv_tex_height : (float)m_background_texture.metadata.bottom * inv_tex_height;
 
         // top-left corner
         if (!full_corners && (m_layout.horizontal_orientation == Layout::HO_Left || m_layout.vertical_orientation == Layout::VO_Top))
@@ -1399,13 +1405,26 @@ void GLToolbar::render_surface(const GLCanvas3D& parent, float width) const
 {
     const Size canvas = parent.get_canvas_size();
     if (canvas.get_width() <= 0 || canvas.get_height() <= 0) return;
+    const auto& live = DesignSystem::live_toolbar_style();
+    const auto& style = live.snapshot();
+    const bool dark = wxGetApp().dark_mode();
+    if (live.enabled() && (!m_live_background_texture || m_live_background_revision != live.revision() || m_live_background_dark != dark)) {
+        auto texture = std::make_unique<GLTexture>();
+        if (texture->load_from_raw_data(DesignSystem::toolbar_surface_pixels(style, dark), 192, 192, false, false)) {
+            m_live_background_texture = std::move(texture);
+            m_live_background_revision = live.revision();
+            m_live_background_dark = dark;
+            m_live_background_edge = 80.0f + style.corner_radius;
+        }
+    }
     const float x = 2.0f / canvas.get_width();
     const float y = 2.0f / canvas.get_height();
     const float height = (2 * m_layout.border + m_layout.icons_size) * m_layout.scale;
     // The nine-slice includes an 80-DIP transparent gutter for the supplied
     // 12px-offset, 32px-blur popover shadow. Hit bounds remain the solid surface.
     const float padding = 80.0f * parent.get_scale();
-    const float corner = std::min({float(DesignSystem::radius_lg) * parent.get_scale(), height * 0.5f, width * 0.5f}) + padding;
+    const float surface_radius = m_live_background_texture ? m_live_background_edge - 80.0f : float(DesignSystem::radius_lg);
+    const float corner = std::min({surface_radius * parent.get_scale(), height * 0.5f, width * 0.5f}) + padding;
     render_background((m_layout.left - padding) * x, (m_layout.top + padding) * y,
         (m_layout.left + width + padding) * x, (m_layout.top - height - padding) * y,
         corner * x, corner * y, true);
@@ -1510,7 +1529,7 @@ void GLToolbar::render_vertical(const GLCanvas3D& parent, bool draw_icons)
     const float right  = left + width;
     const float bottom = top - height;
 
-    if (draw_icons)
+    if (draw_icons && !m_design_tokens)
         render_background(left, top, right, bottom, border_w, border_h);
 
     left += border_w;

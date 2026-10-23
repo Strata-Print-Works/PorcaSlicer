@@ -160,6 +160,10 @@ public:
 
     wxWindow*   ctrl_parent() const;
 
+    // Opt in before activation; full settings dialogs retain their existing density.
+    void set_compact_sidebar(bool compact = true) { m_compact_sidebar = compact; }
+    bool compact_sidebar() const { return m_compact_sidebar; }
+
 	void		append_line(const Line& line);
 	// create controls for the option group
 	void		activate_line(Line& line);
@@ -240,6 +244,7 @@ protected:
     wxGridSizer*			m_grid_sizer {nullptr};
 	// "true" if option is created in preset tabs
 	bool					m_use_custom_ctrl{ false };
+    bool                    m_compact_sidebar{ false };
 
 	// "true" if control should be created on custom_ctrl
 	bool					m_use_custom_ctrl_as_parent { false };

@@ -52,14 +52,62 @@ sending an operation through an agent that does not own the device.
 
 `NetworkAgent` is the façade used by the GUI and `DeviceManager`. It owns:
 
-- the currently selected `IPrinterAgent`;
+- the currently selected `IPrinterAgent` and retained device-scoped LAN sessions;
 - the registered cloud-service instances, indexed by provider;
 - callbacks shared by the active printer agent and the application;
 - the forwarding methods for printer commands and cloud operations.
 
-There is one active printer agent for the currently selected printer preset. Switching the preset
-increments the machine-list generation, disconnects the old printer agent, removes its callbacks, and
-installs the newly selected agent. The façade then forwards printer operations to that agent.
+The selected printer agent supplies the visible native panel. Saved LAN devices
+retain independently owned sessions and establish them without selecting a view.
+An explicit connect with equal parameters reuses a pending or connected
+attempt, retries an offline one and reuses a rejected-credential attempt until
+the parameters change. Explicit Reconnect, edited credentials and removal
+invalidate its callbacks before replacement. Bambu LAN
+printers own headless worker processes with independent SDK state and private
+pipe routing; Bambu account services remain in the application. Reopening the
+SDK library within one process is not treated as isolation. Moonraker, Creality, Snapmaker and Qidi own separate instances and
+workers per device. Saved profile identity is captured on the UI thread and
+passed with connection parameters, independently of the active plate. Python
+capabilities retain their existing single-instance contract. See
+[device control coverage](device-control-coverage.md) for ownership, the Bambu
+plugin compatibility boundary and the complete control matrix.
+
+Each Bambu LAN worker runs four loops: control requests, certificate work,
+uploads and SDK callbacks. Uploads and prints are serialized per printer on
+their own thread, and a slow call on one loop never delays another. The
+callback loop drops its oldest entry beyond 512, so a status burst cannot end
+the connection. Each operation has its own deadline: 5 seconds for control,
+60 seconds for certificates and 30 minutes for prints. A timeout returns an
+error and leaves the worker running; only end of input or a protocol error
+stops it. The parent keeps at most 32 requests unanswered, including timed-out
+requests awaiting a late reply. Certificate installation never blocks the
+caller, and at most one runs per worker. Cancellation and parent-pipe closure
+wake every loop; shutdown joins them before destroying the SDK instance. A
+worker watchdog bounds cleanup when the vendor SDK ignores cancellation or
+hangs. A missing worker executable is reported as `bambu_worker_missing`.
+
+In the application, callbacks without a UI queue run in order on an owned
+thread, never on a pipe reader, so a handler may reconnect, send a request or
+release its transport. Teardown never joins the current thread: a retired
+worker is reaped by an owned thread, which the transport joins on destruction.
+
+Availability checks report `not_ready` when a Moonraker or Snapmaker service
+answers but Klipper is not ready, distinct from an unreachable printer.
+
+LAN upload and print calls retain a transfer guard on their originating session.
+Automatic status recovery cannot retire that session while the call is active,
+and allows thirty seconds for status to resume after the last transfer finishes.
+Starting a transfer and automatic expiration share a lock, so a reconnect check
+cannot race a newly started upload. Explicit reconnect, removal and shutdown
+retain their cancellation behavior; the guard does not affect other printers.
+
+Elegoo Centauri connections use the existing `ElegooLink` print host and vendor
+page rather than an `IPrinterAgent`. Explicit connection correction retains the
+saved local identity and plate aliases. CC2 HTTP identification is background
+availability only; its vendor MQTT control/status lifetime is the explicitly
+opened page. Each page's native IPC handler owns its connection snapshot and
+retires queued work when hidden/replaced. This remains a first-class concurrent
+background-control gap, not evidence of connected status from polling.
 
 Cloud operations are selected separately using a provider key. `NetworkAgent` forwards a cloud request
 to the matching `ICloudServiceAgent`, and forwards cloud camera operations with a device ID. The
@@ -94,8 +142,8 @@ Cloud camera operations are device-scoped:
 - `create_camera_signaling_channel(dev_id)` creates signaling for one device where the provider
   supports it.
 
-This is separate from the local camera URL exposed by `IPrinterAgent`, which is currently scoped to
-the active printer agent because a normal LAN agent represents one physical printer connection.
+This is separate from the local camera URL exposed by `IPrinterAgent`, scoped to
+the selected agent instance, which represents one physical LAN printer connection.
 
 ## Agent registration and selection
 
@@ -106,8 +154,9 @@ Python printer-agent capabilities register dynamically and contribute an agent I
 The selected printer preset contains the printer-agent choice. If no explicit choice is stored, the
 application preserves the existing default behavior: Bambu presets select the Bambu agent and other
 presets select the native Orca agent. When a preset is changed, `GUI_App` resolves the effective agent
-ID, obtains the corresponding cloud agent, creates the printer agent through the registry, and installs
-it in `NetworkAgent`.
+ID, obtains the corresponding cloud agent and device-scoped instance through the registry,
+and selects it in `NetworkAgent`. Devices inspection supplies an isolated config;
+it does not load that preset into Prepare.
 
 The registry rejects conflicting agent IDs. This matters for Python plugins because an agent ID is the
 stable identity used by presets and device ownership; two enabled plugin capabilities must not claim
@@ -171,6 +220,30 @@ generation machine-list generation when the request was made
 agent, and generation. This prevents a slow response from the previous preset or provider from
 repopulating the current device list.
 
+Moonraker connections use one owned connection worker and retain only the latest pending request.
+Reconnect and disconnect invalidate the previous generation immediately without joining transport
+workers on the caller's thread. The connection worker joins the previous status worker before
+clearing its cache or starting another stream. It checks the generation after HTTP responses and
+before starting a stream; queued connection notifications check it again when delivered. Shutdown
+invalidates notifications and joins both workers, so neither can outlive the agent. WebSocket retry
+delays wake on cancellation. In-flight synchronous transport operations still depend on the
+transport returning; this ownership rule does not make those operations asynchronously cancellable.
+
+The shared Moonraker path (including its Snapmaker, Creality and Qidi subclasses)
+requires a recognizable `/server/info` result and a nonempty object-status snapshot
+before reporting Connected. It publishes that initial snapshot after the connection
+notifications, so monitoring does not depend on the WebSocket's first reply. Queued
+telemetry checks the connection generation again on delivery.
+
+HTTP hosts retain the existing WebSocket status stream. HTTPS hosts use the existing
+HTTP transport for fresh status snapshots, with a cancellable five-second wait between
+requests, five-second connection and ten-second total request timeouts. Each successful
+query replaces the polling snapshot. A failed read reports lost status; HTTP 401/403
+reports rejected credentials and stops polling. The saved-device owner controls retries.
+This path retains the HTTP wrapper's existing TLS policy and is not a WSS implementation.
+Print entry points without an implementation return Unsupported; they must not report
+successful delivery when no upload or print-start request took place.
+
 The provider mapping is currently selected by `GUI_App`: the Bambu agent maps to the Bambu cloud
 provider and other agents map to the Orca cloud provider. The generation check protects that existing
 selection from races; it does not make cloud-provider ownership intrinsic to an agent. Cloud-printer
@@ -206,9 +279,18 @@ the wxWidgets view that renders it. `MediaPlayCtrl` selects and tears down the a
 the wx parent owns the child window or renderer. This is important because a web view, native media
 control, and frame-based/WebRTC renderer have different wx window-lifetime requirements.
 
+Changing the selected device resets the status panel before displaying the new device, including
+camera ownership, print progress, filament, temperature values and cached camera capability flags.
+The native camera clears its last frame immediately when its target or transport changes. Its idle
+view is vendor-neutral and is not a live camera image. Thumbnail requests use distinct identities;
+resetting a job invalidates and cancels the previous request so late responses cannot replace the
+current printer's thumbnail.
+
 Cloud URL and signaling requests are routed through `NetworkAgent` to the cloud provider selected for
-the device. Local URL requests are routed to the active printer agent. The distinction keeps cloud
-account services device-scoped while preserving the current one-LAN-agent/one-printer model.
+the device. Local URL requests use the selected device's printer agent. The native camera view
+has its own target token, invalidated on selection changes; late URL responses
+cannot populate a replacement view, including an A → B → A switch. Retained LAN
+transports do not imply simultaneous camera playback.
 
 ## Compatibility constraints
 
@@ -238,3 +320,20 @@ inside the Bambu agent and the Orca agent's v1 sink adapter can be removed as a 
 - [`PrinterAgentPluginCapability`](../../src/slic3r/plugin/pluginTypes/printerAgent/PrinterAgentPluginCapability.cpp)
   — Python bindings
 - [`MediaPlayCtrl`](../../src/slic3r/GUI/MediaPlayCtrl.cpp) — camera backend selection and playback lifecycle
+
+## Flashforge delivery identity
+
+Flashforge LAN discovery identifies a reachable device but does not verify its
+physical model or installed nozzle. The user explicitly chooses the matching
+model and nozzle profile when saving it; a later generic discovery result keeps
+that choice. Changing a saved profile does not rewrite an existing plate's
+edited setup or make an earlier slice valid.
+
+Before the legacy Flashforge upload dialog or local API request, Porca checks
+the selected plate's destination against the active connection and compares the
+saved printer model and nozzle profile, plate setup, active editing setup and
+the settings footer of that plate's actual G-code. An unknown saved model,
+missing or stale G-code, or a known disagreement blocks delivery and directs the
+user to choose the correct setup and slice again. The guard never changes
+G-code or sends printer commands. A matching profile still does not verify the
+nozzle mounted on the physical printer.

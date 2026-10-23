@@ -1,6 +1,11 @@
 #include "PresetComboBoxes.hpp"
+#include "PrinterScanDialog.hpp"
+#include <wx/weakref.h>
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 
 #include <climits>
+#include <boost/filesystem.hpp>
 #include <boost/log/trivial.hpp>
 #include <cassert>
 #include <boost/algorithm/string/replace.hpp>
@@ -28,9 +33,12 @@
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
 
+#include <wx/bitmap.h>
+#include <wx/window.h>
 #include <wx/gdicmn.h>
 #include <wx/colour.h>
 #include <wx/event.h>
+#include <wx/font.h>
 #include <wx/image.h>
 #include <wx/anybutton.h>
 #include <wx/app.h>
@@ -85,6 +93,80 @@ namespace Slic3r {
 namespace GUI {
 
 #define BORDER_W 10
+
+static wxBitmap printer_popup_fallback(wxWindow* owner)
+{
+    const wxBitmap source = create_scaled_bitmap(resources_dir() + "/design-system/icons/printer", owner, 27);
+    wxImage image = source.ConvertToImage();
+    const wxColour tint(DesignSystem::color_hex(DesignSystem::ColorRole::InkMuted, wxGetApp().dark_mode()));
+    image.SetRGB(wxRect(0, 0, image.GetWidth(), image.GetHeight()), tint.Red(), tint.Green(), tint.Blue());
+    wxBitmap result(image, -1, source.GetScaleFactor());
+    result.SetScaleFactor(source.GetScaleFactor());
+    return result;
+}
+
+// Photos belong to the printer model, so nozzle variants and inherited user presets
+// share the same cover. Returns an empty path when the model has no single cover.
+static boost::filesystem::path printer_cover_path(const Preset& preset, const PresetBundle& bundle)
+{
+    const auto* model_option = preset.config.opt<ConfigOptionString>("printer_model");
+    const std::string model_id = model_option ? model_option->value : std::string();
+    boost::filesystem::path cover;
+    auto find_cover = [&](const VendorProfile& vendor) {
+        for (const auto& model : vendor.models) {
+            if (!model_id.empty() && (model.id == model_id || model.name == model_id)) {
+                cover = boost::filesystem::path(resources_dir()) / "profiles" / vendor.id / (model.name + "_cover.png");
+                return;
+            }
+        }
+    };
+    if (preset.vendor)
+        find_cover(*preset.vendor);
+    else {
+        // Embedded and user presets may retain the model without a vendor pointer.
+        // An ambiguous model must not acquire a different manufacturer's picture.
+        for (const auto& vendor : bundle.vendors) {
+            const auto previous = cover;
+            find_cover(vendor.second);
+            if (!previous.empty() && cover != previous) {
+                cover.clear();
+                break;
+            }
+        }
+    }
+    return cover;
+}
+
+// Pictures are loaded only while rebuilding the list, never while painting, and
+// each cover is read once for the current scale and theme.
+const wxBitmap& PlaterPresetComboBox::printer_picture(const Preset* preset)
+{
+    const auto cover = preset ? printer_cover_path(*preset, *m_preset_bundle) : boost::filesystem::path();
+    const auto key = cover.string();
+    if (auto found = m_printer_pictures.find(key); found != m_printer_pictures.end())
+        return found->second;
+    wxBitmap picture;
+    if (!cover.empty() && boost::filesystem::is_regular_file(cover)) {
+        BitmapCache cache;
+        const double scale = GetDPIScaleFactor();
+        const unsigned pixels = std::max(1, int(std::lround(40 * scale)));
+        // BitmapCache takes an extensionless asset name and appends .png itself.
+        const std::string bitmap_name = (cover.parent_path() / cover.stem()).string();
+        wxBitmap* source = cache.load_png(bitmap_name, 0, pixels);
+        if (source && source->GetWidth() > int(pixels))
+            source = cache.load_png(bitmap_name, pixels, 0);
+        if (source && source->IsOk()) {
+            picture = wxBitmap(source->ConvertToImage(), -1, scale);
+            picture.SetScaleFactor(scale);
+        }
+    }
+    if (!picture.IsOk()) {
+        // A missing cover shares the fallback, which is also built only once.
+        if (!key.empty()) return m_printer_pictures.emplace(key, printer_picture(nullptr)).first->second;
+        picture = printer_popup_fallback(this);
+    }
+    return m_printer_pictures.emplace(key, std::move(picture)).first->second;
+}
 
 // ---------------------------------
 // ***  PresetComboBox  ***
@@ -972,6 +1054,11 @@ PlaterPresetComboBox::PlaterPresetComboBox(wxWindow *parent, Preset::Type preset
 
 PlaterPresetComboBox::~PlaterPresetComboBox()
 {
+    // These controls are siblings, owned by our parent. During parent teardown
+    // tab order may have placed them before this combo, so they may already be gone.
+    if (GetParent() && GetParent()->IsBeingDeleted())
+        return;
+
     if (edit_btn)
         edit_btn->Destroy();
 
@@ -989,7 +1076,27 @@ void PlaterPresetComboBox::OnSelect(wxCommandEvent &evt)
 {
     auto selected_item = evt.GetSelection();
 
+    if (selected_item < 0 || selected_item >= int(GetCount())) return;
     auto marker = reinterpret_cast<Marker>(this->GetClientData(selected_item));
+    if (marker == LABEL_ITEM_SAVED_PRINTER) {
+        const auto row = m_saved_printer_rows.find(selected_item);
+        if (row == m_saved_printer_rows.end()) return;
+        const std::string destination = row->second;
+        const auto plate_id = wxGetApp().plater()->get_partplate_list().get_curr_plate()->id();
+        const wxWeakRef<PlaterPresetComboBox> weak(this);
+        evt.StopPropagation();
+        CallAfter([weak, destination, plate_id]() {
+            if (!weak || weak->IsBeingDeleted()) return;
+            auto* plater = wxGetApp().plater();
+            if (!plater || plater->get_partplate_list().get_curr_plate()->id() != plate_id) {
+                weak->update();
+                return;
+            }
+            if (!assign_saved_printer(destination)) weak->update();
+            plater->sidebar().update_printer_thumbnail();
+        });
+        return;
+    }
     if (marker >= LABEL_ITEM_DISABLED && marker < LABEL_ITEM_MAX) {
         this->SetSelection(m_last_selected);
         if (LABEL_ITEM_WIZARD_ADD_PRINTERS == marker) {
@@ -1159,6 +1266,31 @@ wxString PlaterPresetComboBox::get_preset_name(const Preset& preset)
     return from_u8(preset.label(false));
 }
 
+// Clip the existing numbered bitmap so gradients, multi-color swatches and alpha survive.
+// Only the framed Prepare control uses rounded corners; list icons keep their native shape.
+static wxBitmap rounded_filament_swatch(const wxBitmap& source)
+{
+    wxImage image = source.ConvertToImage();
+    if (!image.HasAlpha()) image.InitAlpha();
+    const int width = image.GetWidth();
+    const int height = image.GetHeight();
+    const double radius = std::min(width, height) * 0.2;
+    unsigned char* alpha = image.GetAlpha();
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const double px = x + 0.5, py = y + 0.5;
+            const double dx = px - std::clamp(px, radius, width - radius);
+            const double dy = py - std::clamp(py, radius, height - radius);
+            const double coverage = std::clamp(radius + 0.5 - std::hypot(dx, dy), 0.0, 1.0);
+            const size_t offset = static_cast<size_t>(y) * width + x;
+            alpha[offset] = static_cast<unsigned char>(std::lround(alpha[offset] * coverage));
+        }
+    }
+    wxBitmap rounded(image);
+    rounded.SetScaleFactor(source.GetScaleFactor());
+    return rounded;
+}
+
 // Only the compatible presets are shown.
 // If an incompatible preset is selected, it is shown as well.
 void PlaterPresetComboBox::update()
@@ -1171,14 +1303,18 @@ void PlaterPresetComboBox::update()
     // Otherwise fill in the list from scratch.
     this->Freeze();
     this->Clear();
+    if (HasPrinterPopupStyle())
+        SetPrinterPopupFooterIndex(-1);
     invalidate_selection();
+    m_saved_printer_rows.clear();
 
     const Preset* selected_filament_preset = nullptr;
     if (m_type == Preset::TYPE_FILAMENT)
     {
         std::vector<wxBitmap *> bitmaps = get_extruder_color_icons(true);
         if (m_filament_idx < bitmaps.size()) {
-            clr_picker->SetBitmap(*bitmaps[m_filament_idx]);
+            const wxBitmap& swatch = *bitmaps[m_filament_idx];
+            clr_picker->SetBitmap(m_sidebar_framed ? rounded_filament_swatch(swatch) : swatch);
         } else {
             return;
         }
@@ -1210,6 +1346,9 @@ void PlaterPresetComboBox::update()
     std::map<wxString, wxBitmap *>  uncompatible_presets;
     std::unordered_set<std::string> system_printer_models;
     std::map<wxString, wxString>   preset_descriptions;
+    std::map<wxString, wxBitmap>   printer_popup_bitmaps;
+    std::map<wxString, wxString>   printer_popup_labels;
+    std::map<wxString, wxString>   printer_popup_subtitles;
     std::map<wxString, std::string> preset_filament_vendors;
     std::map<wxString, std::string> preset_filament_types;
     std::map<wxString, std::string> preset_aliases; // ORCA
@@ -1225,6 +1364,47 @@ void PlaterPresetComboBox::update()
     //BBS:  move system to the end
     /*if (!presets.front().is_visible)
         this->set_label_marker(this->Append(separator(L("System presets")), wxNullBitmap));*/
+
+    if (HasPrinterPopupStyle() && m_type == Preset::TYPE_PRINTER) {
+        const auto choices = saved_printer_choices();
+        auto* plater = wxGetApp().plater();
+        std::string destination = plater && plater->get_partplate_list().independent_setups()
+            ? plater->get_partplate_list().get_curr_plate()->print_setup().destination
+            : scanned_printer_destination(m_selected_dev_id);
+        if (!choices.empty())
+            set_label_marker(Append(_L("Your printers"), wxNullBitmap, DD_ITEM_STYLE_SPLIT_ITEM));
+        for (const auto& choice : choices) {
+            const auto* preset = m_collection->find_preset(choice.preset);
+            const bool available = preset && preset->printer_technology() == ptFFF;
+            const auto& active_config = m_collection->get_edited_preset().config;
+            const bool assigned = destination == choice.destination;
+            const bool different_setup = assigned && available &&
+                (active_config.opt_string("printer_model") != preset->config.opt_string("printer_model") ||
+                 active_config.opt_string("printer_variant") != preset->config.opt_string("printer_variant"));
+            const wxString update_hint = _L("Choose to use this printer's settings");
+            const wxBitmap& picture = printer_picture(available ? preset : nullptr);
+            const int row = Append(from_u8(choice.name), picture, available ? 0 : DD_ITEM_STYLE_DISABLED);
+            set_label_marker(row, LABEL_ITEM_SAVED_PRINTER);
+            SetItemAlias(row, from_u8(choice.preset));
+            SetPrinterPopupItemLabel(row, from_u8(choice.name));
+            SetItemSubtitle(row, different_setup ? from_u8(choice.model) + " · " + update_hint :
+                from_u8(choice.model + (choice.status.empty() ? "" : " · " + choice.status)));
+            SetItemStatusProvider(row, [destination = choice.destination, model = choice.model, different_setup, update_hint] {
+                const auto status = saved_printer_status(destination);
+                using Indicator = DropDown::ItemStatus::Indicator;
+                using Connection = SavedPrinterStatus::Connection;
+                const auto indicator = status.connection == Connection::connected ? Indicator::positive :
+                    status.connection == Connection::disconnected ? Indicator::negative : Indicator::neutral;
+                const wxString subtitle = different_setup ? from_u8(model) + " · " + update_hint :
+                    from_u8(model.empty() ? status.label : model + " · " + status.label);
+                return DropDown::ItemStatus{subtitle, indicator};
+            });
+            SetItemTooltip(row, from_u8(choice.name + "\n" + choice.model) +
+                (different_setup ? "\n" + update_hint : wxString()));
+            m_saved_printer_rows.emplace(row, choice.destination);
+            validate_selection(assigned && !different_setup);
+        }
+    }
 
     for (size_t i = presets.front().is_visible ? 0 : m_collection->num_default_presets(); i < presets.size(); ++i)
     {
@@ -1288,6 +1468,15 @@ void PlaterPresetComboBox::update()
         assert(bmp);
 
         preset_descriptions.emplace(name, from_u8(preset.description));
+        if (HasPrinterPopupStyle() && m_type == Preset::TYPE_PRINTER) {
+            bmp = &printer_popup_bitmaps.emplace(name, printer_picture(&preset)).first->second;
+            printer_popup_labels[name] = from_u8(preset.label(true));
+            preset_descriptions[name] = from_u8(preset.name);
+            if (!preset.description.empty())
+                preset_descriptions[name] += "\n" + from_u8(preset.description);
+            if (preset.vendor)
+                printer_popup_subtitles[name] = from_u8(preset.vendor->name);
+        }
 
         if (!preset.is_compatible) {
             if (boost::ends_with(name, " template"))
@@ -1306,6 +1495,12 @@ void PlaterPresetComboBox::update()
                     preset_aliases[name] = name.utf8_string(); // ORCA
                     system_presets.emplace(name, bmp);
                     system_printer_models.insert(printer_model);
+                    if (HasPrinterPopupStyle()) {
+                        printer_popup_labels[name] = name;
+                        preset_descriptions[name] = is_selected ? get_tooltip(preset) : name;
+                        if (preset.vendor)
+                            printer_popup_subtitles[name] = from_u8(preset.vendor->name);
+                    }
                 }
                 else if (is_selected) {
                     const wxString alternate_name = from_u8(preset.is_dirty ? printer_model : Preset::suffix_modified() + printer_model);
@@ -1315,6 +1510,12 @@ void PlaterPresetComboBox::update()
 
                     preset_aliases.erase(alternate_name);  // ORCA: do this to aliases too
                     preset_aliases[name] = name.utf8_string();
+                    if (HasPrinterPopupStyle()) {
+                        printer_popup_labels[name] = name;
+                        preset_descriptions[name] = get_tooltip(preset);
+                        if (preset.vendor)
+                            printer_popup_subtitles[name] = from_u8(preset.vendor->name);
+                    }
                 }
             } else {
                 system_presets.emplace(name, bmp);
@@ -1382,10 +1583,12 @@ void PlaterPresetComboBox::update()
                                                 "Bambu PLA Galaxy", "Bambu PLA Metal", "Bambu PLA Marble", "Bambu PETG-CF", "Bambu PETG Translucent", "Bambu ABS-GF"};
     std::vector<std::string> first_vendors     = {"", "Bambu", "Generic"}; // Empty vendor for non-system presets
     std::vector<std::string> first_types     = {"PLA", "PETG", "ABS", "TPU"};
-    auto  add_presets       = [this, &preset_descriptions, &filament_orders, &preset_filament_vendors, &first_vendors, &preset_filament_types, &preset_aliases, &preset_bundle_ids, &preset_bundle_names, &first_types, &selected_in_ams]
+    auto  add_presets       = [this, &preset_descriptions, &printer_popup_labels, &printer_popup_subtitles, &filament_orders, &preset_filament_vendors, &first_vendors, &preset_filament_types, &preset_aliases, &preset_bundle_ids, &preset_bundle_names, &first_types, &selected_in_ams]
             (std::map<wxString, wxBitmap *> const &presets, wxString const &selected, std::string const &group, wxString const &groupName) {
         if (!presets.empty()) {
-            set_label_marker(Append(_L(group), wxNullBitmap, DD_ITEM_STYLE_SPLIT_ITEM));
+            const wxString heading = HasPrinterPopupStyle() && m_type == Preset::TYPE_PRINTER && group == "System presets"
+                ? _L("Printer models") : _L(group);
+            set_label_marker(Append(heading, wxNullBitmap, DD_ITEM_STYLE_SPLIT_ITEM));
             if (m_type == Preset::TYPE_FILAMENT || m_type == Preset::TYPE_PRINTER) {
                 std::vector<std::map<wxString, wxBitmap *>::value_type const*> list(presets.size(), nullptr);
                 std::transform(presets.begin(), presets.end(), list.begin(), [](auto & pair) { return &pair; });
@@ -1455,6 +1658,10 @@ void PlaterPresetComboBox::update()
                     else if (m_type == Preset::TYPE_PRINTER && group == "System presets" )
                         set_label_marker(index, LABEL_ITEM_PRINTER_MODELS);
                     SetItemTooltip(index, preset_descriptions[it->first]);
+                    if (HasPrinterPopupStyle() && m_type == Preset::TYPE_PRINTER) {
+                        SetPrinterPopupItemLabel(index, printer_popup_labels[it->first]);
+                        SetItemSubtitle(index, printer_popup_subtitles[it->first]);
+                    }
                     bool is_selected = it->first == selected;
                     validate_selection(is_selected);
                     if (is_selected  && selected_in_ams) {
@@ -1530,8 +1737,16 @@ void PlaterPresetComboBox::update()
         else if (m_type == Preset::TYPE_SLA_MATERIAL)
             set_label_marker(Append(separator(L("Add/Remove materials")), *bmp), LABEL_ITEM_WIZARD_MATERIALS);
         else {
-            set_label_marker(Append(separator(L("Select/Remove printers (system presets)")), *bmp), LABEL_ITEM_WIZARD_PRINTERS);
-            set_label_marker(Append(separator(L("Create printer")), *bmp), LABEL_ITEM_WIZARD_ADD_PRINTERS);
+            const int manage_index = Append(separator(L("Select/Remove printers (system presets)")), *bmp);
+            set_label_marker(manage_index, LABEL_ITEM_WIZARD_PRINTERS);
+            if (HasPrinterPopupStyle())
+                SetPrinterPopupFooterIndex(manage_index);
+            const int create_index = Append(separator(L("Create printer")), *bmp);
+            set_label_marker(create_index, LABEL_ITEM_WIZARD_ADD_PRINTERS);
+            if (HasPrinterPopupStyle()) {
+                SetPrinterPopupItemLabel(create_index, _L("Create printer…"));
+                SetItemSubtitle(create_index, wxEmptyString);
+            }
         }
     }
 
@@ -1560,18 +1775,93 @@ void PlaterPresetComboBox::update()
     if (GetMinWidth() != 10 * m_em_unit)
         SetMinSize(wxSize(10 * m_em_unit, GetSize().GetHeight()));
 #endif //__WXMSW__
+    if (HasPrinterPopupStyle() && m_type == Preset::TYPE_PRINTER)
+        refresh_printer_identity(m_printer_identity_subtitle);
+}
+
+void PlaterPresetComboBox::refresh_printer_identity(const wxString& subtitle)
+{
+    if (m_type != Preset::TYPE_PRINTER || !HasPrinterPopupStyle())
+        return;
+    m_printer_identity_subtitle = subtitle;
+    if (m_collection->get_selected_idx() != size_t(-1)) {
+        const Preset& selected = m_collection->get_selected_preset();
+        const Preset& edited = m_collection->get_edited_preset();
+        wxString title = from_u8(edited.label(true));
+        const std::string model = edited.config.opt_string("printer_model");
+        if (selected.is_system && !model.empty())
+            title = from_u8((edited.is_dirty ? Preset::suffix_modified() : "") + model);
+        const auto saved = m_saved_printer_rows.find(GetSelection());
+        if (saved != m_saved_printer_rows.end()) {
+            title = GetString(saved->first);
+        }
+        SetTextLabel(title);
+        SetToolTip(saved != m_saved_printer_rows.end() ? title + "\n" + from_u8(model) : from_u8(selected.name));
+    }
+    const auto saved = m_saved_printer_rows.find(GetSelection());
+    const std::string model = m_collection->get_edited_preset().config.opt_string("printer_model");
+    SetStaticTips(saved != m_saved_printer_rows.end() && !model.empty()
+        ? from_u8(model) + (subtitle.empty() ? wxString() : " · " + subtitle) : subtitle, wxNullBitmap);
+    SetPrinterPopupActions([this]() {
+        if (m_printer_edit_action)
+            m_printer_edit_action();
+        else
+            switch_to_tab();
+    }, []() { run_wizard(ConfigWizard::SP_PRINTERS); });
+    Refresh();
 }
 
 void PlaterPresetComboBox::msw_rescale()
 {
+    // Pictures follow the scale, and the fallback icon follows the theme.
+    m_printer_pictures.clear();
     PresetComboBox::msw_rescale();
     SetMinSize({-1, 30 * m_em_unit / 10});
 
     if (clr_picker)
-        clr_picker->SetSize(20 * m_em_unit / 10, 20 * m_em_unit / 10);
+        clr_picker->SetSize(m_sidebar_framed ? FromDIP(wxSize(24, 26)) : wxSize(20 * m_em_unit / 10, 20 * m_em_unit / 10));
     // BBS
     if (edit_btn != nullptr)
         edit_btn->msw_rescale();
+    if (m_sidebar_height > 0) set_sidebar_style(m_sidebar_height, m_sidebar_framed);
+}
+
+void PresetComboBox::set_sidebar_style(int height, bool framed)
+{
+    m_sidebar_height = height;
+    m_sidebar_framed = framed;
+    SetSidebarStyle();
+    SetSidebarItemIcons(false);
+    const bool dark = wxGetApp().dark_mode();
+    const auto color = [dark](DesignSystem::ColorRole role) { return wxColour(DesignSystem::color_hex(role, dark)); };
+    wxFont font = DesignSystem::font(HasPrinterPopupStyle() ? DesignSystem::TypeStyle::Heading :
+        (framed ? DesignSystem::TypeStyle::Label : DesignSystem::TypeStyle::Body));
+    if (HasPrinterPopupStyle()) {
+        font.SetFractionalPointSize(DesignSystem::font_points(16));
+        SetSidebarSecondaryFont(DesignSystem::font(DesignSystem::TypeStyle::Label));
+    }
+    SetFont(font);
+    GetDropDown().SetFont(DesignSystem::font(DesignSystem::TypeStyle::Body));
+    SetCornerRadius(FromDIP(DesignSystem::radius_md));
+    SetBorderWidth(m_type == Preset::TYPE_PRINTER || framed ? 0 : FromDIP(1));
+    SetBackgroundColor(StateColor::resolved(StateColor(color(DesignSystem::ColorRole::Field))));
+    SetBorderColor(StateColor::resolved(StateColor(
+        std::make_pair(color(DesignSystem::ColorRole::InkDisabled), static_cast<int>(StateColor::Disabled)),
+        std::make_pair(color(DesignSystem::ColorRole::Focus), static_cast<int>(StateColor::Focused)),
+        std::make_pair(color(DesignSystem::ColorRole::InkMuted), static_cast<int>(StateColor::Hovered)),
+        std::make_pair(color(DesignSystem::ColorRole::LineControl), static_cast<int>(StateColor::Normal)))));
+    const auto ink = StateColor::resolved(StateColor(
+        std::make_pair(color(DesignSystem::ColorRole::InkDisabled), static_cast<int>(StateColor::Disabled)),
+        std::make_pair(color(DesignSystem::ColorRole::Ink), static_cast<int>(StateColor::Normal))));
+    SetTextColor(HasPrinterPopupStyle() ? StateColor::resolved(StateColor(
+        std::make_pair(color(DesignSystem::ColorRole::InkDisabled), static_cast<int>(StateColor::Disabled)),
+        std::make_pair(color(DesignSystem::ColorRole::InkMuted), static_cast<int>(StateColor::Normal)))) : ink);
+    SetLabelColor(ink);
+    const int pixels = FromDIP(height);
+    SetMinSize(wxSize(-1, pixels));
+    SetMaxSize(wxSize(-1, pixels));
+    SetSize(wxSize(GetSize().x, pixels));
+    Refresh();
 }
 
 
@@ -1936,6 +2226,7 @@ void TabPresetComboBox::msw_rescale()
     wxSize sz = wxSize(20 * m_em_unit, 30 * m_em_unit / 10);
     SetMinSize(sz);
     SetSize(sz);
+    if (m_sidebar_height > 0) set_sidebar_style(m_sidebar_height, m_sidebar_framed);
 }
 
 void TabPresetComboBox::update_dirty()
@@ -2181,5 +2472,6 @@ void GUI::PlaterPresetComboBox::sys_color_changed()
     if (clr_picker) {
         clr_picker->SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
     }
+    if (m_sidebar_height > 0) set_sidebar_style(m_sidebar_height, m_sidebar_framed);
 }
 } // namespace Slic3r

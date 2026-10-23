@@ -929,8 +929,8 @@ renderer's callbacks which item is being edited (selection may differ). The bitm
 - `is_live_model_item` (macOS only) re-validates a deferred item by scanning `GetAllChildren` for its pointer. It
   cannot detect a freed node whose address was reused; prefer re-resolving from object/volume indices when you can.
 
-**Row height and fonts.** `SetRowHeight(2 * em + FromDIP(2))` in `create_objects_ctrl` and in `msw_rescale`
-(d5638273c6). `ObjectList::ObjectList` calls `SetFont(Label::sysFont(13))` on every platform, before
+**Row height and fonts.** `SetRowHeight(std::max(FromDIP(32), 2 * em + FromDIP(6)))` in `create_objects_ctrl` and in `msw_rescale`
+(d5638273c6). `ObjectList::ObjectList` calls `SetFont(DesignSystem::font(DesignSystem::TypeStyle::Body))` on every platform, before
 `create_objects_ctrl` — necessary on macOS because the control's `SetFont` resets the row height. The macOS-only
 "don't `SetFont`" guard lives in `DPIAware`'s constructor and concerns only a top-level window's default font
 (`references/dpi-bitmaps-fonts.md`).

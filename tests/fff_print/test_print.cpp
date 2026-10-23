@@ -509,7 +509,7 @@ TEST_CASE("Print::validate reports the clumping-detection warning", "[Print][val
     CHECK(count_opt_key(warnings, "enable_prime_tower") == 1);
 }
 
-TEST_CASE("Print::validate concatenates layered-clearance collisions into one warning", "[Print][validate]")
+TEST_CASE("Print::validate concatenates layered-clearance collisions into one warning", "[Print][validate][LayeredClearance]")
 {
     // In by-layer mode, layered_print_cleareance_valid folds every too-close pair into a
     // single warning entry (newline-joined), unlike the per-check stacking above. Isolate
@@ -525,6 +525,49 @@ TEST_CASE("Print::validate concatenates layered-clearance collisions into one wa
     REQUIRE(std::count_if(warnings.begin(), warnings.end(), is_layered) == 1);  // 3 objects, 2 collisions, 1 entry
     auto it = std::find_if(warnings.begin(), warnings.end(), is_layered);
     CHECK(it->string.find('\n') != std::string::npos);  // the collisions were concatenated
+}
+
+TEST_CASE("Layered collision checks distinguish nested silhouettes from overlapping bodies", "[Print][LayeredClearance]")
+{
+    const bool overlap = GENERATE(false, true);
+    const double angle = GENERATE(0., PI / 2., 0.73);
+    const bool mirrored = GENERATE(false, true);
+    INFO("overlap=" << overlap << ", angle=" << angle << ", mirrored=" << mirrored);
+    auto config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({{"print_sequence", "by layer"}, {"layer_change_gcode", "G92 E0\n"}});
+    Model model;
+    auto* outer = model.add_object();
+    TriangleMesh outline = make_cube(40., 8., 10.);
+    TriangleMesh upright = make_cube(8., 32., 10.);
+    upright.translate(Vec3f(0.f, 8.f, 0.f));
+    outline.merge(upright);
+    auto* volume = outer->add_volume(outline);
+    volume->set_offset(volume->get_offset() + Vec3d(3., 5., 0.));
+    auto* nested = model.add_object();
+    nested->add_volume(cube(8.));
+    for (auto* object : model.objects) {
+        auto* instance = object->add_instance();
+        instance->set_rotation(Vec3d(0., 0., angle));
+        instance->set_scaling_factor(Vec3d(1.2, 0.8, 1.));
+        instance->set_mirror(Vec3d(mirrored ? -1. : 1., 1., 1.));
+        const Vec3d local = object == outer ? Vec3d(0., 0., 0.) : Vec3d(overlap ? 5. : 12., 17., 0.);
+        instance->set_offset(Vec3d(120., 100., 0.) + instance->get_matrix_no_offset().linear() * local);
+    }
+    REQUIRE_FALSE(intersection(outer->convex_hull_2d(outer->instances.front()->get_matrix()),
+                               nested->convex_hull_2d(nested->instances.front()->get_matrix())).empty());
+    Print print;
+    for (auto* object : model.objects) print.auto_assign_extruders(object);
+    print.apply(model, config);
+    std::vector<StringObjectException> warnings;
+    CHECK(print.validate(&warnings).string.empty());
+    CHECK(std::any_of(warnings.begin(), warnings.end(), [](const auto& warning) {
+        return warning.type == STRING_EXCEPT_OBJECT_COLLISION_IN_LAYER_PRINT;
+    }) == overlap);
+
+    // A nest that is safe by layer still needs the sequential toolhead envelope.
+    config.set_deserialize_strict({{"print_sequence", "by object"}, {"extruder_clearance_radius", 76.}});
+    print.apply(model, config);
+    CHECK_FALSE(Print::sequential_print_clearance_valid(print).string.empty());
 }
 
 TEST_CASE("Print::validate tolerates a null warnings pointer", "[Print][validate]")

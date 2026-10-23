@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "metrics": {
+    "control_size": 28,
+    "icon_size": 20,
+    "gap": 4,
+    "border": 4,
+    "top_inset": 12,
+    "corner_radius": 10,
+    "control_radius": 7
+  },
+  "themes": {
+    "dark": {
+      "surface": "#1E1E1E",
+      "surface_hover": "#2E2D2B",
+      "ink": "#F3EFE9",
+      "ink_muted": "#A8A29B",
+      "ink_disabled": "#5E5A56",
+      "accent_ink": "#FF9A9A",
+      "accent_soft": "#3B2524"
+    },
+    "light": {
+      "surface": "#FAF7F2",
+      "surface_hover": "#F1ECE4",
+      "ink": "#1E1E1E",
+      "ink_muted": "#645E57",
+      "ink_disabled": "#B5AEA5",
+      "accent_ink": "#B4384A",
+      "accent_soft": "#FFE6E3"
+    }
+  }
+}

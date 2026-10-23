@@ -1,4 +1,8 @@
 #include "PluginHostBindings.hpp"
+#include "PluginHostWorkspace.hpp"
+#include "slic3r/GUI/Plater.hpp"
+#include "slic3r/GUI/PartPlate.hpp"
+#include <nlohmann/json.hpp>
 #include <libslic3r/LocalesUtils.hpp>
 #include <libslic3r/Config.hpp>
 #include <exception>
@@ -205,14 +209,20 @@ std::string validated_value(const std::string&     key,
 
 // Applies every value or none of them: a half-applied batch would leave the
 // slicer in a state the caller never asked for and cannot easily describe.
-py::dict set_values(const py::dict& values)
+py::dict set_values(const py::dict& values, const std::string& expected_context = {})
 {
     // Converted with the GIL held, before anything is marshaled to the UI thread.
     std::map<std::string, std::string> wanted;
     for (const auto& item : values)
         wanted.emplace(item.first.cast<std::string>(), to_config_string(item.second));
 
-    auto applied = run_on_ui_blocking([&wanted]() -> std::map<std::string, std::pair<std::string, std::string>> {
+    auto applied = run_on_ui_blocking([&wanted, &expected_context]() -> std::map<std::string, std::pair<std::string, std::string>> {
+        if (!expected_context.empty() && plugin_workspace_token() != expected_context)
+            throw std::runtime_error("The plate or its settings changed. Ask Copilot for an updated suggestion.");
+        auto* active_plate = GUI::wxGetApp().plater()->get_partplate_list().get_curr_plate();
+        for (const auto& [key, value] : wanted)
+            if (!expected_context.empty() && active_plate->config()->has(key))
+                throw std::invalid_argument("This setting has a plate override. Edit it in the plate settings: " + key);
         std::map<GUI::Tab*, std::vector<std::string>> by_tab;
         std::vector<std::string>                      unknown;
         for (const auto& [key, value] : wanted) {
@@ -444,7 +454,23 @@ void host_bindings::register_presets(py::module_& host)
         "thread (marshaled from the plugin thread); do not call them from a SlicingPipeline hook, "
         "which runs on the slicing worker the UI thread can be waiting on.");
 
-    presets.def("set_values", &set_values, py::arg("values"),
+    presets.def("proposal_snapshot", [](const std::vector<std::string>& keys) {
+        const auto snapshot = run_on_ui_blocking([&keys] {
+            nlohmann::json values = nlohmann::json::object();
+            for (const auto& key : keys) {
+                if (!plugin_workspace_public_setting(key)) continue;
+                if (auto* tab = tab_owning(key)) {
+                    const auto* def = tab->get_config()->def()->get(key);
+                    values[key] = {{"value", tab->get_config()->opt_serialize(key)},
+                        {"label", def ? def->label : key}};
+                }
+            }
+            return nlohmann::json{{"settings", values}, {"context_token", plugin_workspace_token()}};
+        });
+        return py::module_::import("json").attr("loads")(snapshot.dump());
+    }, py::arg("keys"));
+
+    presets.def("set_values", &set_values, py::arg("values"), py::arg("expected_context") = "",
                 "Apply {setting_key: value} to the presets currently being edited and refresh the UI. "
                 "Settings are addressed by key alone — the owning preset (process/filament/printer) is "
                 "found for you. Values are strings, as in the preset files; numbers, bools and sequences "

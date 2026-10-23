@@ -1,3 +1,5 @@
+@import url("../../include/porca-theme.css");
+
 /* Shared theme for resources/web/dialog/* pages.
  *
  * App-matched roles are pulled from the host theme "contract" (:root{--orca-*}),
@@ -13,22 +15,22 @@
 
 :root {
   /* --- app-matched roles (from the injected contract) --- */
-  --bg: var(--orca-bg);
-  --panel: var(--orca-bg);
-  --text: var(--orca-fg);
-  --muted: var(--orca-muted);
-  --border: var(--orca-border);
-  --border-strong: var(--orca-border);
-  --border-soft: var(--orca-border);
-  --col-sep: var(--orca-border);
-  --row-selected-outline: var(--orca-accent);
-  --main-color: var(--orca-accent);
-  --main-color-hover: var(--orca-accent);
-  --plugin-link-text: var(--orca-accent);
+  --bg: var(--porca-surface);
+  --panel: var(--porca-surface);
+  --text: var(--porca-ink);
+  --muted: var(--porca-ink-muted);
+  --border: var(--porca-line);
+  --border-strong: var(--porca-line-control);
+  --border-soft: var(--porca-line);
+  --col-sep: var(--porca-line);
+  --row-selected-outline: var(--porca-accent);
+  --main-color: var(--porca-accent-ink);
+  --main-color-hover: var(--porca-accent-ink);
+  --plugin-link-text: var(--porca-accent-ink);
 
   /* --- web-only semantics: LIGHT --- */
-  --row-hover: #f7f9fb;
-  --row-selected: #eaf2ff;
+  --row-hover: var(--porca-surface-hover);
+  --row-selected: var(--porca-accent-soft);
   --plugin-status-danger: #b42318;
   --plugin-status-ok: #137333;
   --plugin-status-warn: #a15c00;
@@ -36,37 +38,37 @@
   --plugin-status-danger-bg: rgba(180, 35, 24, 0.12);
   --plugin-status-ok-bg: rgba(19, 115, 51, 0.12);
   --plugin-status-warn-bg: rgba(199, 122, 22, 0.12);
-  --plugin-status-inactive-bg: #edf1f5;
-  --plugin-status-inactive-text: #44505c;
-  --plugin-source-mine-bg: rgba(0, 137, 123, 0.12);
-  --plugin-source-mine-text: #00897b;
-  --plugin-source-neutral-bg: #edf1f5;
-  --plugin-source-neutral-text: #44505c;
-  --plugin-source-subscribed-bg: rgba(37, 99, 170, 0.12);
-  --plugin-source-subscribed-text: #2563aa;
-  --footer-bg: #fafafa;
-  --btn-bg: #ffffff;
-  --btn-border: #cccccc;
-  --btn-hover: #f0f0f0;
-  --ctx-bg: #ffffff;
-  --ctx-border: #cccccc;
-  --ctx-hover: #efefef;
+  --plugin-status-inactive-bg: var(--porca-surface-raised);
+  --plugin-status-inactive-text: var(--porca-ink-muted);
+  --plugin-source-mine-bg: var(--porca-accent-soft);
+  --plugin-source-mine-text: var(--porca-accent-ink);
+  --plugin-source-neutral-bg: var(--porca-surface-raised);
+  --plugin-source-neutral-text: var(--porca-ink-muted);
+  --plugin-source-subscribed-bg: var(--porca-accent-soft);
+  --plugin-source-subscribed-text: var(--porca-accent-ink);
+  --footer-bg: var(--porca-surface);
+  --btn-bg: var(--porca-surface-raised);
+  --btn-border: var(--porca-line-control);
+  --btn-hover: var(--porca-surface-hover);
+  --ctx-bg: var(--porca-surface-raised);
+  --ctx-border: var(--porca-line-control);
+  --ctx-hover: var(--porca-surface-hover);
 
   /* Speed dial icon tile treatment */
-  --speed-tile-bg: #efefef;
-  --speed-tile-border: #d8d8d8;
+  --speed-tile-bg: var(--porca-surface-raised);
+  --speed-tile-border: var(--porca-line-control);
 }
 
 :root[data-orca-theme="dark"] {
-  /* The app-injected border (var(--orca-border) ≈ #36363B in dark) sits almost on top of
+  /* The app-injected border (var(--orca-border) ≈ var(--porca-surface-raised) in dark) sits almost on top of
      the dark panels; lift the border roles a touch so dividers/outlines stay visible. */
-  --border: #4a4a51;
-  --border-strong: #4a4a51;
-  --border-soft: #4a4a51;
-  --col-sep: #4a4a51;
-  --row-hover: #2b3340;
-  --row-selected: #244945;
-  --plugin-link-text: #5eead4;
+  --border: var(--porca-line);
+  --border-strong: var(--porca-line-control);
+  --border-soft: var(--porca-line);
+  --col-sep: var(--porca-line);
+  --row-hover: var(--porca-surface-hover);
+  --row-selected: var(--porca-accent-soft);
+  --plugin-link-text: var(--porca-accent-ink);
   --plugin-status-danger: #ff7b72;
   --plugin-status-ok: #37c871;
   --plugin-status-warn: #f0b45a;
@@ -74,25 +76,25 @@
   --plugin-status-danger-bg: rgba(255, 123, 114, 0.16);
   --plugin-status-ok-bg: rgba(55, 200, 113, 0.16);
   --plugin-status-warn-bg: rgba(240, 180, 90, 0.18);
-  --plugin-status-inactive-bg: #36363b;
-  --plugin-status-inactive-text: #c7ccd2;
-  --plugin-source-mine-bg: rgba(0, 150, 136, 0.18);
-  --plugin-source-mine-text: #8de5d6;
-  --plugin-source-neutral-bg: #36363b;
-  --plugin-source-neutral-text: #c7ccd2;
-  --plugin-source-subscribed-bg: rgba(88, 166, 255, 0.18);
-  --plugin-source-subscribed-text: #8fc0f0;
-  --footer-bg: #20262d;
-  --btn-bg: #2a313a;
-  --btn-border: #4b5664;
-  --btn-hover: #333c47;
-  --ctx-bg: #2a313a;
-  --ctx-border: #4b5664;
-  --ctx-hover: #3a4451;
+  --plugin-status-inactive-bg: var(--porca-surface-raised);
+  --plugin-status-inactive-text: var(--porca-ink-muted);
+  --plugin-source-mine-bg: var(--porca-accent-soft);
+  --plugin-source-mine-text: var(--porca-accent-ink);
+  --plugin-source-neutral-bg: var(--porca-surface-raised);
+  --plugin-source-neutral-text: var(--porca-ink-muted);
+  --plugin-source-subscribed-bg: var(--porca-accent-soft);
+  --plugin-source-subscribed-text: var(--porca-accent-ink);
+  --footer-bg: var(--porca-surface);
+  --btn-bg: var(--porca-surface-raised);
+  --btn-border: var(--porca-line-control);
+  --btn-hover: var(--porca-surface-hover);
+  --ctx-bg: var(--porca-surface-raised);
+  --ctx-border: var(--porca-line-control);
+  --ctx-hover: var(--porca-surface-hover);
 
   /* Speed dial icon tile treatment */
-  --speed-tile-bg: #34343b;
-  --speed-tile-border: #50505a;
+  --speed-tile-bg: var(--porca-surface-raised);
+  --speed-tile-border: var(--porca-line-control);
 }
 
 /* Re-theme the shared common.css chrome through variables (replaces dark.css's

@@ -35,6 +35,7 @@
 #include <wx/string.h>
 #include <wx/treectrl.h>
 #include <wx/imaglist.h>
+#include <wx/bitmap.h>
 
 #include <map>
 #include <vector>
@@ -307,6 +308,22 @@ protected:
 
     bool				m_is_timelapse_wipe_tower_already_prompted = false;
 
+    // Prepare's tinted reset icon, rebuilt only when the theme or scale changes.
+    wxBitmap            m_sidebar_undo_bitmap;
+    bool                m_sidebar_undo_dark {false};
+    int                 m_sidebar_undo_em {0};
+    // Whether the last change check compared with an independent plate's inherited values.
+    bool                m_inherited_baseline {false};
+
+    // Prepare's reset control follows the change count beside it.
+    bool                has_changes_to_reset() const;
+    // The Project/Stage editor stays out of the application's tab lists, so preset
+    // loading and unsaved-change checks skip it. It follows the print tab's updates.
+    Tab*                scope_editor() const;
+    // Page rows are recreated with the page tree; variant buttons with their options.
+    void                apply_sidebar_tree_style();
+    void                apply_sidebar_variant_style();
+
 public:
 	PresetBundle*		m_preset_bundle;
 	bool				m_show_btn_incompatible_presets = false;
@@ -351,6 +368,11 @@ public:
     // The tab is already constructed.
     bool 		completed() const { return m_completed; }
 	virtual bool supports_printer_technology(const PrinterTechnology tech) const = 0;
+    bool        is_prepare_sidebar() const;
+    void        apply_sidebar_style();
+    // Values the selected independent plate inherits from its project and stage.
+    // Prepare's print settings compare with and reset to them; empty elsewhere.
+    DynamicPrintConfig inherited_process_values() const;
 
 	void		create_preset_tab();
     void        add_scaled_button(wxWindow* parent, ScalableButton** btn, const std::string& icon_name,
@@ -511,7 +533,7 @@ protected:
 	//BBS: GUI refactor
 	// return true if cancelled
 	bool			tree_sel_change_delayed(wxCommandEvent& event);
-	void			on_presets_changed();
+	void			on_presets_changed(bool refresh_sidebar = true);
 	void			update_printer_agent_if_needed();
 	void			build_preset_description_line(ConfigOptionsGroup* optgroup);
 	void			update_preset_description_line();
@@ -587,6 +609,31 @@ protected:
 	bool m_back_to_sys = false;
 };
 
+
+// Project/stage editing reuses the native process pages with a detached config.
+// It never loads a draft into the active printer's preset bundle.
+class TabPrintScope : public TabPrintModel
+{
+public:
+    explicit TabPrintScope(ParamsPanel* parent);
+    void build() override;
+    // `mixed` values differ between the scope's plates; `mixed_inherited` keys
+    // inherit different values on its plates.
+    void load_scope(const DynamicPrintConfig& values, const DynamicPrintConfig& inherited,
+                    const DynamicPrintConfig& overrides, const std::vector<std::string>& mixed,
+                    const std::vector<std::string>& mixed_inherited);
+    void update() override;
+    void reload_config() override;
+    void reset_model_config() override;
+protected:
+    void activate_selected_page(std::function<void()> throw_if_canceled) override;
+    void on_value_change(const std::string& key, const boost::any& value) override;
+    void notify_changed(ObjectBase*) override {}
+    void update_custom_dirty(std::vector<std::string>& dirty_options, std::vector<std::string>& nonsys_options) override;
+private:
+    DynamicPrintConfig m_inherited;
+    std::vector<std::string> m_mixed_inherited;
+};
 
 class TabPrintPlate : public TabPrintModel
 {

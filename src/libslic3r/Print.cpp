@@ -53,6 +53,7 @@
 #include <boost/thread/lock_types.hpp>
 #include <iterator>
 #include "TriangleMesh.hpp"
+#include "TriangleMeshSlicer.hpp"
 #include "Config.hpp"
 #include "Exception.hpp"
 #include "IMEXHelpers.hpp"
@@ -1449,6 +1450,113 @@ void Print::validate_compacted_wipe_tower_clearance() const
     }
 }
 
+namespace {
+// By-layer collision checks confirm overlapping hulls against projected meshes.
+// validate() runs after every edit, so keep each object's projection for the
+// orientations in use instead of copying and projecting its mesh every time.
+// An entry matches only the same meshes (held weakly, so a replaced mesh never
+// matches a reused address), volume placements and instance rotation, scale
+// and mirror. Callers apply the instance translation.
+class ProjectedFootprints
+{
+public:
+    ExPolygons get(const ModelObject& object, const Transform3d& instance_no_offset)
+    {
+        Key key{instance_no_offset, {}};
+        for (const ModelVolume* volume : object.volumes)
+            if (volume->is_model_part()) key.volumes.push_back({volume->mesh_ptr(), volume->get_matrix()});
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const auto found = m_entries.find(object.id().id);
+            if (found != m_entries.end())
+                for (const Entry& entry : found->second)
+                    if (entry.matches(key)) return entry.footprint;
+        }
+        const TriangleMesh mesh = object.raw_mesh();
+        ExPolygons footprint = union_ex(project_mesh(mesh.its, instance_no_offset, [] {}));
+        Entry entry{instance_no_offset, {}, footprint};
+        for (const auto& volume : key.volumes) entry.volumes.push_back({volume.mesh, volume.matrix});
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_size >= max_entries) prune();
+        auto& entries = m_entries[object.id().id];
+        if (entries.size() >= max_orientations) {
+            entries.erase(entries.begin());
+            --m_size;
+        }
+        entries.push_back(std::move(entry));
+        ++m_size;
+        return footprint;
+    }
+
+private:
+    static constexpr size_t max_orientations = 8;
+    static constexpr size_t max_entries = 1024;
+    struct Volume
+    {
+        std::shared_ptr<const TriangleMesh> mesh;
+        Transform3d matrix;
+    };
+    struct Key
+    {
+        Transform3d instance;
+        std::vector<Volume> volumes;
+    };
+    struct CachedVolume
+    {
+        std::weak_ptr<const TriangleMesh> mesh;
+        Transform3d matrix;
+    };
+    struct Entry
+    {
+        Transform3d instance;
+        std::vector<CachedVolume> volumes;
+        ExPolygons footprint;
+
+        bool matches(const Key& key) const
+        {
+            if (instance.matrix() != key.instance.matrix() || volumes.size() != key.volumes.size()) return false;
+            for (size_t i = 0; i < volumes.size(); ++i) {
+                // Owner equivalence identifies the same live mesh, never a reused address.
+                if (volumes[i].mesh.owner_before(key.volumes[i].mesh) || key.volumes[i].mesh.owner_before(volumes[i].mesh) ||
+                    volumes[i].matrix.matrix() != key.volumes[i].matrix.matrix())
+                    return false;
+            }
+            return true;
+        }
+        bool expired() const
+        {
+            return std::any_of(volumes.begin(), volumes.end(), [](const CachedVolume& volume) { return volume.mesh.expired(); });
+        }
+    };
+
+    // Drops entries for replaced meshes; clears everything if that is not enough.
+    void prune()
+    {
+        for (auto it = m_entries.begin(); it != m_entries.end();) {
+            auto& entries = it->second;
+            const auto stale = std::remove_if(entries.begin(), entries.end(), [](const Entry& entry) { return entry.expired(); });
+            m_size -= size_t(std::distance(stale, entries.end()));
+            entries.erase(stale, entries.end());
+            it = entries.empty() ? m_entries.erase(it) : std::next(it);
+        }
+        if (m_size >= max_entries) {
+            m_entries.clear();
+            m_size = 0;
+        }
+    }
+
+    std::mutex m_mutex;
+    std::map<size_t, std::vector<Entry>> m_entries;
+    size_t m_size = 0;
+};
+
+ProjectedFootprints& projected_footprints()
+{
+    static ProjectedFootprints cache;
+    return cache;
+}
+} // namespace
+
 //BBS
 static StringObjectException layered_print_cleareance_valid(const Print &print, StringObjectException *warning)
 {
@@ -1470,7 +1578,22 @@ static StringObjectException layered_print_cleareance_valid(const Print &print, 
     }
 
     Polygons convex_hulls_other;
-    // Orca: check convex hull intersection for each instance individually
+    std::vector<std::pair<const PrintInstance*, Polygons>> previous_instances;
+    std::map<const PrintInstance*, ExPolygons> projected_instances;
+    const auto footprint = [&projected_instances](const PrintInstance* instance) -> const ExPolygons& {
+        auto [it, inserted] = projected_instances.try_emplace(instance);
+        if (inserted) {
+            it->second = projected_footprints().get(*instance->print_object->model_object(),
+                                                    instance->model_instance->get_matrix_no_offset());
+            for (auto& polygon : it->second)
+                polygon.translate(instance->shift - instance->print_object->center_offset());
+        }
+        return it->second;
+    };
+    // Hulls remain the broad phase and protect exclusion/tower clearances.
+    // For by-layer body collisions, confirm overlapping hulls against the
+    // actual silhouettes so parts can nest inside concave outlines. Sequential
+    // printing still uses the wider toolhead envelopes in its separate check.
     for (auto& inst : print_instances_ordered) {
         Polygons current_instance_hulls;
         for (const ModelVolume *v : inst->print_object->model_object()->volumes) {
@@ -1498,8 +1621,15 @@ static StringObjectException layered_print_cleareance_valid(const Print &print, 
             current_instance_hulls.emplace_back(volume_hull);
         }
 
-        if (!intersection(convex_hulls_other, current_instance_hulls).empty()) {
-            if (warning) {
+        if (warning && !intersection(convex_hulls_other, current_instance_hulls).empty()) {
+            const bool collision = std::any_of(previous_instances.begin(), previous_instances.end(), [&](const auto& previous) {
+                if (intersection(previous.second, current_instance_hulls).empty()) return false;
+                const auto& current = footprint(inst);
+                const auto& other = footprint(previous.first);
+                // Keep the conservative warning if a damaged mesh cannot be projected.
+                return current.empty() || other.empty() || !intersection_ex(current, other).empty();
+            });
+            if (collision) {
                 if (warning->string.empty()) {
                     warning->string = (boost::format(L("%1% is too close to others, and collisions may be caused.")) % inst->model_instance->get_object()->name).str();
                     // warning->object = inst->model_instance->get_object();
@@ -1515,6 +1645,7 @@ static StringObjectException layered_print_cleareance_valid(const Print &print, 
             }
         }
         append(convex_hulls_other, current_instance_hulls);
+        previous_instances.emplace_back(inst, std::move(current_instance_hulls));
     }
 
     //BBS: add the wipe tower check logic

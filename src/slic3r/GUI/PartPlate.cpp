@@ -7,9 +7,12 @@
 #include <cstddef>
 #include <algorithm>
 #include "libslic3r/Color.hpp"
+#include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/Point.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/PlatePrintSetup.hpp"
 #include "libslic3r/DiscoveredPrinter.hpp"
+#include "libslic3r/Exception.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Line.hpp"
 #include "libslic3r/Polyline.hpp"
@@ -25,12 +28,14 @@
 #include "libslic3r/Arrange.hpp"
 #include "libslic3r/PrintBase.hpp"
 #include "libslic3r/Model.hpp"
+#include "libslic3r/ProductionLedger.hpp"
 #include "libslic3r/format.hpp"
 #include <cstring>
 #include <exception>
 #include "libslic3r/ParameterUtils.hpp"
 #include <imgui.h>
 #include "libslic3r/Format/bbs_3mf.hpp"
+#include "libslic3r/ProjectPlateImport.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/LocalesUtils.hpp"
 #include <cstdlib>
@@ -48,6 +53,7 @@
 #include "slic3r/GUI/GLShader.hpp"
 #include "slic3r/GUI/OpenGLManager.hpp"
 #include "slic3r/GUI/SceneRaycaster.hpp"
+#include "slic3r/GUI/Selection.hpp"
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -63,6 +69,8 @@
 #include <future>
 #include <glad/gl.h>
 #include <boost/algorithm/string.hpp>
+#include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/log/trivial.hpp>
@@ -89,6 +97,8 @@
 #include "libslic3r/PresetBundle.hpp"
 #include "BackgroundSlicingProcess.hpp"
 #include "Widgets/Label.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 #include "2DBed.hpp"
 #include "3DBed.hpp"
 #include "PartPlate.hpp"
@@ -102,7 +112,14 @@
 #include "slic3r/Utils/FileHelp.hpp"
 #include <imgui/imgui_internal.h>
 #include <wx/colour.h>
+#include <wx/bitmap.h>
+#include <wx/brush.h>
+#include <wx/control.h>
+#include <wx/dc.h>
 #include <wx/dcgraph.h>
+#include <wx/font.h>
+#include <wx/glcanvas.h>
+#include <wx/pen.h>
 #include <wx/string.h>
 #include <wx/types.h>
 #include <wx/dcmemory.h>
@@ -116,11 +133,12 @@
 #include "libslic3r/TriangleMesh.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/GLModel.hpp"
+#include "WorkspaceStyle.hpp"
 
 class wxFont;
 
 static const float GROUND_Z = -0.03f;
-static const float GROUND_Z_GRIDLINE = -0.26f;
+static const float GROUND_Z_GRIDLINE = -0.02f;
 static const float GRABBER_X_FACTOR = 0.20f;
 static const float GRABBER_Y_FACTOR = 0.03f;
 static const float GRABBER_Z_VALUE = 0.5f;
@@ -136,6 +154,13 @@ static const int PARTPLATE_TEXT_OFFSET_X1 = 3;
 static const int PARTPLATE_TEXT_OFFSET_X2 = 1;
 static const int PARTPLATE_TEXT_OFFSET_Y = 1;
 static const int PARTPLATE_PLATENAME_OFFSET_Y  = 10;
+// These are workspace millimetres, not screen pixels: titles follow the bed's
+// perspective and remain separated from its physical outline.
+static constexpr double FLOATING_PLATE_LABEL_HEIGHT = 44.0;
+static constexpr double FLOATING_PLATE_LABEL_GAP = 18.0;
+static constexpr double FLOATING_PLATE_LABEL_RENAME_WIDTH = 36.0;
+static constexpr double FLOATING_PLATE_LABEL_ACTIONS_WIDTH = 36.0;
+static constexpr double FLOATING_PLATE_LABEL_CONTROLS_WIDTH = FLOATING_PLATE_LABEL_RENAME_WIDTH + FLOATING_PLATE_LABEL_ACTIONS_WIDTH;
 
 const float WIPE_TOWER_DEFAULT_X_POS = 165.;
 const float WIPE_TOWER_DEFAULT_Y_POS = 250.;  // Max y
@@ -1491,6 +1516,8 @@ static void init_raycaster_from_model(PickingModel& model)
 void PartPlate::calc_gridlines(const ExPolygon& poly, const BoundingBox& pp_bbox) {
     m_gridlines.reset();
     m_gridlines_bolder.reset();
+    m_workspace_outline.reset();
+    init_model_from_lines(m_workspace_outline, to_lines(poly), -0.015f);
 
     // calculate and generate grid
     int   step          = Bed_2D::calculate_grid_step(pp_bbox, scale_(1.00));
@@ -1654,7 +1681,7 @@ void PartPlate::calc_vertex_for_icons(int index, PickingModel &model)
     poly.contour.append({ scale_(p(0) + size), scale_(p(1)) });
     poly.contour.append({ scale_(p(0))       , scale_(p(1)) });
 
-	if (!init_model_from_poly(model.model, poly, GROUND_Z))
+	if (!init_model_from_poly(model.model, poly, WorkspaceStyle::chrome_z))
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry buffers for icons\n";
 
 	init_raycaster_from_model(model);
@@ -1687,7 +1714,7 @@ void PartPlate::calc_vertex_for_imex_warn_badge(int imex_icon_index, GLModel &mo
     poly.contour.append({ scale_(bp(0) + badge), scale_(bp(1) + badge)});
     poly.contour.append({ scale_(bp(0))        , scale_(bp(1) + badge)});
 
-    if (!init_model_from_poly(model, poly, GROUND_Z + 0.01f))
+    if (!init_model_from_poly(model, poly, WorkspaceStyle::chrome_z + 0.01f))
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry for IMEX warn badge\n";
 }
 
@@ -1705,7 +1732,7 @@ void PartPlate::calc_vertex_for_icons_background(int icon_count, GLModel &buffer
 	poly.contour.append({ scale_(p(0) + PARTPLATE_ICON_GAP_LEFT + PARTPLATE_ICON_SIZE), scale_(p(1) - PARTPLATE_ICON_GAP_TOP)});
 	poly.contour.append({ scale_(p(0) + PARTPLATE_ICON_GAP_LEFT), scale_(p(1) - PARTPLATE_ICON_GAP_TOP) });
 
-	if (!init_model_from_poly(buffer, poly, GROUND_Z))
+	if (!init_model_from_poly(buffer, poly, WorkspaceStyle::chrome_z))
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry buffers for icons\n";
 }
 */
@@ -1724,10 +1751,7 @@ void PartPlate::render_background(bool force_default_color)
             color = PartPlate::SELECT_COLOR;
 		}
 		else {
-            color = m_partplate_list->independent_setups() ? PartPlate::UNSELECT_COLOR :
-                (m_partplate_list->m_is_dark ? PartPlate::UNSELECT_DARK_COLOR : PartPlate::UNSELECT_COLOR);
-            if (m_partplate_list->independent_setups())
-                color.a(0.45f);
+            color = WorkspaceStyle::bed_color(m_partplate_list->m_is_dark, false);
 		}
 	}
 	else {
@@ -1946,8 +1970,10 @@ void PartPlate::render_grid(bool bottom) {
 		else
             color = m_partplate_list->m_is_dark ? LINE_TOP_DARK_COLOR : LINE_TOP_COLOR;
 	}
-    if (!bottom && !m_selected && m_partplate_list->independent_setups())
-        color.a(color.a() * 0.45f);
+    if (!bottom) {
+        color = WorkspaceStyle::color(DesignSystem::ColorRole::InkMuted, m_partplate_list->m_is_dark);
+        color.a(m_selected ? 0.30f : 0.08f);
+    }
     m_gridlines.set_color(color);
     m_gridlines.render();
 
@@ -2034,7 +2060,7 @@ void PartPlate::render_icon_texture(GLModel &buffer, GLTexture &texture)
 	glsafe(::glBindTexture(GL_TEXTURE_2D, 0));
 }
 
-void PartPlate::render_plate_name_texture()
+void PartPlate::render_plate_name_texture(int hover_id)
 {
 	if (m_plate_name_edit_icon.mesh_raycaster == nullptr)
 		generate_plate_name_texture();
@@ -2042,7 +2068,10 @@ void PartPlate::render_plate_name_texture()
 	if (m_name_texture.get_id() == 0)
 		return;
 
-	GLuint tex_id = (GLuint)m_name_texture.get_id();
+    const int hover = hover_id == PLATE_DRAG_HOVER_ID ? 0 : hover_id == PLATE_NAME_HOVER_ID ? 1 :
+        hover_id == PLATE_ACTIONS_HOVER_ID ? 2 : -1;
+    const GLTexture& texture = hover >= 0 ? m_name_hover_textures[hover] : m_name_texture;
+	GLuint tex_id = (GLuint)texture.get_id();
 	glsafe(::glBindTexture(GL_TEXTURE_2D, tex_id));
     m_plate_name_icon.render();
 	glsafe(::glBindTexture(GL_TEXTURE_2D, 0));
@@ -2055,8 +2084,7 @@ void PartPlate::set_hover_tooltip(const std::string& tooltip)
 
 void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
 {
-    if (m_plate_name_edit_icon.mesh_raycaster == nullptr)
-        generate_plate_name_texture();
+    generate_plate_name_texture();
 	GLShaderProgram* shader = wxGetApp().get_shader("printbed");
 	if (shader != nullptr) {
 		shader->start_using();
@@ -2123,13 +2151,6 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
                 } else
                     render_icon_texture(m_plate_filament_map_icon.model, m_partplate_list->m_plate_set_filament_map_texture);
             }
-
-			if (hover_id == 6) {
-                render_icon_texture(m_plate_name_edit_icon.model, m_partplate_list->m_plate_name_edit_hovered_texture);
-                set_hover_tooltip(_u8L("Edit current plate name"));
-			}
-			else
-                render_icon_texture(m_plate_name_edit_icon.model, m_partplate_list->m_plate_name_edit_texture);
 
             if (!m_partplate_list->independent_setups()) {
                 if (hover_id == 7) {
@@ -2219,18 +2240,14 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
                 }
             }
 
-            if (m_plate_index >= 0 && m_plate_index < MAX_PLATE_COUNT) {
-                render_icon_texture(m_plate_idx_icon, m_partplate_list->m_idx_textures[m_plate_index]);
-            }
         }
-        if (m_partplate_list->independent_setups()) {
-            const bool hovered = hover_id == PLATE_DRAG_HOVER_ID;
-            render_icon_texture(m_move_front_icon.model, is_locked() ? m_partplate_list->m_plate_drag_locked_texture :
-                (hovered ? m_partplate_list->m_plate_drag_hovered_texture : m_partplate_list->m_plate_drag_texture));
-            if (hovered)
-                set_hover_tooltip(is_locked() ? _u8L("Unlock this plate to move it.") : _u8L("Drag the title to move this plate."));
-        }
-		render_plate_name_texture();
+        if (m_partplate_list->independent_setups() && hover_id == PLATE_DRAG_HOVER_ID)
+            set_hover_tooltip(is_locked() ? _u8L("Unlock this plate to move it.") : _u8L("Drag the title to move. Shift-click to select plates together."));
+        else if (hover_id == PLATE_NAME_HOVER_ID)
+            set_hover_tooltip(_u8L("Rename this plate"));
+        else if (hover_id == PLATE_ACTIONS_HOVER_ID)
+            set_hover_tooltip(_u8L("Plate actions"));
+		render_plate_name_texture(hover_id);
 
         glsafe(::glDisable(GL_BLEND));
 
@@ -2261,7 +2278,7 @@ void PartPlate::render_only_numbers(bool bottom)
         glsafe(::glEnable(GL_BLEND));
         glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
 
-        if (m_plate_index >=0 && m_plate_index < MAX_PLATE_COUNT) {
+        if (m_plate_index >=0 && m_plate_index < max_project_plates) {
             render_icon_texture(m_plate_idx_icon, m_partplate_list->m_idx_textures[m_plate_index]);
         }
 
@@ -2517,6 +2534,8 @@ void PartPlate::register_raycasters_for_picking(GLCanvas3D &canvas)
 	if (m_plate_name_edit_icon.mesh_raycaster != nullptr)
 		register_model_for_picking(canvas, m_plate_name_edit_icon, picking_id_component(6));
     register_model_for_picking(canvas, m_move_front_icon, picking_id_component(7));
+    canvas.remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(PLATE_ACTIONS_HOVER_ID));
+    register_model_for_picking(canvas, m_plate_actions_icon, picking_id_component(PLATE_ACTIONS_HOVER_ID));
 
     // Only register filament map button for H2D (dual-extruder Bambu Lab) printers
     PresetBundle* preset = wxGetApp().preset_bundle;
@@ -3489,9 +3508,9 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, double hei
 	bool size_changed = false; //size changed means the machine changed
 	bool pos_changed = false;
 
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate_id %1%, before, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
+	BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << boost::format(": plate_id %1%, before, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
 		% m_plate_index % m_origin.x() % m_origin.y() % m_origin.z() % m_width % m_depth % m_height;
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": with_instance_move %1%, after, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
+	BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << boost::format(": with_instance_move %1%, after, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
 		% with_instance_move % origin.x() % origin.y() % origin.z() % width % depth % height;
 	size_changed = ((width != m_width) || (depth != m_depth) || (height != m_height));
 	pos_changed = (m_origin != origin);
@@ -3534,7 +3553,7 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, double hei
 			offset.x() = offset.x() + off_x;
 			offset.y() = offset.y() + off_y;
 
-			BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": object %1%, instance %2%, moved {%3%,%4%} to {%5%, %6%}")\
+			BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << boost::format(": object %1%, instance %2%, moved {%3%,%4%} to {%5%, %6%}")\
 				% obj_id % instance_id % off_x % off_y % offset.x() % offset.y();
 
 			instance->set_offset(offset);
@@ -3546,6 +3565,20 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, double hei
 		clear();
 	}
 
+    // A workspace drag changes placement, not mesh geometry. Keep the existing
+    // render volumes (including the plate's tower) in step until the final reload.
+    auto* canvas = m_plater ? m_plater->get_view3D_canvas3D() : nullptr;
+    if (with_instance_move && !size_changed && canvas && canvas->is_workspace_dragging()) {
+        const Vec3d delta = origin - m_origin;
+        for (GLVolume* volume : canvas->get_volumes().volumes) {
+            const bool belongs = volume->is_wipe_tower
+                ? volume->object_idx() == 1000 + m_plate_index
+                : obj_to_instance_set.count({volume->object_idx(), volume->instance_idx()}) != 0;
+            if (belongs)
+                volume->set_instance_offset(volume->get_instance_offset() + delta);
+        }
+    }
+
     if (m_print)
         m_print->set_plate_origin(origin);
 
@@ -3554,7 +3587,7 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, double hei
 	m_depth = depth;
 	m_height = height;
 
-	if (with_instance_move && m_plater)
+	if (with_instance_move && m_plater && !(canvas && canvas->is_workspace_dragging()))
 		m_plater->mark_plate_toolbar_image_dirty();
 
 	return;
@@ -3572,84 +3605,294 @@ Vec3d PartPlate::get_center_origin()
 	return origin;
 }
 
+namespace {
+// A plate setup restored from an older project can lack newer bed keys. Read
+// their defaults without adding them to the saved setup.
+template<class T> const T& setup_bed_option(const DynamicPrintConfig& config, const char* key)
+{
+    if (const auto* value = config.option<T>(key)) return *value;
+    return *static_cast<const T*>(print_config_def.get(key)->default_value.get());
+}
+
+// A movable bed needs its own printable area and finite clearances.
+bool setup_bed_is_valid(const DynamicPrintConfig& config)
+{
+    const auto* area = config.option<ConfigOptionPoints>("printable_area");
+    return area && area->values.size() >= 3 &&
+        std::all_of(area->values.begin(), area->values.end(), [](const Vec2d& point) { return point.allFinite(); }) &&
+        std::isfinite(setup_bed_option<ConfigOptionFloat>(config, "extruder_clearance_height_to_lid").value) &&
+        std::isfinite(setup_bed_option<ConfigOptionFloat>(config, "extruder_clearance_height_to_rod").value);
+}
+
+// Shapes a plate from its own setup at the given workspace position.
+void set_shape_from_setup(PartPlate& plate, const DynamicPrintConfig& config, const Vec2d& position)
+{
+    plate.set_shape(setup_bed_option<ConfigOptionPoints>(config, "printable_area").values,
+        setup_bed_option<ConfigOptionPoints>(config, "bed_exclude_area").values,
+        setup_bed_option<ConfigOptionPointsGroups>(config, "extruder_printable_area").values,
+        setup_bed_option<ConfigOptionFloatsNullable>(config, "extruder_printable_height").values,
+        position, setup_bed_option<ConfigOptionFloat>(config, "extruder_clearance_height_to_lid").value,
+        setup_bed_option<ConfigOptionFloat>(config, "extruder_clearance_height_to_rod").value);
+}
+
+bool generate_floating_plate_label(GLTexture& texture, int width, double resolution,
+                                   const wxString& name, const wxString& printer,
+                                   int number, bool selected, bool group_selected, bool locked, bool movable, bool done, int hover)
+{
+    using namespace DesignSystem;
+    const int height = int(FLOATING_PLATE_LABEL_HEIGHT);
+    const int pixel_width = int(std::ceil(width * resolution));
+    const int pixel_height = int(std::ceil(height * resolution));
+    // This offscreen image is a GL texture in physical pixels. Explicit pixel
+    // fonts keep the same world-space proportions on every wx port.
+    wxBitmap bitmap(pixel_width, pixel_height, 24);
+    if (!bitmap.IsOk()) return false;
+    const bool dark = wxGetApp().dark_mode();
+    const auto color = [dark](ColorRole role) { return wxColour(color_hex(role, dark)); };
+    wxMemoryDC memory(bitmap);
+    memory.SetBackground(wxBrush(color(ColorRole::Surface)));
+    memory.Clear();
+    {
+        wxGCDC dc(memory);
+        const auto px = [resolution](double value) { return int(std::lround(value * resolution)); };
+        dc.SetPen(wxPen(color(selected || group_selected ? ColorRole::Coral : ColorRole::LineControl), px(group_selected ? 1.1 : 0.65)));
+        dc.SetBrush(wxBrush(color(ColorRole::Surface)));
+        dc.DrawRoundedRectangle(0, 0, pixel_width, pixel_height, px(radius_md));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        if (hover >= 0) {
+            dc.SetBrush(wxBrush(color(ColorRole::SurfaceHover)));
+            const int x = hover == 0 ? px(4) : px(width - FLOATING_PLATE_LABEL_CONTROLS_WIDTH + (hover - 1) * FLOATING_PLATE_LABEL_RENAME_WIDTH + 2);
+            const int w = hover == 0 ? px(width - FLOATING_PLATE_LABEL_CONTROLS_WIDTH - 6) : px(FLOATING_PLATE_LABEL_RENAME_WIDTH - 6);
+            dc.DrawRoundedRectangle(x, px(4), w, px(height - 8), px(radius_sm));
+        }
+        dc.SetBrush(wxBrush(color(group_selected ? ColorRole::Coral : ColorRole::InkMuted)));
+        if (movable && locked) {
+            dc.SetPen(wxPen(color(ColorRole::InkMuted), px(1.4)));
+            dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            dc.DrawRoundedRectangle(px(11), px(13), px(8), px(13), px(4));
+            dc.SetBrush(wxBrush(color(ColorRole::Surface)));
+            dc.DrawRoundedRectangle(px(9), px(20), px(12), px(10), px(2));
+        } else if (movable) {
+            for (int row = 0; row < 3; ++row)
+                for (int col = 0; col < 2; ++col)
+                    dc.DrawCircle(px(12 + col * 6), px(15 + row * 7), px(1.45));
+        }
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(color(selected ? ColorRole::Coral : ColorRole::SurfaceHover)));
+        dc.DrawRoundedRectangle(px(movable ? 30 : 12), px(10), px(25), px(24), px(radius_sm));
+        wxFont number_font = font(TypeStyle::BodyStrong);
+        number_font.SetPixelSize(wxSize(0, px(13)));
+        dc.SetFont(number_font);
+        dc.SetTextForeground(color(selected ? ColorRole::Charcoal : ColorRole::InkMuted));
+        const wxString number_text = wxString::Format("%02d", number);
+        const wxSize number_size = dc.GetTextExtent(number_text);
+        dc.DrawText(number_text, px(movable ? 42.5 : 24.5) - number_size.x / 2, px(22) - number_size.y / 2);
+        if (done) {
+            const int check_x = px(movable ? 56 : 38);
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.SetBrush(wxBrush(color(ColorRole::SuccessSoft)));
+            dc.DrawCircle(check_x, px(11), px(5.5));
+            dc.SetPen(wxPen(color(ColorRole::Success), px(1.5)));
+            dc.DrawLine(check_x - px(3), px(11), check_x - px(1), px(13));
+            dc.DrawLine(check_x - px(1), px(13), check_x + px(3), px(9));
+        }
+
+        const int text_x = px(movable ? 64 : 46);
+        const int text_width = px(width - FLOATING_PLATE_LABEL_CONTROLS_WIDTH - (movable ? 70 : 52));
+        wxFont name_font = font(TypeStyle::BodyStrong);
+        name_font.SetPixelSize(wxSize(0, px(13)));
+        dc.SetFont(name_font);
+        dc.SetTextForeground(color(ColorRole::Ink));
+        const wxString title = wxControl::Ellipsize(name, dc, wxELLIPSIZE_END, text_width);
+        const int title_y = printer.empty() && !done ? (pixel_height - dc.GetTextExtent(title).y) / 2 : px(7);
+        dc.DrawText(title, text_x, title_y);
+        if (!printer.empty() || done) {
+            wxFont printer_font = font(TypeStyle::Caption);
+            printer_font.SetPixelSize(wxSize(0, px(10)));
+            dc.SetFont(printer_font);
+            dc.SetTextForeground(color(done ? ColorRole::Success : ColorRole::InkMuted));
+            const wxString subtitle = done ? (printer.empty() ? _L("Done") : _L("Done") + " · " + printer) : printer;
+            dc.DrawText(wxControl::Ellipsize(subtitle, dc, wxELLIPSIZE_END, text_width), text_x, px(25));
+        }
+        const int pencil_x = px(width - FLOATING_PLATE_LABEL_ACTIONS_WIDTH - 23);
+        dc.SetPen(wxPen(color(hover == 1 ? ColorRole::Ink : ColorRole::InkMuted), px(1.6)));
+        dc.DrawLine(pencil_x - px(5), px(25), pencil_x + px(4), px(16));
+        dc.DrawLine(pencil_x - px(2), px(28), pencil_x + px(7), px(19));
+        dc.DrawLine(pencil_x + px(4), px(16), pencil_x + px(7), px(19));
+        dc.DrawLine(pencil_x - px(5), px(25), pencil_x - px(6), px(29));
+        dc.DrawLine(pencil_x - px(6), px(29), pencil_x - px(2), px(28));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(color(hover == 2 ? ColorRole::Ink : ColorRole::InkMuted)));
+        for (int dot = 0; dot < 3; ++dot)
+            dc.DrawCircle(px(width - 25 + dot * 6), px(22), px(1.6));
+    }
+    memory.SelectObject(wxNullBitmap);
+    wxImage image = bitmap.ConvertToImage();
+    if (!image.IsOk()) return false;
+    const unsigned char* rgb = image.GetData();
+    std::vector<unsigned char> rgba(size_t(pixel_width) * pixel_height * 4);
+    const double radius = radius_md * resolution;
+    for (int y = 0; y < pixel_height; ++y) {
+        for (int x = 0; x < pixel_width; ++x) {
+            const size_t offset = (size_t(y) * pixel_width + x);
+            std::copy_n(rgb + offset * 3, 3, rgba.data() + offset * 4);
+            const double dx = std::max(std::abs(x + 0.5 - pixel_width / 2.0) - (pixel_width / 2.0 - radius), 0.0);
+            const double dy = std::max(std::abs(y + 0.5 - pixel_height / 2.0) - (pixel_height / 2.0 - radius), 0.0);
+            // A CPU alpha mask avoids wxBitmap's differing transparency rules
+            // across Cocoa, GTK and MSW while retaining antialiased corners.
+            rgba[offset * 4 + 3] = static_cast<unsigned char>(255 * std::clamp(radius + 0.5 - std::hypot(dx, dy), 0.0, 1.0));
+        }
+    }
+    texture.reset();
+    return texture.load_from_raw_data(std::move(rgba), pixel_width, pixel_height);
+}
+}
+
+void PartPlateList::reset_production_ready_keys()
+{
+    m_production_record.clear();
+    m_production_ready_keys.clear();
+    m_production_record_valid = false;
+}
+
+const std::unordered_set<std::string>* PartPlateList::production_ready_keys(const Model& model)
+{
+    if (!model.model_info) return nullptr;
+    const auto it = model.model_info->metadata_items.find(ProductionLedger::metadata_key);
+    if (it == model.model_info->metadata_items.end()) return nullptr;
+
+    // The plate labels are checked every frame; parse the portable record only
+    // when production progress changes.
+    if (m_production_record != it->second) {
+        m_production_record = it->second;
+        m_production_ready_keys.clear();
+        m_production_record_valid = false;
+        try {
+            const ProductionLedger ledger = ProductionLedger::deserialize(m_production_record);
+            for (const ProductionPart& part : ledger.parts)
+                if (part.required > 0 && ledger.accepted(part.key) >= part.required)
+                    m_production_ready_keys.insert(part.key);
+            m_production_record_valid = true;
+        } catch (const std::exception&) { /* Invalid metadata cannot mark a plate done. */ }
+    }
+    return m_production_record_valid ? &m_production_ready_keys : nullptr;
+}
+
+void PartPlate::generate_floating_plate_name_texture(GLCanvas3D& canvas)
+{
+    const BoundingBoxf bed = get_extents(m_shape);
+    if (!bed.defined) return;
+    const int width = int(std::clamp(bed.size().x(), 180.0, 280.0));
+    const bool independent = m_partplate_list->independent_setups();
+    const auto& config = independent ? m_print_setup.config : wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    static const std::string no_printer;
+    const std::string* printer = independent ? &m_print_setup.destination_name : &no_printer;
+    if (printer->empty()) {
+        if (const auto* model = config.option<ConfigOptionString>("printer_model"))
+            printer = &model->value;
+    }
+    const auto* ready_keys = m_plater ? m_partplate_list->production_ready_keys(m_plater->model()) : nullptr;
+    bool done = ready_keys && is_printable();
+    size_t part_count = 0;
+    if (done) {
+        // Only this plate's instances can complete it; the set keeps model order.
+        std::unordered_set<std::string> seen;
+        const auto& objects = m_plater->model().objects;
+        for (const auto& [object, instance] : obj_to_instance_set) {
+            if (object < 0 || object >= int(objects.size()) || !objects[object]->printable ||
+                instance < 0 || instance >= int(objects[object]->instances.size())) continue;
+            const ModelInstance* item = objects[object]->instances[instance];
+            if (!item->printable) continue;
+            ++part_count;
+            if (item->production_id.empty() || !seen.insert(item->production_id).second ||
+                !ready_keys->count(item->production_id)) {
+                done = false;
+                break;
+            }
+        }
+    }
+    done = done && part_count > 0;
+    const double resolution = std::clamp(canvas.get_wxglcanvas()->GetDPIScaleFactor() * 2.0, 3.0, 6.0);
+    const bool group_selected = independent && m_partplate_list->is_workspace_selected(m_plate_index);
+    // The active plate owns the sidebar, so it keeps its cue while no plate is explicitly selected.
+    const bool active_selected = m_selected && (!independent || group_selected || !m_partplate_list->has_workspace_selection());
+    const bool dark = wxGetApp().dark_mode();
+    // Labels are checked every frame: compare their inputs in place and render
+    // only when one changes. A failed render waits for the next change.
+    const NameLabelInputs& last = m_name_label_inputs;
+    const bool unchanged = last.name == m_name && last.printer == *printer && last.index == m_plate_index &&
+        last.width == width && last.resolution == resolution && last.active_selected == active_selected &&
+        last.group_selected == group_selected && last.locked == is_locked() && last.independent == independent &&
+        last.done == done && last.dark == dark;
+    if (!unchanged || (!last.failed && m_name_texture.get_id() == 0)) {
+        m_name_label_inputs = {m_name, *printer, m_plate_index, width, resolution, active_selected, group_selected,
+                               is_locked(), independent, done, dark, false};
+        const wxString name = m_name.empty() ? _L("Untitled") : from_u8(m_name);
+        const wxString printer_name = from_u8(*printer);
+        if (!generate_floating_plate_label(m_name_texture, width, resolution, name, printer_name, m_plate_index + 1, active_selected, group_selected, is_locked(), independent, done, -1) ||
+            !generate_floating_plate_label(m_name_hover_textures[0], width, resolution, name, printer_name, m_plate_index + 1, active_selected, group_selected, is_locked(), independent, done, 0) ||
+            !generate_floating_plate_label(m_name_hover_textures[1], width, resolution, name, printer_name, m_plate_index + 1, active_selected, group_selected, is_locked(), independent, done, 1) ||
+            !generate_floating_plate_label(m_name_hover_textures[2], width, resolution, name, printer_name, m_plate_index + 1, active_selected, group_selected, is_locked(), independent, done, 2)) {
+            m_name_label_inputs.failed = true;
+            return;
+        }
+    } else if (last.failed || m_plate_name_edit_icon.mesh_raycaster != nullptr) {
+        return;
+    }
+    const double label_scale = 1.;
+    const double label_width = width * label_scale;
+    const double label_height = FLOATING_PLATE_LABEL_HEIGHT * label_scale;
+    const double controls_width = FLOATING_PLATE_LABEL_CONTROLS_WIDTH * label_scale;
+    const double actions_width = FLOATING_PLATE_LABEL_ACTIONS_WIDTH * label_scale;
+    const double x = bed.min.x();
+    const double y = bed.max.y() + FLOATING_PLATE_LABEL_GAP;
+    const auto rectangle = [](double left, double bottom, double right, double top) {
+        ExPolygon poly;
+        poly.contour.append({scale_(left), scale_(bottom)});
+        poly.contour.append({scale_(right), scale_(bottom)});
+        poly.contour.append({scale_(right), scale_(top)});
+        poly.contour.append({scale_(left), scale_(top)});
+        return poly;
+    };
+    m_plate_name_icon.reset();
+    m_plate_name_edit_icon.reset();
+    m_plate_actions_icon.reset();
+    if (independent) m_move_front_icon.reset();
+    init_model_from_poly(m_plate_name_icon, rectangle(x, y, x + label_width, y + label_height), WorkspaceStyle::chrome_z);
+    init_model_from_poly(m_plate_name_edit_icon.model, rectangle(x + label_width - controls_width, y,
+                        x + label_width - actions_width, y + label_height), WorkspaceStyle::chrome_z);
+    init_raycaster_from_model(m_plate_name_edit_icon);
+    init_model_from_poly(m_plate_actions_icon.model, rectangle(x + label_width - actions_width, y,
+                        x + label_width, y + label_height), WorkspaceStyle::chrome_z);
+    init_raycaster_from_model(m_plate_actions_icon);
+    if (independent) {
+        init_model_from_poly(m_move_front_icon.model, rectangle(x, y, x + label_width - controls_width,
+                            y + label_height), WorkspaceStyle::chrome_z);
+        init_raycaster_from_model(m_move_front_icon);
+    }
+    canvas.remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(PLATE_NAME_HOVER_ID));
+    if (independent)
+        canvas.remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(PLATE_DRAG_HOVER_ID));
+    canvas.remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(PLATE_ACTIONS_HOVER_ID));
+    register_model_for_picking(canvas, m_plate_name_edit_icon, picking_id_component(PLATE_NAME_HOVER_ID));
+    if (independent)
+        register_model_for_picking(canvas, m_move_front_icon, picking_id_component(PLATE_DRAG_HOVER_ID));
+    register_model_for_picking(canvas, m_plate_actions_icon, picking_id_component(PLATE_ACTIONS_HOVER_ID));
+}
+
 void PartPlate::generate_plate_name_texture()
 {
 	auto canvas = this->m_partplate_list->m_plater->get_view3D_canvas3D();
 	if (canvas == nullptr)
 		return;
 
-    m_plate_name_icon.reset();
-
-	// generate m_name_texture texture from m_name with generate_from_text_string
-	m_name_texture.reset();
-	auto text = m_name.empty()? _L("Untitled") : from_u8(m_name);
-
-    // ORCA also scale font size to prevent low res texture
-    int size = wxGetApp().em_unit() * PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE;
-    auto l = Label::sysFont(size, true);
-    wxFont* font = &l;
-
-	wxColour foreground(0xf2, 0x75, 0x4e, 0xff);
-	if (!m_name_texture.generate_from_text_string(text.ToUTF8().data(), *font, *wxBLACK, foreground)) {
-		BOOST_LOG_TRIVIAL(error) << "PartPlate::generate_plate_name_texture(): generate_from_text_string() failed";
-		return;
-	}
-
-    ExPolygon poly;
-    auto  bed_ext  = get_extents(m_shape);
-    Vec2d p        = bed_ext[3];
-    float factor   = icon_scale_factor();
-    float icon_sz  = factor * PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE;
-    float width    = icon_sz * m_name_texture.get_width() / m_name_texture.get_height(); // icon size * text_bb_ratio
-    float height   = icon_sz; // scale with icon size to preserve ratio while system scaling
-    float offset_y = factor * PARTPLATE_TEXT_OFFSET_Y;
-
-    //if (m_plater && m_plater->get_build_volume_type() == BuildVolume_Type::Circle)
-    //    px = scale_(bed_ext.center()(0)) - (width + height) / 2.00;
-
-    p += Vec2d(0, offset_y);
-
-    poly.contour.append({ scale_(p(0)        ), scale_(p(1)         ) });
-    poly.contour.append({ scale_(p(0) + width), scale_(p(1)         ) });
-    poly.contour.append({ scale_(p(0) + width), scale_(p(1) + height) });
-    poly.contour.append({ scale_(p(0)        ), scale_(p(1) + height) });
-
-    if (!init_model_from_poly(m_plate_name_icon, poly, GROUND_Z))
-        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry buffers for icons\n";
-
-    canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(6));
-    calc_vertex_for_plate_name_edit_icon(&m_name_texture, 0, m_plate_name_edit_icon);
-    register_model_for_picking(*canvas, m_plate_name_edit_icon, picking_id_component(6));
-
-    if (m_partplate_list->independent_setups()) {
-        // The former move-to-front control becomes a grip beside the title. Its
-        // hit area includes the text, stopping at the separate rename pencil.
-        canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(PLATE_DRAG_HOVER_ID));
-        m_move_front_icon.reset();
-        const float grip_x = float(p.x()) - icon_sz * 1.2f;
-        ExPolygon grip;
-        grip.contour.append({scale_(grip_x), scale_(p.y())});
-        grip.contour.append({scale_(grip_x + icon_sz), scale_(p.y())});
-        grip.contour.append({scale_(grip_x + icon_sz), scale_(p.y() + height)});
-        grip.contour.append({scale_(grip_x), scale_(p.y() + height)});
-        if (!init_model_from_poly(m_move_front_icon.model, grip, GROUND_Z))
-            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": unable to create plate grip";
-
-        const float title_right = float(p.x()) + icon_sz * m_name_texture.m_original_width / m_name_texture.get_height();
-        const float title_bottom = float(p.y()) - offset_y;
-        const float title_top = float(p.y()) + height * 1.4f;
-        indexed_triangle_set hit_area;
-        hit_area.vertices = {Vec3f(grip_x, title_bottom, GROUND_Z), Vec3f(title_right, title_bottom, GROUND_Z),
-                             Vec3f(title_right, title_top, GROUND_Z), Vec3f(grip_x, title_top, GROUND_Z)};
-        hit_area.indices = {{0, 1, 2}, {0, 2, 3}};
-        m_move_front_icon.mesh_raycaster = std::make_unique<MeshRaycaster>(std::make_shared<const TriangleMesh>(std::move(hit_area)));
-        register_model_for_picking(*canvas, m_move_front_icon, picking_id_component(PLATE_DRAG_HOVER_ID));
-    }
+    generate_floating_plate_name_texture(*canvas);
 }
 
 void PartPlate::invalidate_plate_name_texture()
 {
     m_plate_name_edit_icon.mesh_raycaster.reset();
+    m_plate_actions_icon.reset();
     if (m_partplate_list->independent_setups()) m_move_front_icon.reset();
 
 	auto canvas = (m_plater != nullptr) ? m_plater->get_view3D_canvas3D() : nullptr;
@@ -3657,6 +3900,7 @@ void PartPlate::invalidate_plate_name_texture()
         canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(6));
         if (m_partplate_list->independent_setups())
             canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(PLATE_DRAG_HOVER_ID));
+        canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed, picking_id_component(PLATE_ACTIONS_HOVER_ID));
 		canvas->set_as_dirty();
 	}
 }
@@ -3675,6 +3919,7 @@ void PartPlate::set_plate_name(const std::string& name)
 	invalidate_plate_name_texture();
 
     if (m_plater != nullptr && !m_plater->is_loading_project()) {
+        m_plater->sidebar().update_settings_scope();
         LifecycleEventContext ctx;
         ctx.name = name;
         ctx.previous_name = previous_name;
@@ -4588,8 +4833,9 @@ bool PartPlate::intersects(const BoundingBoxf3& bb) const
 
 bool PartPlate::render_inactive_bed_model(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow)
 {
-    if (!m_partplate_list->independent_setups() || m_print_setup.empty()) return false;
-    const auto& config = m_print_setup.config;
+    const bool independent = m_partplate_list->independent_setups();
+    if (independent && m_print_setup.empty()) return false;
+    const auto& config = independent ? m_print_setup.config : wxGetApp().preset_bundle->printers.get_edited_preset().config;
     static const t_config_option_keys bed_keys = {"printer_model", "bed_custom_model", "printable_area", "printable_height",
                                                   "extruder_printable_area", "extruder_printable_height"};
     const bool changed = !m_inactive_bed || std::any_of(bed_keys.begin(), bed_keys.end(), [&](const std::string& key) {
@@ -4611,9 +4857,10 @@ bool PartPlate::render_inactive_bed_model(const Transform3d& view_matrix, const 
     if (changed || m_inactive_bed->get_position() != position) {
         // Force this plate's resolved model: Bed3D's normal detection consults
         // the selected printer and would give an inactive plate the wrong mesh.
-        m_inactive_bed->set_shape(config.option<ConfigOptionPoints>("printable_area")->values,
-            config.opt_float("printable_height"), config.option<ConfigOptionPointsGroups>("extruder_printable_area")->values,
-            config.option<ConfigOptionFloatsNullable>("extruder_printable_height")->values,
+        m_inactive_bed->set_shape(setup_bed_option<ConfigOptionPoints>(config, "printable_area").values,
+            setup_bed_option<ConfigOptionFloat>(config, "printable_height").value,
+            setup_bed_option<ConfigOptionPointsGroups>(config, "extruder_printable_area").values,
+            setup_bed_option<ConfigOptionFloatsNullable>(config, "extruder_printable_height").values,
             m_inactive_bed_model, true, position, changed);
     }
     m_inactive_bed->on_change_color_mode(m_partplate_list->m_is_dark);
@@ -4697,6 +4944,20 @@ void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projec
         glsafe(::glDepthMask(GL_TRUE));
     }
 
+    const bool selected = m_partplate_list->independent_setups()
+        ? m_partplate_list->is_workspace_selected(m_plate_index) || (m_selected && !m_partplate_list->has_workspace_selection())
+        : m_selected;
+    if (!hide_chrome && !bottom && selected && !force_background_color && m_workspace_outline.is_initialized()) {
+        if (auto* outline_shader = wxGetApp().get_shader("flat")) {
+            outline_shader->start_using();
+            outline_shader->set_uniform("view_model_matrix", view_matrix);
+            outline_shader->set_uniform("projection_matrix", projection_matrix);
+            m_workspace_outline.set_color(WorkspaceStyle::color(DesignSystem::ColorRole::Accent, m_partplate_list->m_is_dark));
+            m_workspace_outline.render();
+            outline_shader->stop_using();
+        }
+    }
+
     if (!hide_chrome && !bottom && m_selected && !force_background_color) {
         if (m_partplate_list)
             render_logo(bottom, m_partplate_list->render_cali_logo && render_cali);
@@ -4706,9 +4967,6 @@ void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projec
 
     if (!hide_chrome) {
         render_icons(bottom, only_body, hover_id);
-        if (!force_background_color) {
-            render_only_numbers(bottom);
-        }
     }
 
     glsafe(::glDisable(GL_DEPTH_TEST));
@@ -5302,6 +5560,12 @@ void PartPlateList::enable_independent_setups()
 void PartPlateList::init()
 {
     m_independent_setups = false;
+    reset_production_ready_keys();
+    m_stages.clear();
+    m_process_scopes = {};
+    m_workspace_selection.clear();
+    m_workspace_selection_explicit = false;
+    m_plate_drag_stage_bounds.clear();
 	m_intialized = false;
 	PartPlate* first_plate = NULL;
 	first_plate = new PartPlate(this, Vec3d(0.0, 0.0, 0.0), m_plate_width, m_plate_depth, m_plate_height, m_plater, m_model, true, printer_technology);
@@ -5331,51 +5595,567 @@ void PartPlateList::init()
 }
 
 //compute the origin for printable plate with index i
+std::vector<int> PartPlateList::workspace_selection() const
+{
+    std::vector<int> result;
+    for (int i = 0; i < int(m_plate_list.size()); ++i)
+        if (is_workspace_selected(i)) result.push_back(i);
+    return result;
+}
+
+bool PartPlateList::is_workspace_selected(int index) const
+{
+    if (index < 0 || index >= int(m_plate_list.size())) return false;
+    if (!m_workspace_selection_explicit) return index == m_current_plate;
+    return std::find(m_workspace_selection.begin(), m_workspace_selection.end(), m_plate_list[index]->id()) != m_workspace_selection.end();
+}
+
+bool PartPlateList::has_workspace_selection() const
+{
+    if (!m_workspace_selection_explicit) return true;
+    return std::any_of(m_plate_list.begin(), m_plate_list.end(), [this](const PartPlate* plate) {
+        return std::find(m_workspace_selection.begin(), m_workspace_selection.end(), plate->id()) != m_workspace_selection.end();
+    });
+}
+
+void PartPlateList::select_workspace_plate(int index, bool toggle)
+{
+    if (index < 0 || index >= int(m_plate_list.size())) return;
+    const auto id = m_plate_list[index]->id();
+    if (!m_workspace_selection_explicit && toggle)
+        m_workspace_selection = {m_plate_list[m_current_plate]->id()};
+    m_workspace_selection_explicit = true;
+    if (!toggle) m_workspace_selection = {id};
+    else {
+        auto found = std::find(m_workspace_selection.begin(), m_workspace_selection.end(), id);
+        if (found == m_workspace_selection.end()) m_workspace_selection.push_back(id);
+        else m_workspace_selection.erase(found);
+    }
+    if (m_plater && m_intialized) m_plater->sidebar().update_settings_scope();
+}
+
+void PartPlateList::clear_workspace_selection()
+{
+    m_workspace_selection.clear();
+    m_workspace_selection_explicit = true;
+    if (m_plater && m_intialized) m_plater->sidebar().update_settings_scope();
+}
+
+void PartPlateList::begin_plate_drag(int index)
+{
+    m_plate_drag_stage_bounds.clear();
+    if (!m_independent_setups || index < 0 || index >= int(m_plate_list.size())) return;
+    auto indices = workspace_selection();
+    if (!is_workspace_selected(index)) indices = {index};
+    for (int i : indices) {
+        const auto& id = m_plate_list[i]->stage_id();
+        if (!id.empty() && m_plate_drag_stage_bounds.count(id) == 0)
+            m_plate_drag_stage_bounds.emplace(id, stage_bounds(id));
+    }
+}
+
+void PartPlateList::end_plate_drag()
+{
+    m_plate_drag_stage_bounds.clear();
+    calc_bounding_boxes();
+    if (m_plater && m_plater->get_view3D_canvas3D())
+        m_plater->get_view3D_canvas3D()->set_as_dirty();
+}
+
 bool PartPlateList::move_plate(int index, const Vec2d& position)
 {
-    if (!m_independent_setups || index < 0 || index >= int(m_plate_list.size()) ||
-        !position.allFinite() || position.cwiseAbs().maxCoeff() > 100000.0 ||
+    if (index < 0 || index >= int(m_plate_list.size())) return false;
+    return move_plates({index}, position - m_plate_list[index]->get_origin().head<2>());
+}
+
+std::optional<Vec2d> PartPlateList::new_stage_plate_position(const Vec2d& anchor) const
+{
+    if (!m_independent_setups || m_plate_list.empty() || (m_plater && m_plater->is_background_process_slicing()))
+        return std::nullopt;
+    // A moved plate takes its bed from its setup, which a new plate copies from the current one.
+    const PartPlate* source = get_curr_plate();
+    const auto* area = source->print_setup().config.option<ConfigOptionPoints>("printable_area");
+    if (!area || area->values.size() < 3) return std::nullopt;
+    const BoundingBoxf bed(area->values);
+    if (!bed.defined || !bed.min.allFinite() || !bed.max.allFinite()) return std::nullopt;
+    // The candidate starts on the current bed, which it overlaps, so only a
+    // translation onto free space is accepted.
+    const Vec2d origin = source->m_origin.head<2>();
+    auto bounds = workspace_plate_bounds();
+    for (auto& plate : bounds) plate.stage_id.clear();
+    bounds.push_back({"new-plate", origin, BoundingBoxf(bed.min + origin, bed.max + origin), false});
+    const Vec2d size = bed.size();
+    for (int row = 0; row < 16; ++row)
+        for (int column = 0; column < 4; ++column) {
+            const Vec2d position = anchor + Vec2d(column * (size.x() + 80.0), -row * (size.y() + 100.0));
+            if (can_move_workspace_stage(bounds, "new-plate", position - origin)) return position;
+        }
+    return std::nullopt;
+}
+
+namespace {
+BoundingBoxf stage_bounds_with_labels(const WorkspaceStage& stage, const std::vector<WorkspacePlateBounds>& plates);
+}
+
+std::vector<std::pair<int, Vec2d>> PartPlateList::workspace_arrangement(const std::vector<int>& removed) const
+{
+    if (!m_independent_setups || (m_plater && m_plater->is_background_process_slicing())) return {};
+
+    // Keep locked beds and stage members in place. The movable beds form rows
+    // below those fixed bounds, so the final layout cannot intersect them.
+    std::vector<int> movable;
+    double left = 0.0;
+    double top = 0.0;
+    bool has_fixed = false;
+    for (int i = 0; i < int(m_plate_list.size()); ++i) {
+        if (std::find(removed.begin(), removed.end(), i) != removed.end()) continue;
+        const auto* plate = m_plate_list[i];
+        if (!plate->is_locked() && plate->stage_id().empty()) {
+            movable.push_back(i);
+        } else {
+            const auto& box = plate->m_bounding_box;
+            if (!has_fixed) left = box.min.x();
+            else left = std::min(left, box.min.x());
+            top = std::max(top, box.max.y());
+            has_fixed = true;
+        }
+    }
+    const auto all_bounds = workspace_plate_bounds();
+    std::vector<WorkspacePlateBounds> remaining_bounds;
+    remaining_bounds.reserve(all_bounds.size());
+    for (size_t i = 0; i < all_bounds.size(); ++i)
+        if (std::find(removed.begin(), removed.end(), int(i)) == removed.end())
+            remaining_bounds.push_back(all_bounds[i]);
+    for (const auto& stage : m_stages) {
+        const auto bounds = stage_bounds_with_labels(stage, remaining_bounds);
+        if (!bounds.defined) continue;
+        if (!has_fixed) left = bounds.min.x();
+        else left = std::min(left, bounds.min.x());
+        top = std::max(top, bounds.max.y());
+        has_fixed = true;
+    }
+    if (movable.empty()) return {};
+
+    constexpr double x_gap = 80.0; // room for the controls beside each bed
+    constexpr double y_gap = 105.0; // room for its title above the bed
+    const int columns = std::max(1, int(std::ceil(std::sqrt(double(movable.size())))));
+    double row_y = has_fixed ? top + y_gap : 0.0;
+    double row_height = 0.0;
+    double x = has_fixed ? left : 0.0;
+    std::vector<std::pair<int, Vec2d>> destinations;
+    destinations.reserve(movable.size());
+    for (size_t n = 0; n < movable.size(); ++n) {
+        if (n != 0 && n % columns == 0) {
+            x = has_fixed ? left : 0.0;
+            row_y += row_height + y_gap;
+            row_height = 0.0;
+        }
+        const auto* plate = m_plate_list[movable[n]];
+        const auto& cfg = plate->print_setup().config;
+        if (!setup_bed_is_valid(cfg)) return {};
+        const auto& box = plate->m_bounding_box;
+        if (!box.min.allFinite() || !box.max.allFinite()) return {};
+        const Vec2d origin = plate->m_origin.head<2>();
+        const Vec2d destination = Vec2d(x, row_y) - (box.min.head<2>() - origin);
+        if (!destination.allFinite() || destination.cwiseAbs().maxCoeff() > 100000.) return {};
+        destinations.emplace_back(movable[n], destination);
+        x += box.max.x() - box.min.x() + x_gap;
+        row_height = std::max(row_height, box.max.y() - box.min.y());
+    }
+    return destinations;
+}
+
+void PartPlateList::freeze_workspace_positions()
+{
+    for (auto* plate : m_plate_list) {
+        plate->m_has_workspace_position = true;
+        plate->m_workspace_position = plate->m_origin.head<2>();
+    }
+}
+
+bool PartPlateList::arrange_workspace_plates()
+{
+    const auto destinations = workspace_arrangement();
+    if (destinations.empty()) return false;
+    const bool changed = std::any_of(destinations.begin(), destinations.end(), [&](const std::pair<int, Vec2d>& entry) {
+        return (entry.second - m_plate_list[entry.first]->m_origin.head<2>()).squaredNorm() > 1e-12;
+    });
+    if (!changed) return false;
+
+    freeze_workspace_positions();
+    for (const auto& [index, position] : destinations) {
+        auto* plate = m_plate_list[index];
+        if ((position - plate->m_origin.head<2>()).squaredNorm() < 1e-12) continue;
+        plate->m_workspace_position = position;
+        Vec3d origin(position.x(), position.y(), 0.0);
+        plate->set_pos_and_size(origin, plate->m_width, plate->m_depth, plate->m_height, true, false);
+        const auto& cfg = plate->print_setup().config;
+        set_shape_from_setup(*plate, cfg, position);
+        plate->update_slice_result_valid_state(false);
+    }
+    workspace_layout_changed(true);
+    return true;
+}
+
+bool PartPlateList::can_move_plates(const std::vector<int>& indices, const Vec2d& delta) const
+{
+    if (!m_independent_setups || indices.empty() || !delta.allFinite() || delta.squaredNorm() < 1e-12 ||
         (m_plater && m_plater->is_background_process_slicing())) return false;
-    PartPlate* plate = m_plate_list[index];
-    if (plate->is_locked()) return false;
-    const Vec3d delta = Vec3d(position.x(), position.y(), 0.0) - plate->m_origin;
-    if (delta.squaredNorm() < 1e-12) return false;
-    const auto bounds = plate->get_bounding_box();
-    for (const auto* other : m_plate_list) {
-        if (other == plate) continue;
-        const auto& box = other->m_bounding_box;
-        if (bounds.min.x() + delta.x() < box.max.x() + 5.0 &&
-            bounds.max.x() + delta.x() > box.min.x() - 5.0 &&
-            bounds.min.y() + delta.y() < box.max.y() + 5.0 &&
-            bounds.max.y() + delta.y() > box.min.y() - 5.0) return false;
+    auto bounds = workspace_plate_bounds();
+    for (auto& bed : bounds) bed.stage_id.clear();
+    std::vector<bool> moving(m_plate_list.size(), false);
+    for (int i : indices) {
+        if (i < 0 || i >= int(m_plate_list.size()) || moving[i] ||
+            (m_plate_list[i]->get_origin().head<2>() + delta).cwiseAbs().maxCoeff() > 100000.) return false;
+        const auto& cfg = m_plate_list[i]->print_setup().config;
+        if (!setup_bed_is_valid(cfg)) return false;
+        moving[i] = true;
+        bounds[i].stage_id = "moving-plates";
     }
-    // Free placement freezes the existing layout so adding or removing a plate
-    // cannot reflow its neighbours back into the automatic grid.
-    for (auto* current : m_plate_list) {
-        current->m_has_workspace_position = true;
-        current->m_workspace_position = current->m_origin.head<2>();
+    // Validate the whole translation before touching a bed. Members may move
+    // through one another's old positions, but never through stationary beds.
+    return can_move_workspace_stage(bounds, "moving-plates", delta);
+}
+
+bool PartPlateList::move_plates(const std::vector<int>& indices, const Vec2d& delta)
+{
+    if (!can_move_plates(indices, delta)) return false;
+    freeze_workspace_positions();
+    for (int i : indices) {
+        auto* plate = m_plate_list[i];
+        const Vec2d position = plate->m_origin.head<2>() + delta;
+        plate->m_workspace_position = position;
+        Vec3d origin(position.x(), position.y(), 0.);
+        plate->set_pos_and_size(origin, plate->m_width, plate->m_depth, plate->m_height, true, false);
+        const auto& cfg = plate->print_setup().config;
+        set_shape_from_setup(*plate, cfg, position);
+        plate->update_slice_result_valid_state(false);
     }
-    plate->m_workspace_position = position;
-    Vec3d origin(position.x(), position.y(), 0.0);
-    plate->set_pos_and_size(origin, plate->m_width, plate->m_depth, plate->m_height, true, false);
-    const auto& cfg = plate->print_setup().config;
-    plate->set_shape(cfg.option<ConfigOptionPoints>("printable_area")->values,
-        cfg.option<ConfigOptionPoints>("bed_exclude_area")->values,
-        cfg.option<ConfigOptionPointsGroups>("extruder_printable_area")->values,
-        cfg.option<ConfigOptionFloatsNullable>("extruder_printable_height")->values,
-        position, cfg.opt_float("extruder_clearance_height_to_lid"), cfg.opt_float("extruder_clearance_height_to_rod"));
-    plate->update_slice_result_valid_state(false);
+    workspace_layout_changed(true);
+    return true;
+}
+
+void PartPlateList::workspace_layout_changed(bool beds_moved)
+{
     calc_bounding_boxes();
-    if (m_plater) {
-        auto* canvas = m_plater->get_view3D_canvas3D();
-        canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed);
-        register_raycasters_for_picking(*canvas);
-        Vec2d bed_position(position);
-        if (index == m_current_plate) m_plater->set_bed_position(bed_position);
-        m_plater->set_plater_dirty(true);
-        m_plater->update();
-        m_plater->update_title_dirty_status();
+    if (!m_plater) return;
+    auto* canvas = m_plater->get_view3D_canvas3D();
+    if (beds_moved) {
+        if (canvas) {
+            canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed);
+            register_raycasters_for_picking(*canvas);
+        }
+        Vec2d position = m_plate_list[m_current_plate]->m_origin.head<2>();
+        m_plater->set_bed_position(position);
+        if (canvas && canvas->is_workspace_dragging()) {
+            // Reuse model meshes and picking trees while the pointer is moving.
+            // Full scene validation, tower generation, sidebar and assembly-view
+            // updates are performed once by mouse_up_cleanup(), also on cancel.
+            for (const auto& raycaster : *canvas->get_raycasters_for_picking(SceneRaycaster::EType::Volume)) {
+                const int index = SceneRaycaster::decode_id(SceneRaycaster::EType::Volume, raycaster->get_id());
+                if (index >= 0 && index < int(canvas->get_volumes_count()))
+                    raycaster->set_transform(canvas->get_volumes().volumes[index]->world_matrix());
+            }
+            canvas->get_selection().set_bounding_boxes_dirty();
+            canvas->refresh_camera_scene_box();
+            canvas->set_as_dirty();
+        } else {
+            m_plater->update();
+        }
+    } else if (canvas) {
+        // Naming and grouping do not change printable geometry or require slicing.
+        canvas->set_as_dirty();
     }
+    m_plater->set_plater_dirty(true);
+    if (!canvas || !canvas->is_workspace_dragging())
+        m_plater->update_title_dirty_status();
+}
+
+namespace {
+BoundingBoxf stage_bounds_with_labels(const WorkspaceStage& stage, const std::vector<WorkspacePlateBounds>& plates);
+}
+
+PlatePrintSetup PartPlateList::process_setup(int index) const
+{
+    auto setup = m_plate_list.at(index)->print_setup();
+    if (setup.empty() || !setup.process_base.empty()) return setup;
+    const auto* preset = wxGetApp().preset_bundle->prints.find_preset(setup.config.has("print_settings_id") ? setup.config.opt_string("print_settings_id") : std::string{});
+    initialize_process_cascade(setup, preset ? preset->config : DynamicPrintConfig{}, *m_plate_list[index]->config());
+    return setup;
+}
+
+bool PartPlateList::refresh_process_cascade()
+{
+    if (m_process_scopes.project.empty() && m_process_scopes.stages.empty()) return true;
+    std::vector<PlateProcessCascade> cascade;
+    for (size_t i = 0; i < m_plate_list.size(); ++i)
+        cascade.push_back({process_setup(int(i)), *m_plate_list[i]->config(), m_plate_list[i]->stage_id()});
+    auto resolved = resolve_process_cascade(cascade, m_process_scopes);
+    if (resolved.failed >= 0) return false;
+    for (size_t i = 0; i < m_plate_list.size(); ++i) {
+        auto& edit = resolved.plates[i];
+        cascade[i].setup.config = std::move(edit.config);
+        m_plate_list[i]->print_setup() = std::move(cascade[i].setup);
+        *m_plate_list[i]->config() = std::move(edit.overrides);
+        if (edit.changed) m_plate_list[i]->update_slice_result_valid_state(false);
+    }
+    return true;
+}
+
+std::string PartPlateList::create_stage(const std::string& name, const Vec2d& position, int member_index)
+{
+    if (printer_technology != ptFFF || member_index < -1 || member_index >= int(m_plate_list.size()) ||
+        (m_plater && m_plater->is_background_process_slicing())) return {};
+    WorkspaceStage stage{boost::uuids::to_string(boost::uuids::random_generator()()), name, position};
+    auto stages = m_stages;
+    stages.push_back(stage);
+    try { serialize_workspace_stages(stages); }
+    catch (const std::exception&) { return {}; }
+    auto plates = workspace_plate_bounds();
+    if (member_index >= 0) plates[member_index].stage_id = stage.id;
+    const auto area = stage_bounds_with_labels(stage, plates);
+    if (!stage_area_is_available(stage.id, area, area)) return {};
+    enable_independent_setups();
+    m_stages.push_back(stage);
+    if (member_index >= 0) m_plate_list[member_index]->m_stage_id = stage.id;
+    workspace_layout_changed(false);
+    return stage.id;
+}
+
+bool PartPlateList::rename_stage(const std::string& id, const std::string& name)
+{
+    if (m_plater && m_plater->is_background_process_slicing()) return false;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end() || stage->name == name) return false;
+    WorkspaceStage renamed = *stage;
+    renamed.name = name;
+    try { serialize_workspace_stages({renamed}); }
+    catch (const std::exception&) { return false; }
+    stage->name = name;
+    workspace_layout_changed(false);
+    return true;
+}
+
+bool PartPlateList::remove_stage(const std::string& id)
+{
+    if (m_plater && m_plater->is_background_process_slicing()) return false;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end()) return false;
+    std::vector<int> members;
+    for (int i = 0; i < int(m_plate_list.size()); ++i)
+        if (m_plate_list[i]->m_stage_id == id) members.push_back(i);
+    if (!members.empty() && !can_set_plates_stage(members, "")) return false;
+    if (!members.empty()) set_plates_stage(members, "");
+    m_stages.erase(stage);
+    m_process_scopes.stages.erase(id);
+    workspace_layout_changed(false);
+    return true;
+}
+
+namespace {
+BoundingBoxf stage_minimum_bounds_with_labels(const WorkspaceStage& stage, const std::vector<WorkspacePlateBounds>& plates)
+{
+    auto bounds = workspace_stage_minimum_bounds(stage, plates);
+    for (const auto& plate : plates) {
+        if (plate.stage_id != stage.id || !plate.bounds.defined) continue;
+        // Display margins do not alter printable areas or physical collisions.
+        bounds.merge(Vec2d(plate.bounds.min.x() + std::clamp(plate.bounds.size().x(), 180.0, 280.0) + 80.0,
+            plate.bounds.max.y() + FLOATING_PLATE_LABEL_GAP + FLOATING_PLATE_LABEL_HEIGHT + 38.0));
+    }
+    return bounds;
+}
+
+BoundingBoxf stage_bounds_with_labels(const WorkspaceStage& stage, const std::vector<WorkspacePlateBounds>& plates)
+{
+    auto bounds = workspace_stage_bounds(stage, plates);
+    if (std::any_of(plates.begin(), plates.end(), [&](const WorkspacePlateBounds& plate) { return plate.stage_id == stage.id; }))
+        bounds.merge(stage_minimum_bounds_with_labels(stage, plates));
+    return bounds;
+}
+
+}
+
+bool PartPlateList::stage_area_is_available(const std::string& id, const BoundingBoxf& current, const BoundingBoxf& proposed) const
+{
+    std::vector<BoundingBoxf> others;
+    others.reserve(m_stages.size());
+    for (const auto& stage : m_stages)
+        if (stage.id != id) others.push_back(WorkspaceStyle::stage_display_area(stage_bounds(stage.id)));
+    return can_change_workspace_stage_area(WorkspaceStyle::stage_display_area(current),
+        WorkspaceStyle::stage_display_area(proposed), others);
+}
+
+bool PartPlateList::can_set_plate_stage(int index, const std::string& id) const
+{
+    return can_set_plates_stage({index}, id);
+}
+
+bool PartPlateList::can_set_plates_stage(const std::vector<int>& indices, const std::string& id) const
+{
+    if (!m_independent_setups || indices.empty() || (m_plater && m_plater->is_background_process_slicing())) return false;
+    auto plates = workspace_plate_bounds();
+    for (int index : indices) {
+        if (index < 0 || index >= int(plates.size())) return false;
+        plates[index].stage_id = id;
+    }
+    for (int index : indices) {
+        if (m_process_scopes.project.empty() && m_process_scopes.stages.empty()) continue;
+        if (!resolve_plate_process({process_setup(index), *m_plate_list[index]->config(), id}, m_process_scopes).errors.empty())
+            return false;
+    }
+    if (id.empty()) return true;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end()) return false;
+    const auto current = stage_bounds(id);
+    const auto proposed = stage_bounds_with_labels(*stage, plates);
+    if (current.defined && proposed.defined && current.min.isApprox(proposed.min, 1e-9) && current.max.isApprox(proposed.max, 1e-9))
+        return true;
+    return stage_area_is_available(id, current, proposed);
+}
+
+bool PartPlateList::set_plate_stage(int index, const std::string& id)
+{
+    return set_plates_stage({index}, id);
+}
+
+bool PartPlateList::set_plates_stage(const std::vector<int>& indices, const std::string& id)
+{
+    if (!can_set_plates_stage(indices, id)) return false;
+    bool changed = false;
+    for (int index : indices) {
+        changed |= m_plate_list[index]->m_stage_id != id;
+        m_plate_list[index]->m_stage_id = id;
+    }
+    if (changed) {
+        refresh_process_cascade();
+        if (m_plater) m_plater->activate_plate_setup();
+        workspace_layout_changed(false);
+    }
+    return changed;
+}
+
+std::vector<WorkspacePlateBounds> PartPlateList::workspace_plate_bounds() const
+{
+    std::vector<WorkspacePlateBounds> plates;
+    plates.reserve(m_plate_list.size());
+    for (const auto* plate : m_plate_list) {
+        const auto& box = plate->m_bounding_box;
+        plates.push_back({plate->m_stage_id, plate->m_origin.head<2>(),
+                          BoundingBoxf(Vec2d(box.min.x(), box.min.y()), Vec2d(box.max.x(), box.max.y())), plate->is_locked()});
+    }
+    return plates;
+}
+
+BoundingBoxf PartPlateList::stage_bounds(const std::string& id) const
+{
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end()) return {};
+    if (const auto frozen = m_plate_drag_stage_bounds.find(id); frozen != m_plate_drag_stage_bounds.end())
+        return frozen->second;
+    return stage_bounds_with_labels(*stage, workspace_plate_bounds());
+}
+
+BoundingBoxf PartPlateList::stage_minimum_bounds(const std::string& id) const
+{
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end()) return {};
+    return stage_minimum_bounds_with_labels(*stage, workspace_plate_bounds());
+}
+
+bool PartPlateList::can_resize_stage(const std::string& id, const BoundingBoxf& bounds) const
+{
+    if (!m_independent_setups || (m_plater && m_plater->is_background_process_slicing())) return false;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end() || !can_resize_workspace_stage(*stage, workspace_plate_bounds(), bounds)) return false;
+    const bool has_members = std::any_of(m_plate_list.begin(), m_plate_list.end(),
+        [&](const PartPlate* plate) { return plate->stage_id() == id; });
+    if (has_members && !bounds.contains(stage_minimum_bounds(id))) return false;
+    if (!stage_area_is_available(id, stage_bounds(id), bounds)) return false;
+    const BoundingBoxf frame(bounds.min - stage->position, bounds.max - stage->position);
+    if (stage->frame.defined && stage->frame.min.isApprox(frame.min, 1e-9) && stage->frame.max.isApprox(frame.max, 1e-9)) return false;
+    return true;
+}
+
+bool PartPlateList::resize_stage(const std::string& id, const BoundingBoxf& bounds)
+{
+    if (!can_resize_stage(id, bounds)) return false;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    stage->frame = BoundingBoxf(bounds.min - stage->position, bounds.max - stage->position);
+    workspace_layout_changed(false);
+    return true;
+}
+
+bool PartPlateList::restore_stage_frame(const std::string& id, const BoundingBoxf& frame)
+{
+    if (m_plater && m_plater->is_background_process_slicing()) return false;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end()) return false;
+    WorkspaceStage restored = *stage;
+    restored.frame = frame;
+    try { serialize_workspace_stages({restored}); }
+    catch (const std::exception&) { return false; }
+    stage->frame = frame;
+    workspace_layout_changed(false);
+    return true;
+}
+
+bool PartPlateList::can_move_stage(const std::string& id, const Vec2d& position) const
+{
+    return can_move_stage_internal(id, position, true);
+}
+
+bool PartPlateList::can_move_stage_internal(const std::string& id, const Vec2d& position, bool check_stage_area) const
+{
+    if (!m_independent_setups || !position.allFinite() || position.cwiseAbs().maxCoeff() > 100000.0 ||
+        (m_plater && m_plater->is_background_process_slicing())) return false;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    if (stage == m_stages.end()) return false;
+    const Vec2d delta = position - stage->position;
+    WorkspaceStage moved = *stage;
+    moved.position = position;
+    try { serialize_workspace_stages({moved}); }
+    catch (const std::exception&) { return false; }
+    const auto plates = workspace_plate_bounds();
+    if (!can_move_workspace_stage(plates, id, delta)) return false;
+    for (const auto* plate : m_plate_list) {
+        if (plate->stage_id() != id) continue;
+        const auto& cfg = plate->print_setup().config;
+        if (!setup_bed_is_valid(cfg)) return false;
+    }
+    const BoundingBoxf current = stage_bounds(id);
+    const BoundingBoxf proposed(current.min + delta, current.max + delta);
+    return !check_stage_area || stage_area_is_available(id, current, proposed);
+}
+
+bool PartPlateList::move_stage(const std::string& id, const Vec2d& position)
+{
+    return move_stage_internal(id, position, true);
+}
+
+bool PartPlateList::restore_stage_position(const std::string& id, const Vec2d& position)
+{
+    return move_stage_internal(id, position, false);
+}
+
+bool PartPlateList::move_stage_internal(const std::string& id, const Vec2d& position, bool check_stage_area)
+{
+    if (!can_move_stage_internal(id, position, check_stage_area)) return false;
+    auto stage = std::find_if(m_stages.begin(), m_stages.end(), [&](const WorkspaceStage& value) { return value.id == id; });
+    const Vec2d delta = position - stage->position;
+    // All members retain their spacing; preflight has already checked their
+    // setup, locks, other physical beds, and the proposed stage area.
+    freeze_workspace_positions();
+    for (auto* plate : m_plate_list) {
+        if (plate->m_stage_id != id) continue;
+        plate->m_workspace_position += delta;
+        Vec3d origin(plate->m_workspace_position.x(), plate->m_workspace_position.y(), 0.0);
+        plate->set_pos_and_size(origin, plate->m_width, plate->m_depth, plate->m_height, true, false);
+        const auto& cfg = plate->print_setup().config;
+        set_shape_from_setup(*plate, cfg, plate->m_workspace_position);
+        plate->update_slice_result_valid_state(false);
+    }
+    stage->position = position;
+    workspace_layout_changed(true);
     return true;
 }
 
@@ -5397,8 +6177,10 @@ Vec3d PartPlateList::compute_origin_using_new_size(int i, int new_width, int new
 	row = i / m_plate_cols;
 	col = i % m_plate_cols;
 
-	origin(0) = col * (new_width * (1. + LOGICAL_PART_PLATE_GAP));
-	origin(1) = -row * (new_depth * (1. + LOGICAL_PART_PLATE_GAP));
+    const Vec2d stride = m_plater && printer_technology == ptFFF ? workspace_plate_stride(new_width, new_depth) :
+        Vec2d(new_width * (1. + LOGICAL_PART_PLATE_GAP), new_depth * (1. + LOGICAL_PART_PLATE_GAP));
+	origin(0) = col * stride.x();
+	origin(1) = -row * stride.y();
 	origin(2) = 0;
 
 	return origin;
@@ -5636,7 +6418,7 @@ void PartPlateList::generate_icon_textures()
     auto l = Label::sysFont(int(size), true);
     wxFont* font = &l;
 
-	for (int i = 0; i < MAX_PLATE_COUNT; i++) {
+	for (int i = 0; i < max_project_plates; i++) {
 		if (m_idx_textures[i].get_id() == 0) {
 			//file_name = path + (boost::format("plate_%1%.svg") % (i + 1)).str();
 			if ( i < 9 )
@@ -5681,7 +6463,7 @@ void PartPlateList::release_icon_textures()
     for (GLTexture& texture : m_imex_mode_hovered_textures)
         texture.reset();
     m_imex_warn_texture.reset();
-	for (int i = 0;i < MAX_PLATE_COUNT; i++) {
+	for (int i = 0;i < max_project_plates; i++) {
 		m_idx_textures[i].reset();
 	}
 	//reset
@@ -5846,6 +6628,11 @@ void PartPlateList::reset_size(int width, int depth, double height, bool reload_
 //clear all the instances in the plate, but keep the plates
 void PartPlateList::clear(bool delete_plates, bool release_print_list, bool except_locked, int plate_index)
 {
+    if (delete_plates) {
+        m_workspace_selection.clear();
+        m_workspace_selection_explicit = false;
+    }
+    m_plate_drag_stage_bounds.clear();
 	for (unsigned int i = 0; i < (unsigned int)m_plate_list.size(); ++i)
 	{
 		PartPlate* plate = m_plate_list[i];
@@ -5865,6 +6652,8 @@ void PartPlateList::clear(bool delete_plates, bool release_print_list, bool exce
 	{
 		//also delete print related to the plate
 		m_plate_list.clear();
+        m_stages.clear();
+        m_process_scopes = {};
 		m_current_plate = 0;
 	}
 
@@ -5951,14 +6740,9 @@ int PartPlateList::create_plate(bool adjust_position)
 	new_index = m_plate_list.size();
 	if (new_index >= MAX_PLATES_COUNT)
 		return -1;
-    if (m_independent_setups) {
-        // A new device gets space beside the existing beds without reflowing
-        // their geometry or moving the objects already prepared on them.
-        for (auto* existing : m_plate_list) {
-            existing->m_has_workspace_position = true;
-            existing->m_workspace_position = existing->m_origin.head<2>();
-        }
-    }
+    // A new device gets space beside the existing beds without reflowing
+    // their geometry or moving the objects already prepared on them.
+    if (m_independent_setups) freeze_workspace_positions();
 	int cols = compute_colum_count(new_index + 1);
 	int old_cols = compute_colum_count(new_index);
 	// Orca: Rebuild plate membership before moving instances during a grid reflow.
@@ -5971,7 +6755,7 @@ int PartPlateList::create_plate(bool adjust_position)
     if (free_layout) {
         double right = 0.0;
         for (const auto* existing : m_plate_list) right = std::max(right, existing->m_bounding_box.max.x());
-        origin = Vec3d(right + m_plate_width * LOGICAL_PART_PLATE_GAP, 0.0, 0.0);
+        origin = Vec3d(right + plate_stride_x() - m_plate_width, 0.0, 0.0);
     }
 	plate = new PartPlate(this, origin, m_plate_width, m_plate_depth, m_plate_height, m_plater, m_model, true, printer_technology);
     plate->m_has_workspace_position = free_layout;
@@ -5991,6 +6775,14 @@ int PartPlateList::create_plate(bool adjust_position)
     if (m_independent_setups && !m_plate_list.empty() && m_plater && !m_plater->is_loading_project()) {
         m_plater->capture_plate_setup();
         plate->print_setup() = get_curr_plate()->print_setup();
+        auto& setup = plate->print_setup();
+        if (!setup.process_base.empty()) {
+            const auto values = resolved_process_settings(setup, m_process_scopes, "");
+            const auto resolved = prepare_plate_process_edit(setup.config, {}, values);
+            if (resolved.errors.empty()) setup.config = resolved.config;
+            else setup.process_overrides.apply_only(setup.config, plate_process_edit_keys());
+            setup.process_scope_catalog.clear();
+        }
         const PartPlate* source = get_curr_plate();
         plate->set_pos_and_size(origin, source->m_width, source->m_depth, source->m_height, false, false);
     }
@@ -6063,6 +6855,7 @@ int PartPlateList::duplicate_plate(int index)
 
     if (m_independent_setups) {
         new_plate->print_setup() = old_plate->print_setup();
+        new_plate->m_stage_id = old_plate->m_stage_id;
         new_plate->m_config = old_plate->m_config;
         Vec3d origin = new_plate->m_origin;
         new_plate->set_pos_and_size(origin, old_plate->m_width, old_plate->m_depth, old_plate->m_height, false, false);
@@ -6127,6 +6920,21 @@ int PartPlateList::destroy_print(int print_index)
 	return result;
 }
 
+std::vector<int> PartPlateList::empty_plate_indices_to_remove() const
+{
+    if (!m_independent_setups || m_plate_list.size() <= 1) return {};
+
+    std::vector<int> indices;
+    for (int i = 0; i < int(m_plate_list.size()); ++i)
+        if (m_plate_list[i]->empty() && !m_plate_list[i]->is_locked())
+            indices.push_back(i);
+
+    // An entirely empty workspace still needs one plate. Keep the selected one.
+    if (indices.size() == m_plate_list.size())
+        indices.erase(std::find(indices.begin(), indices.end(), m_current_plate));
+    return indices;
+}
+
 //delete a plate by index
 //keep its instance at origin position and add them into next plate if have
 //update the plate index and position after it
@@ -6154,6 +6962,14 @@ int PartPlateList::delete_plate(int index)
 		return -1;
 	}
 	const std::string plate_name = plate->get_plate_name();
+    const bool deleting_current = m_current_plate == index;
+    if (m_independent_setups) {
+        freeze_workspace_positions();
+        // The editing context belongs to the deleted plate. Keep its edits with
+        // that plate while m_current_plate still refers to it; no survivor may
+        // receive them.
+        if (deleting_current && m_plater) m_plater->capture_plate_setup();
+    }
 
 	if (m_plater) {
 		// In GUI mode
@@ -6188,6 +7004,8 @@ int PartPlateList::delete_plate(int index)
 		assert(plate != NULL);
 
 		plate->set_index(i);
+        // Renumbering a saved job must not replace its bed with the active bed.
+        if (m_independent_setups) continue;
 		Vec3d origin = compute_origin(i, m_plate_cols);
 		plate->set_pos_and_size(origin, m_plate_width, m_plate_depth, m_plate_height, true);
 
@@ -6197,10 +7015,22 @@ int PartPlateList::delete_plate(int index)
 	}
 
 	//update current_plate if delete current
-	if (m_current_plate == index && index == 0) {
+	if (deleting_current && m_independent_setups) {
+		// Point at a valid survivor before selecting it, then load its own setup
+		// instead of capturing the deleted plate's editing context into it.
+		m_current_plate = index == 0 ? 0 : index - 1;
+		select_plate(m_current_plate, true);
+	}
+	else if (m_current_plate == index && index == 0) {
 		select_plate(0);
 	}
-	else if (m_current_plate >= index) {
+	else if (m_current_plate > index) {
+		// The selected plate has only been renumbered. Keep its setup active and
+		// avoid looking up its old index after the vector has shrunk.
+		--m_current_plate;
+		select_plate(m_current_plate);
+	}
+	else if (m_current_plate == index) {
 		select_plate(m_current_plate - 1);
 	}
 	else {
@@ -6212,7 +7042,12 @@ int PartPlateList::delete_plate(int index)
 
 	unprintable_plate.set_index(m_plate_list.size());
 
-	if (old_cols != cols)
+    if (m_independent_setups) {
+        Vec3d origin2 = compute_origin_for_unprintable();
+        unprintable_plate.set_pos_and_size(origin2, m_plate_width, m_plate_depth, m_plate_height, true);
+        calc_bounding_boxes();
+    }
+	else if (old_cols != cols)
 	{
 		//update the origin of each plate
 		update_all_plates_pos_and_size();
@@ -6345,10 +7180,10 @@ std::set<int> PartPlateList::get_extruders(bool conside_custom_gcode) const
 
 
 //select plate
-int PartPlateList::select_plate(int index)
+int PartPlateList::select_plate(int index, bool discard_live_setup)
 {
     if (index < 0 || index >= int(m_plate_list.size())) return -1;
-    if (m_plater && m_intialized && !m_plater->is_loading_project() &&
+    if (!discard_live_setup && m_plater && m_intialized && !m_plater->is_loading_project() &&
         !m_plater->prepare_plate_setup_switch(index)) return -1;
 	std::unique_lock<std::mutex> local_lock(m_plates_mutex);
 	if (m_plate_list.empty() || index >= m_plate_list.size()) {
@@ -6370,6 +7205,11 @@ int PartPlateList::select_plate(int index)
 	m_current_plate = index;
 	m_plate_list[m_current_plate]->set_selected();
 
+    if (m_independent_setups && !is_workspace_selected(index)) {
+        m_workspace_selection = {m_plate_list[index]->id()};
+        m_workspace_selection_explicit = true;
+    }
+
 	//BBS
 	if(m_model)
 		m_model->curr_plate_index = index;
@@ -6382,10 +7222,11 @@ int PartPlateList::select_plate(int index)
 	}
 
     local_lock.unlock();
-    if (previous_index != index && m_independent_setups && m_intialized && m_plater && !m_plater->is_loading_project())
+    const bool switched = previous_index != index || discard_live_setup;
+    if (switched && m_independent_setups && m_intialized && m_plater && !m_plater->is_loading_project())
         m_plater->activate_plate_setup();
 
-    if (previous_index != index && m_intialized && m_plater != nullptr && !m_plater->is_loading_project()) {
+    if (switched && m_intialized && m_plater != nullptr && !m_plater->is_loading_project()) {
         LifecycleEventContext ctx;
         ctx.name = m_plate_list[index]->get_plate_name();
         ctx.index = index;
@@ -6440,7 +7281,8 @@ double PartPlateList::plate_stride_x()
 	//const auto plate_shape = Slic3r::Polygon::new_scale(m_shape);
 	//double plate_width = plate_shape.bounding_box().size().x();
 	//return unscaled<double>((1. + LOGICAL_PART_PLATE_GAP) * plate_width);
-	return m_plate_width * (1. + LOGICAL_PART_PLATE_GAP);
+    return m_plater && printer_technology == ptFFF ? workspace_plate_stride(m_plate_width, m_plate_depth).x() :
+        m_plate_width * (1. + LOGICAL_PART_PLATE_GAP);
 }
 
 double PartPlateList::plate_stride_y()
@@ -6448,7 +7290,8 @@ double PartPlateList::plate_stride_y()
 	//const auto plate_shape = Slic3r::Polygon::new_scale(m_shape);
 	//double plate_depth = plate_shape.bounding_box().size().y();
 	//return unscaled<double>((1. + LOGICAL_PART_PLATE_GAP) * plate_depth);
-	return m_plate_depth * (1. + LOGICAL_PART_PLATE_GAP);
+    return m_plater && printer_technology == ptFFF ? workspace_plate_stride(m_plate_width, m_plate_depth).y() :
+        m_plate_depth * (1. + LOGICAL_PART_PLATE_GAP);
 }
 
 //get the plate counts, not including the invalid plate
@@ -6492,12 +7335,7 @@ void PartPlateList::update_all_plates_pos_and_size(bool adjust_position, bool wi
             m_independent_setups ? plate->m_height : m_plate_height, adjust_position, m_independent_setups ? false : do_clear);
         if (m_independent_setups && !plate->print_setup().empty()) {
             const auto& cfg = plate->print_setup().config;
-            plate->set_shape(cfg.option<ConfigOptionPoints>("printable_area")->values,
-                cfg.option<ConfigOptionPoints>("bed_exclude_area")->values,
-                cfg.option<ConfigOptionPointsGroups>("extruder_printable_area")->values,
-                cfg.option<ConfigOptionFloatsNullable>("extruder_printable_height")->values,
-                origin1.head<2>(), cfg.opt_float("extruder_clearance_height_to_lid"),
-                cfg.opt_float("extruder_clearance_height_to_rod"));
+            set_shape_from_setup(*plate, cfg, origin1.head<2>());
         }
 
 		// set default wipe pos when switch plate
@@ -6522,6 +7360,27 @@ int PartPlateList::move_plate_to_index(int old_index, int new_index)
 		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":should not happen, the same index %1%") % old_index;
 		return -1;
 	}
+
+    if (old_index < 0 || new_index < 0 || old_index >= int(m_plate_list.size()) ||
+        new_index >= int(m_plate_list.size())) return -1;
+    if (m_independent_setups) {
+        if (m_plater && m_plater->is_background_process_slicing()) return -1;
+        if (m_plater) m_plater->capture_plate_setup();
+        freeze_workspace_positions();
+        PartPlate* moved = m_plate_list[old_index];
+        m_plate_list.erase(m_plate_list.begin() + old_index);
+        m_plate_list.insert(m_plate_list.begin() + new_index, moved);
+        for (size_t i = 0; i < m_plate_list.size(); ++i) {
+            m_plate_list[i]->set_index(int(i));
+            m_plate_list[i]->set_unselected();
+        }
+        m_current_plate = new_index;
+        moved->set_selected();
+        if (m_model) m_model->curr_plate_index = new_index;
+        if (m_plater) m_plater->activate_plate_setup();
+        workspace_layout_changed(true);
+        return 0;
+    }
 
 	// Orca: Rebuild plate membership before moving the plates.
 	reload_all_objects();
@@ -7419,6 +8278,26 @@ void PartPlateList::calc_bounding_boxes()
 	for (it = m_plate_list.begin(); it != m_plate_list.end(); it++) {
 		m_bounding_box.merge((*it)->get_bounding_box(true));
 	}
+    // Preview fits its depth range tightly. Include the same title geometry
+    // drawn for both shared and independent setups, even before textures exist.
+    for (const auto* plate : m_plate_list) {
+        const BoundingBoxf bed = get_extents(plate->get_shape());
+        if (!bed.defined) continue;
+        const double scale = 1.;
+        const double width = int(std::clamp(bed.size().x(), 180.0, 280.0)) * scale;
+        const double bottom = bed.max.y() + FLOATING_PLATE_LABEL_GAP;
+        m_bounding_box.merge(Vec3d(bed.min.x(), bottom, WorkspaceStyle::chrome_z));
+        m_bounding_box.merge(Vec3d(bed.min.x() + width,
+            bottom + FLOATING_PLATE_LABEL_HEIGHT * scale, WorkspaceStyle::chrome_z));
+    }
+    if (m_independent_setups) {
+        for (const auto& stage : m_stages) {
+            const auto bounds = stage_bounds(stage.id);
+            if (!bounds.defined) continue;
+            m_bounding_box.merge(Vec3d(bounds.min.x(), bounds.min.y(), 0.0));
+            m_bounding_box.merge(Vec3d(bounds.max.x(), bounds.max.y() + WorkspaceStyle::stage_title_height, 0.0));
+        }
+    }
 }
 
 void PartPlateList::select_plate_view()
@@ -7700,7 +8579,10 @@ int PartPlateList::rebuild_plates_after_deserialize(std::vector<bool>& previous_
 		m_print_index++;
 	}
 
-    if (m_independent_setups && m_plater) m_plater->activate_plate_setup();
+    // Point the worker at a surviving Print before unused ones are destroyed. The
+    // restored setup is activated once the jump completes (Plater::priv::
+    // update_after_undo_redo), and only when it differs from the live context.
+    if (m_independent_setups && m_plater) m_plater->update_slicing_context_to_current_partplate();
 
 	//go through the print list, and delete the one not used by plate
 	std::map<int, PrintBase*>::iterator it = m_print_list.begin();
@@ -7810,8 +8692,21 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 			%(i+1) %plate_data_item->plate_thumbnail.width %plate_data_item->plate_thumbnail.height %plate_data_item->plate_thumbnail.pixels.size();
 		plate_data_item->config.apply(*m_plate_list[i]->config());
         plate_data_item->print_setup = m_plate_list[i]->print_setup();
+        plate_data_item->print_setup.process_scope_catalog = plate_data_list.empty() &&
+            (!m_process_scopes.project.empty() || !m_process_scopes.stages.empty()) ? m_process_scopes.serialize() : std::string{};
         plate_data_item->has_workspace_position = m_plate_list[i]->m_has_workspace_position;
         plate_data_item->workspace_position = m_plate_list[i]->m_workspace_position;
+        plate_data_item->has_model_origin = printer_technology == ptFFF;
+        plate_data_item->model_origin = m_plate_list[i]->m_origin.head<2>();
+        if (printer_technology == ptFFF && m_independent_setups) {
+            plate_data_item->has_workspace_position = true;
+            plate_data_item->workspace_position = plate_data_item->model_origin;
+        }
+        plate_data_item->stage_id = m_plate_list[i]->m_stage_id;
+        if (plate_data_list.empty() && !m_stages.empty()) {
+            plate_data_item->has_workspace_stages = true;
+            plate_data_item->workspace_stages = m_stages;
+        }
         if (!plate_data_item->print_setup.empty()) {
             const auto& model = plate_data_item->print_setup.config.opt_string("printer_model");
             for (const auto& vendor : wxGetApp().preset_bundle->vendors)
@@ -7911,6 +8806,127 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 	return ret;
 }
 
+void PartPlateList::append_project_plates(const Model& incoming, const std::vector<PlateData>& plates)
+{
+    if (!m_model || printer_technology != ptFFF || plates.empty() ||
+        m_plate_list.size() + plates.size() > MAX_PLATES_COUNT ||
+        (m_plater && m_plater->is_background_process_slicing()))
+        throw RuntimeError("These plates cannot be added to the current project.");
+    const int first_plate = int(m_plate_list.size());
+    const int first_object = int(m_model->objects.size());
+    // Reject a bad plan before changing either the live model or plate list.
+    for (int i = 0; i < int(plates.size()); ++i) {
+        const auto& plate = plates[i];
+        if (plate.plate_index != first_plate + i || !plate.has_workspace_position ||
+            !plate.workspace_position.allFinite() || plate.workspace_position.cwiseAbs().maxCoeff() > 100000.)
+            throw RuntimeError("Cannot import these plate positions.");
+        PlatePrintSetup::deserialize(plate.print_setup.serialize());
+        const auto& cfg = plate.print_setup.config;
+        for (const char* key : {"bed_exclude_area", "extruder_printable_area", "extruder_printable_height",
+                                "extruder_clearance_height_to_lid", "extruder_clearance_height_to_rod"})
+            if (!cfg.has(key)) throw RuntimeError("Cannot import this plate's printer dimensions.");
+        for (const auto& ref : plate.objects_and_instances)
+            if (ref.first < 0 || ref.first >= int(incoming.objects.size()) || ref.second < 0 ||
+                ref.second >= int(incoming.objects[ref.first]->instances.size()))
+                throw RuntimeError("Cannot import these plate assignments.");
+    }
+    // Build every plate completely before registering any of it, so a failure
+    // leaves neither an unowned Print nor a half-wired plate in this project.
+    std::vector<std::unique_ptr<PartPlate>> built;
+    try {
+        const std::string material_prefix = boost::uuids::to_string(boost::uuids::random_generator()()) + ":";
+        for (const auto* source : incoming.objects) {
+            auto* added = m_model->add_object(*source);
+            for (size_t v = 0; v < source->volumes.size(); ++v) {
+                const auto* volume = source->volumes[v];
+                if (!volume->material_id().empty() && volume->material())
+                    added->volumes[v]->set_material(material_prefix + volume->material_id(), *volume->material());
+            }
+        }
+        for (int i = 0; i < int(plates.size()); ++i) {
+            const auto& saved = plates[i];
+            const auto& cfg = saved.print_setup.config;
+            const BoundingBoxf area(cfg.option<ConfigOptionPoints>("printable_area")->values);
+            Vec3d origin(saved.workspace_position.x(), saved.workspace_position.y(), 0.);
+            auto plate = std::make_unique<PartPlate>(this, origin, int(area.size().x()), int(area.size().y()),
+                cfg.opt_float("printable_height"), m_plater, m_model, true, ptFFF);
+            plate->set_index(first_plate + i);
+            plate->print_setup() = saved.print_setup;
+            // Imported jobs keep their resolved intent rather than adopting the
+            // importing project's defaults through foreign inheritance links.
+            if (!plate->print_setup().empty()) {
+                auto& setup = plate->print_setup();
+                initialize_process_cascade(setup, {}, saved.config);
+                setup.process_overrides.apply_only(setup.config, plate_process_edit_keys());
+                setup.process_overrides.apply(saved.config);
+                for (const auto& key : setup.process_overrides.keys())
+                    if (std::find(plate_process_edit_keys().begin(), plate_process_edit_keys().end(), key) == plate_process_edit_keys().end())
+                        setup.process_overrides.erase(key);
+                setup.process_scope_catalog.clear();
+            }
+            plate->m_has_workspace_position = true;
+            plate->m_workspace_position = saved.workspace_position;
+            plate->m_locked = saved.locked;
+            plate->m_stage_id = saved.stage_id;
+            plate->config()->apply(saved.config);
+            // A plate under construction is not a rename: skip set_plate_name's
+            // sidebar refresh and lifecycle event.
+            plate->m_name = saved.plate_name;
+            const auto* colors = cfg.option<ConfigOptionStrings>("filament_colour");
+            plate->set_filament_count(colors ? int(colors->values.size()) : 1);
+            set_shape_from_setup(*plate, cfg, saved.workspace_position);
+            for (const auto& ref : saved.objects_and_instances)
+                plate->add_instance(first_object + ref.first, ref.second, false);
+            built.push_back(std::move(plate));
+        }
+    } catch (...) {
+        for (int i = int(m_model->objects.size()) - 1; i >= first_object; --i)
+            m_model->delete_object(size_t(i));
+        throw;
+    }
+
+    if (!m_independent_setups) {
+        if (m_plater) enable_independent_setups();
+        else m_independent_setups = true;
+    }
+    freeze_workspace_positions();
+    m_plate_list.reserve(m_plate_list.size() + built.size());
+    for (int i = 0; i < int(built.size()); ++i) {
+        const auto& saved = plates[i];
+        auto print = std::make_unique<Print>();
+        auto result = std::make_unique<GCodeResult>();
+        built[i]->set_print(print.get(), result.get(), m_print_index);
+        print->set_plate_index(first_plate + i);
+        print->set_plate_name(saved.plate_name);
+        m_print_list.emplace(m_print_index, print.release());
+        m_gcode_result_list.emplace(m_print_index++, result.release());
+        m_plate_list.push_back(built[i].release());
+        if (saved.has_workspace_stages)
+            m_stages.insert(m_stages.end(), saved.workspace_stages.begin(), saved.workspace_stages.end());
+        if (const auto commands = incoming.plates_custom_gcodes.find(i); commands != incoming.plates_custom_gcodes.end())
+            m_model->plates_custom_gcodes[first_plate + i] = commands->second;
+    }
+    update_plate_cols();
+    unprintable_plate.set_index(int(m_plate_list.size()));
+    m_model->wipe_tower.positions.resize(m_plate_list.size(), Vec2d::Zero());
+    for (int i = 0; i < int(plates.size()); ++i) {
+        const auto& cfg = plates[i].print_setup.config;
+        const auto* x = cfg.option<ConfigOptionFloats>("wipe_tower_x");
+        const auto* y = cfg.option<ConfigOptionFloats>("wipe_tower_y");
+        if (x && y && !x->values.empty() && !y->values.empty())
+            m_model->wipe_tower.positions[first_plate + i] = Vec2d(x->get_at(first_plate + i), y->get_at(first_plate + i));
+    }
+    calc_bounding_boxes();
+    if (m_plater) {
+        auto* canvas = m_plater->get_view3D_canvas3D();
+        if (canvas) {
+            canvas->remove_raycasters_for_picking(SceneRaycaster::EType::Bed);
+            register_raycasters_for_picking(*canvas);
+            canvas->set_as_dirty();
+        }
+    }
+}
+
 int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int filament_count)
 {
 	int ret = 0;
@@ -7920,7 +8936,45 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(":no plates, should not happen!");
 		return -1;
 	}
+    if (plate_data_list.size() > MAX_PLATES_COUNT)
+        throw RuntimeError("This project exceeds the " + std::to_string(max_project_plates) + "-plate limit.");
+    std::vector<WorkspaceStage> stages;
+    bool has_stage_catalog = false;
+    for (const auto* plate : plate_data_list) {
+        if (!plate->has_workspace_stages) continue;
+        if (has_stage_catalog) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": more than one plate stores the stage list";
+            throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+        }
+        has_stage_catalog = true;
+        stages = deserialize_workspace_stages(serialize_workspace_stages(plate->workspace_stages));
+    }
+    for (const auto* plate : plate_data_list) {
+        if (plate->stage_id.empty()) continue;
+        if (std::none_of(stages.begin(), stages.end(), [&](const WorkspaceStage& stage) { return stage.id == plate->stage_id; })) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": plate " << plate->plate_index << " belongs to missing stage " << plate->stage_id;
+            throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+        }
+    }
 	clear(true, true);
+    reset_production_ready_keys();
+    m_stages = std::move(stages);
+    m_process_scopes = {};
+    bool has_process_catalog = false;
+    for (const auto* plate : plate_data_list) {
+        if (plate->print_setup.process_scope_catalog.empty()) continue;
+        if (has_process_catalog) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": more than one plate stores the print settings scopes";
+            throw RuntimeError(_u8L("This project's print settings are damaged and can't be opened."));
+        }
+        m_process_scopes = ProcessSettingsScopes::deserialize(plate->print_setup.process_scope_catalog);
+        has_process_catalog = true;
+    }
+    for (const auto& entry : m_process_scopes.stages)
+        if (std::none_of(m_stages.begin(), m_stages.end(), [&](const auto& stage) { return stage.id == entry.first; })) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": print settings belong to missing stage " << entry.first;
+            throw RuntimeError(_u8L("This project's print settings are damaged and can't be opened."));
+        }
     m_independent_setups = std::any_of(plate_data_list.begin(), plate_data_list.end(),
         [](const PlateData* plate) { return !plate->print_setup.empty(); });
 	set_filament_count(filament_count);
@@ -7930,6 +8984,7 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		m_plate_list[index]->m_locked = plate_data_list[i]->locked;
 		m_plate_list[index]->config()->apply(plate_data_list[i]->config);
         m_plate_list[index]->print_setup() = plate_data_list[i]->print_setup;
+        m_plate_list[index]->m_stage_id = plate_data_list[i]->stage_id;
         if (m_plater)
             m_plate_list[index]->print_setup().destination = portable_printer_destination(
                 m_plate_list[index]->print_setup().destination, *wxGetApp().app_config);
@@ -8089,6 +9144,18 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
         }
         update_all_plates_pos_and_size(false, false, false, false);
         calc_bounding_boxes();
+    }
+    if (!m_plater && m_model && printer_technology == ptFFF) {
+        // GUI imports relocate their temporary model after loading the printer config.
+        // The command-line model is already available here.
+        // Old Porca files stored meshes directly at their saved workspace positions.
+        for (size_t i = 0; i < m_plate_list.size(); ++i) {
+            auto& saved = *plate_data_list[i];
+            const Vec2d source = saved.has_model_origin ? saved.model_origin :
+                saved.has_workspace_position ? saved.workspace_position :
+                orca_plate_origin(int(i), int(m_plate_list.size()), m_plate_width, m_plate_depth);
+            relocate_plate_models(*m_model, saved, source, m_plate_list[i]->m_origin.head<2>());
+        }
     }
 	print();
 	ret = reload_all_objects();

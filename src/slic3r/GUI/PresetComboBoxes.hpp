@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 #include <wx/colour.h>
+#include <wx/bitmap.h>
 #include <vector>
 #include "libslic3r/PrintConfig.hpp"
 #include <map>
@@ -14,6 +15,7 @@
 #include <wx/colourdata.h>
 #include <wx/event.h>
 #include <wx/gdicmn.h>
+#include <wx/string.h>
 #include <wx/clrpicker.h>
 
 #include "libslic3r/Preset.hpp"
@@ -52,6 +54,7 @@ public:
 	enum LabelItemType : std::size_t {
 		LABEL_ITEM_PHYSICAL_PRINTER = 0xffffff01,
         LABEL_ITEM_PRINTER_MODELS,
+        LABEL_ITEM_SAVED_PRINTER,
 		LABEL_ITEM_DISABLED,
 		LABEL_ITEM_MARKER,
 		LABEL_ITEM_PHYSICAL_PRINTERS,
@@ -114,6 +117,8 @@ public:
     virtual void msw_rescale();
     virtual void sys_color_changed();
     virtual void OnSelect(wxCommandEvent& evt);
+    // Local density for embedded Prepare; other preset pickers stay inherited.
+    void set_sidebar_style(int height = 28, bool framed = false);
 
 protected:
     typedef std::size_t Marker;
@@ -135,6 +140,8 @@ protected:
 
     int m_last_selected;
     int m_em_unit;
+    int m_sidebar_height{0};
+    bool m_sidebar_framed{false};
 
     // BBS: ams
     int  m_filament_idx       = -1;
@@ -217,6 +224,9 @@ public:
     void OnSelect(wxCommandEvent& evt) override;
     void update_badge_according_flag();
     void set_sync_badge(bool show);
+    // Saved destinations lead Prepare; profile rows retain their original selection data.
+    void refresh_printer_identity(const wxString& subtitle);
+    void SetPrinterEditAction(std::function<void()> action) { m_printer_edit_action = std::move(action); }
 
     FilamentColor get_cur_color_info();
     void show_default_color_picker();
@@ -227,6 +237,12 @@ private:
     // BBS
     wxColor m_color;
     bool    m_sync_badge{false};
+    wxString m_printer_identity_subtitle;
+    std::function<void()> m_printer_edit_action;
+    std::map<int, std::string> m_saved_printer_rows;
+    // Printer pictures by cover file, with the fallback under an empty path.
+    std::map<std::string, wxBitmap> m_printer_pictures;
+    const wxBitmap& printer_picture(const Preset* preset);
 };
 
 

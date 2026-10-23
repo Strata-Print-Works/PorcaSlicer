@@ -1,4 +1,6 @@
 #include "Branding.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 ///////////////////////////////////////////////////////////////////////////
 // C++ code generated with wxFormBuilder (version 3.10.0-4761b0c)
 // http://www.wxformbuilder.org/
@@ -7,6 +9,7 @@
 ///////////////////////////////////////////////////////////////////////////
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/Preset.hpp"
+#include "libslic3r/PlatePrintSetup.hpp"
 #include "ParamsPanel.hpp"
 #include "Tab.hpp"
 #include "MainFrame.hpp"
@@ -16,10 +19,14 @@
 
 #include "Widgets/Label.hpp"
 #include "Widgets/SwitchButton.hpp"
+#include "Widgets/TabCtrl.hpp"
 #include "Widgets/Button.hpp"
+#include "Widgets/StaticBox.hpp"
+#include "Widgets/StateColor.hpp"
 #include "GUI_Factories.hpp"
 #include "I18N.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/Utils.hpp"
 #include <string>
 #include <map>
 #include <wx/string.h>
@@ -28,6 +35,10 @@
 #include <wx/toplevel.h>
 #include <wx/sizer.h>
 #include <wx/panel.h>
+#include <wx/menu.h>
+#include <wx/colour.h>
+#include <wx/bitmap.h>
+#include <wx/image.h>
 #include "slic3r/GUI/Widgets/CheckBox.hpp"
 #include <wx/tglbtn.h>
 #include <wx/event.h>
@@ -51,6 +62,39 @@ int mode_to_selection(ConfigOptionMode mode)
     return mode == comExpert ? 2 :
            mode == comAdvanced ? 1 :
            0;
+}
+
+// Programmatic scope changes already call set_active_tab explicitly.
+void set_scope_selection(TabCtrl* tabs, int selection)
+{
+    wxEventBlocker block(tabs, wxEVT_TAB_SEL_CHANGED);
+    tabs->SelectItem(selection);
+}
+
+void set_sidebar_action_icon(ScalableButton* button, const char* name)
+{
+    if (!button) return;
+    const bool dark = wxGetApp().dark_mode();
+    const wxBitmap source = create_scaled_bitmap(resources_dir() + "/design-system/icons/" + name, button, 16);
+    const auto tinted = [&](DesignSystem::ColorRole role) {
+        wxImage image = source.ConvertToImage();
+        const wxColour tint(DesignSystem::color_hex(role, dark));
+        image.SetRGB(wxRect(0, 0, image.GetWidth(), image.GetHeight()), tint.Red(), tint.Green(), tint.Blue());
+        wxBitmap result(image);
+        result.SetScaleFactor(source.GetScaleFactor());
+        return result;
+    };
+    // Clear the cached legacy asset names too, so a subsequent native rescale
+    // cannot restore the old glyph after the compact sidebar's palette is applied.
+    ScalableBitmap normal;
+    normal.bmp() = tinted(DesignSystem::ColorRole::InkMuted);
+    button->SetBitmap_(normal);
+    button->SetBitmapCurrent(normal.bmp());
+    button->SetBitmapPressed(normal.bmp());
+    button->SetBitmapFocus(normal.bmp());
+    ScalableBitmap disabled;
+    disabled.bmp() = tinted(DesignSystem::ColorRole::InkDisabled);
+    button->SetBitmapDisabled_(disabled);
 }
 }
 
@@ -284,39 +328,37 @@ ParamsPanel::ParamsPanel( wxWindow* parent, wxWindowID id, const wxPoint& pos, c
 
         //int width, height;
         // BBS: new layout
-        m_mode_region = new SwitchButton(m_top_panel);
-        m_mode_region->SetMaxSize({em_unit(this) * 12, -1});
-        m_mode_region->SetLabels(_L("Global"), _L("Objects"));
+        m_mode_region = new TabCtrl(m_top_panel, wxID_ANY);
+        m_mode_region->AppendItem(_L("Global"));
+        m_mode_region->AppendItem(_L("Objects"));
+        set_scope_selection(m_mode_region, 0);
         //m_mode_region->GetSize(&width, &height);
         m_tips_arrow = new ScalableButton(m_top_panel, wxID_ANY, "tips_arrow");
         m_tips_arrow->Hide();
 
-        m_mode_icon = new ScalableButton(m_top_panel, wxID_ANY, "advanced"); // ORCA
-        m_mode_icon->Bind(wxEVT_BUTTON, [this](wxCommandEvent e) {
-            if (wxGetApp().get_mode() == comDevelop || m_mode_view == nullptr)
-                return; // prevent change on dev mode
-
-            const int selection = m_mode_view->GetSelection();
-            m_mode_view->SelectAndNotify((selection + 1) % 3);
-        });
-        m_mode_icon->SetToolTip(_L("Cycle settings visibility"));
         m_mode_view = new ModeSwitchButton(m_top_panel);
         bool isDevMode = wxGetApp().get_mode() == comDevelop;
         m_mode_view->SetSelection(mode_to_selection(isDevMode ? comExpert : wxGetApp().get_saved_mode()));
         m_mode_view->SetDevMode(isDevMode);
 
-        // BBS: new layout
-        //m_search_btn = new ScalableButton(m_top_panel, wxID_ANY, "search", wxEmptyString, wxDefaultSize, wxDefaultPosition, wxBU_EXACTFIT | wxNO_BORDER, true);
-        //m_search_btn->SetToolTip(format_wxstr(_L("Search in settings [%1%]"), _L("Ctrl+") + "F");
-        //m_search_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { wxGetApp().plater()->search(false); });
-
-        m_compare_btn = new ScalableButton(m_top_panel, wxID_ANY, "compare", wxEmptyString, wxDefaultSize, wxDefaultPosition, wxBU_EXACTFIT | wxNO_BORDER, true);
-        m_compare_btn->SetToolTip(_L("Compare presets"));
-        m_compare_btn->Bind(wxEVT_BUTTON, ([](wxCommandEvent e) { DiffPresetDialog::ensure()->show(); }));
-
-        m_setting_btn = new ScalableButton(m_top_panel, wxID_ANY, "table", wxEmptyString, wxDefaultSize, wxDefaultPosition, wxBU_EXACTFIT | wxNO_BORDER, true);
-        m_setting_btn->SetToolTip(_L("View all object's settings"));
-        m_setting_btn->Bind(wxEVT_BUTTON, [](wxCommandEvent &) { wxGetApp().plater()->PopupObjectTable(-1, -1, {0, 0}); });
+        m_visibility_choice = new Button(m_top_panel, wxEmptyString);
+        m_visibility_choice->SetToolTip(_L("More process actions"));
+        m_visibility_choice->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event) {
+            event.Skip();
+            wxMenu menu;
+            const int compare = wxWindow::NewControlId();
+            const int table = wxWindow::NewControlId();
+            menu.Append(compare, _L("Compare presets…"));
+            menu.Append(table, _L("View all object settings…"));
+            menu.Bind(wxEVT_MENU, [this](wxCommandEvent&) {
+                CallAfter([]() { DiffPresetDialog::ensure()->show(); });
+            }, compare);
+            menu.Bind(wxEVT_MENU, [this](wxCommandEvent&) {
+                CallAfter([]() { wxGetApp().plater()->PopupObjectTable(-1, -1, {0, 0}); });
+            }, table);
+            m_visibility_choice->PopupMenu(&menu, wxPoint(0, m_visibility_choice->GetSize().y));
+        });
+        m_mode_view->Hide();
 
         m_highlighter.set_timer_owner(this, 0);
         this->Bind(wxEVT_TIMER, [this](wxTimerEvent &)
@@ -417,7 +459,7 @@ ParamsPanel::ParamsPanel( wxWindow* parent, wxWindowID id, const wxPoint& pos, c
     //m_page_view->SetScrollRate( 5, 5 );
 
     if (m_mode_region)
-        m_mode_region->Bind(wxEVT_TOGGLEBUTTON, &ParamsPanel::OnToggled, this);
+        m_mode_region->Bind(wxEVT_TAB_SEL_CHANGED, &ParamsPanel::OnToggled, this);
     //Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { wxGetApp().plater()->search(false); }, wxID_FIND);
     //m_export_to_file->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { wxGetApp().mainframe->export_config(); });
     //m_import_from_file->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { wxGetApp().mainframe->load_config_file(); });
@@ -435,20 +477,17 @@ void ParamsPanel::create_layout()
     m_left_sizer->SetMinSize( wxSize(40 * em_unit(this), -1 ) );
 
     if (m_top_panel) {
-        m_mode_sizer = new wxBoxSizer( wxHORIZONTAL );
-        m_mode_sizer->Add(m_process_icon, 0, wxALIGN_CENTER | wxLEFT , FromDIP(SidebarProps::TitlebarMargin()));
-        m_mode_sizer->Add(m_title_label , 0, wxALIGN_CENTER | wxLEFT , FromDIP(SidebarProps::ElementSpacing()));
-        m_mode_sizer->Add(m_mode_region , 0, wxALIGN_CENTER | wxLEFT , FromDIP(SidebarProps::WideSpacing()));
-        m_mode_sizer->Add(m_tips_arrow  , 0, wxALIGN_CENTER | wxLEFT , FromDIP(SidebarProps::ElementSpacing()));
-        m_mode_sizer->AddSpacer(FromDIP(SidebarProps::IconSpacing())); // ensure there is spacing after control when sidebar has less width
-        m_mode_sizer->AddStretchSpacer();
-        m_mode_sizer->Add(m_mode_icon   , 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::ElementSpacing()));
-        m_mode_sizer->Add(m_mode_view   , 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
-        m_mode_sizer->Add(m_setting_btn , 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
-        m_mode_sizer->Add(m_compare_btn , 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::TitlebarMargin()));
-        //m_mode_sizer->Add( m_search_btn, 0, wxALIGN_CENTER );
-        //m_mode_sizer->AddSpacer(16);
-        m_mode_sizer->SetMinSize(-1, FromDIP(30));
+        // Scope uses the same underline tabs as the settings categories.
+        // Its own row leaves room for translated labels beside the process actions.
+        m_mode_sizer = new wxBoxSizer(wxVERTICAL);
+        m_scope_sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_scope_sizer->Add(m_process_icon, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(12));
+        m_scope_sizer->Add(m_title_label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(8));
+        m_scope_sizer->AddStretchSpacer();
+        m_scope_sizer->Add(m_tips_arrow, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(4));
+        m_scope_sizer->Add(m_visibility_choice, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(8));
+        m_mode_sizer->Add(m_scope_sizer, 0, wxEXPAND);
+        m_mode_sizer->Add(m_mode_region, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(8));
         m_top_panel->SetSizer(m_mode_sizer);
         //m_left_sizer->Add( m_top_panel, 0, wxEXPAND );
     }
@@ -460,6 +499,7 @@ void ParamsPanel::create_layout()
         m_left_sizer->Add( m_tab_print, 0, wxEXPAND );
     }
 
+    if (m_tab_scope) m_left_sizer->Add(m_tab_scope, 0, wxEXPAND);
     if (m_tab_print_plate) {
         m_left_sizer->Add(m_tab_print_plate, 0, wxEXPAND);
     }
@@ -517,6 +557,88 @@ void ParamsPanel::create_layout()
 
     //this->SetSizer( m_top_sizer );
     this->Layout();
+    apply_sidebar_style();
+}
+
+void ParamsPanel::apply_sidebar_style()
+{
+    if (!is_prepare_sidebar()) return;
+    using namespace DesignSystem;
+    const bool dark = wxGetApp().dark_mode();
+    const wxColour surface(color_hex(ColorRole::Surface, dark));
+    const wxColour ink(color_hex(ColorRole::Ink, dark));
+    const wxColour muted(color_hex(ColorRole::InkMuted, dark));
+    SetBackgroundColour(surface);
+    m_page_view->SetBackgroundColour(surface);
+#if __WXOSX__
+    m_tmp_panel->SetBackgroundColour(surface);
+#endif
+    m_top_panel->SetBackgroundColour(surface);
+    m_top_panel->SetBackgroundColor(StateColor::resolved(surface));
+    m_top_panel->SetBackgroundColor2(StateColor());
+    m_top_panel->SetBorderColor(StateColor::resolved(wxColour(color_hex(ColorRole::Line, dark))));
+    m_top_panel->SetCornerRadius(0);
+    m_title_label->SetFont(font(TypeStyle::BodyStrong));
+    m_title_label->SetForegroundColour(ink);
+    set_sidebar_action_icon(m_process_icon, "layers");
+    set_sidebar_action_icon(m_mode_icon, "eye");
+    set_sidebar_action_icon(m_setting_btn, "list");
+    set_sidebar_action_icon(m_compare_btn, "arrow-left-right");
+    m_mode_region->SetFont(font(TypeStyle::Caption));
+    m_mode_region->SetBackgroundColour(surface);
+    m_mode_region->SetBackgroundColor(StateColor::resolved(surface));
+    m_mode_region->SetBorderWidth(FromDIP(1));
+    m_mode_region->SetBorderColor(StateColor::resolved(wxColour(color_hex(ColorRole::Line, dark))));
+    m_mode_region->SetSidebarStyle(ColorRole::Primary);
+    for (unsigned int i = 0; i < m_mode_region->GetCount(); ++i)
+        m_mode_region->SetItemTextColour(i, StateColor::resolved(StateColor(
+            std::make_pair(ink, int(StateColor::Checked)),
+            std::make_pair(i == 1 && m_has_object_config ? wxColour(color_hex(ColorRole::AccentInk, dark)) : muted,
+                           int(StateColor::Normal)))));
+    m_mode_region->SetItemIndicator(1, m_has_object_config);
+    m_mode_region->SetMinSize(wxSize(-1, FromDIP(row_height)));
+    for (wxWindow* child : m_mode_region->GetChildren()) {
+        if (auto* button = dynamic_cast<Button*>(child)) {
+            button->SetPaddingSize(FromDIP(wxSize(2, 6)));
+            button->SetBackgroundColour(surface);
+            button->SetBackgroundColor(StateColor());
+            button->SetBorderColor(StateColor::resolved(StateColor(
+                std::make_pair(wxColour(color_hex(ColorRole::Focus, dark)), int(StateColor::Focused)),
+                std::make_pair(surface, int(StateColor::Normal)))));
+        }
+    }
+    m_mode_region->Rescale();
+    m_mode_view->SetFont(font(TypeStyle::Caption));
+    m_mode_view->Rescale();
+    const wxBitmap source = create_scaled_bitmap(
+        resources_dir() + "/design-system/icons/ellipsis", m_visibility_choice, 16);
+    wxImage icon = source.ConvertToImage();
+    icon.SetRGB(wxRect(0, 0, icon.GetWidth(), icon.GetHeight()), muted.Red(), muted.Green(), muted.Blue());
+    wxBitmap tinted_icon(icon);
+    tinted_icon.SetScaleFactor(source.GetScaleFactor());
+    m_visibility_choice->SetIcon(tinted_icon);
+    m_visibility_choice->SetFont(font(TypeStyle::Label));
+    m_visibility_choice->SetPaddingSize(FromDIP(wxSize(4, 3)));
+    m_visibility_choice->SetCornerRadius(FromDIP(radius_sm));
+    m_visibility_choice->SetBackgroundColour(surface);
+    m_visibility_choice->SetBackgroundColor(StateColor::resolved(StateColor(
+        std::make_pair(wxColour(color_hex(ColorRole::SurfaceHover, dark)), static_cast<int>(StateColor::Hovered)),
+        std::make_pair(surface, static_cast<int>(StateColor::Normal)))));
+    m_visibility_choice->SetBorderColor(StateColor::resolved(StateColor(
+        std::make_pair(wxColour(color_hex(ColorRole::Focus, dark)), int(StateColor::Focused)),
+        std::make_pair(surface, int(StateColor::Normal)))));
+    m_visibility_choice->SetTextColor(StateColor::resolved(StateColor(
+        std::make_pair(ink, static_cast<int>(StateColor::Hovered)),
+        std::make_pair(muted, static_cast<int>(StateColor::Normal)))));
+    m_visibility_choice->SetMinSize(FromDIP(wxSize(28, 28)));
+    m_visibility_choice->SetMaxSize(FromDIP(wxSize(28, 28)));
+    update_mode();
+    if (m_left_sizer) m_left_sizer->SetMinSize(wxSize(FromDIP(sidebar_width), -1));
+    if (m_scope_sizer) m_scope_sizer->SetMinSize(-1, FromDIP(40));
+    if (m_tools_sizer) m_tools_sizer->SetMinSize(-1, FromDIP(24));
+    m_top_panel->Layout();
+    m_page_view->FitInside();
+    Refresh();
 }
 
 void ParamsPanel::rebuild_panels()
@@ -558,6 +680,14 @@ void ParamsPanel::refresh_tabs()
         m_tab_print_object = wxGetApp().get_model_tab();
         m_tab_print_part = wxGetApp().get_model_tab(true);
         m_tab_print_layer = wxGetApp().get_layer_tab();
+        if (!m_tab_scope && m_tab_print && static_cast<Tab*>(m_tab_print)->completed()) {
+            m_tab_scope = new TabPrintScope(this);
+            m_tab_scope->create_preset_tab();
+            // Preset loading and unsaved-change checks must skip this detached editor.
+            // The print tab forwards mode, colour and label updates to it.
+            auto& tabs = wxGetApp().tabs_list;
+            tabs.erase(std::remove(tabs.begin(), tabs.end(), m_tab_scope), tabs.end());
+        }
     }
     return;
 }
@@ -619,13 +749,23 @@ void ParamsPanel::set_active_tab(wxPanel* tab)
 {
     if (m_mode_region) {
         auto* plater = wxGetApp().plater();
-        m_mode_region->SetLabels(plater && plater->get_partplate_list().independent_setups() ?
-            _L("This plate") : _L("Global"), _L("Objects"));
+        m_mode_region->SetItemText(0, plater && plater->get_partplate_list().independent_setups() ?
+            _L("This plate") : _L("Global"));
     }
     Tab* cur_tab = dynamic_cast<Tab *> (tab);
+    if (cur_tab == m_tab_print && wxGetApp().plater()->get_partplate_list().independent_setups() &&
+        wxGetApp().sidebar().settings_scope() <= ProcessSettingsScope::Stage) {
+        show_cascade_scope();
+        return;
+    }
 
     if (cur_tab == nullptr) {
-        if (!m_mode_region->GetValue()) {
+        if (wxGetApp().plater()->get_partplate_list().independent_setups() &&
+            wxGetApp().sidebar().settings_scope() <= ProcessSettingsScope::Stage) {
+            show_cascade_scope();
+            return;
+        }
+        if (m_mode_region->GetSelection() == 0) {
             cur_tab = (Tab*) m_tab_print;
         } else if (m_tab_print_part && ((TabPrintModel*) m_tab_print_part)->has_model_config()) {
             cur_tab = (Tab*) m_tab_print_part;
@@ -637,7 +777,7 @@ void ParamsPanel::set_active_tab(wxPanel* tab)
             cur_tab = (Tab*)m_tab_print_plate;
         }
         Show(cur_tab != nullptr);
-        wxGetApp().sidebar().show_object_list(m_mode_region->GetValue());
+        wxGetApp().sidebar().show_object_list(m_mode_region->GetSelection() == 1);
         if (m_current_tab == cur_tab)
             return;
         if (cur_tab)
@@ -651,6 +791,7 @@ void ParamsPanel::set_active_tab(wxPanel* tab)
 
     // BBS: open/close tab
     for (auto t : std::vector<std::pair<wxPanel*, wxStaticLine*>>({
+            {m_tab_scope, nullptr},
             {m_tab_print, m_staticline_print},
             {m_tab_print_object, m_staticline_print_object},
             {m_tab_print_part, m_staticline_print_part},
@@ -729,28 +870,66 @@ void ParamsPanel::msw_rescale()
     if (m_mode_sizer)
         m_mode_sizer->SetMinSize(-1, 3 * em_unit(this));
     if (m_mode_region)
-        ((SwitchButton* )m_mode_region)->Rescale();
+        m_mode_region->Rescale();
     if (m_mode_icon) m_mode_icon->msw_rescale();
     if (m_mode_view)
     {
         m_mode_view->Rescale();
     }
-    for (auto tab : {m_tab_print, m_tab_print_plate, m_tab_print_object, m_tab_print_part, m_tab_print_layer, m_tab_filament, m_tab_printer}) {
+    for (auto tab : {m_tab_print, m_tab_print_plate, m_tab_print_object, m_tab_print_part, m_tab_print_layer, static_cast<wxPanel*>(m_tab_scope), m_tab_filament, m_tab_printer}) {
         if (tab) dynamic_cast<Tab*>(tab)->msw_rescale();
     }
+    apply_sidebar_style();
     //((Button*)m_export_to_file)->Rescale();
     //((Button*)m_import_from_file)->Rescale();
 }
 
+void ParamsPanel::show_cascade_scope()
+{
+    if (!m_tab_scope || !m_tab_print) return;
+    auto& plates = wxGetApp().plater()->get_partplate_list();
+    if (!plates.independent_setups()) { m_mode_region->Show(); return; }
+    const auto scope = wxGetApp().sidebar().settings_scope();
+    m_mode_region->Hide();
+    if (scope == ProcessSettingsScope::Object) {
+        set_scope_selection(m_mode_region, 1);
+        set_active_tab(nullptr);
+    } else if (scope == ProcessSettingsScope::Plate) {
+        set_scope_selection(m_mode_region, 0);
+        set_active_tab(nullptr);
+        wxGetApp().sidebar().show_object_list(false);
+    } else {
+        const auto& scopes = plates.process_scopes();
+        const auto scope_selection = plates.workspace_selection();
+        const auto stage = scope != ProcessSettingsScope::Stage || scope_selection.empty() ? std::string{} :
+            plates.get_plate(scope_selection.front())->stage_id();
+        DynamicPrintConfig overrides = scopes.project;
+        if (!stage.empty()) {
+            const auto found = scopes.stages.find(stage);
+            overrides = found == scopes.stages.end() ? DynamicPrintConfig{} : found->second;
+        }
+        // Native plate options do not take part in the Project and Stage values.
+        std::vector<PlateProcessCascade> cascade;
+        for (int i = 0; i < plates.get_plate_count(); ++i)
+            cascade.push_back({plates.process_setup(i), {}, plates.get_plate(i)->stage_id()});
+        const auto view = process_scope_view(cascade, scopes, stage);
+        if (view.values.empty()) return;
+        m_tab_scope->load_scope(view.values, view.inherited, overrides, view.mixed, view.mixed_inherited);
+        m_tab_scope->restore_last_select_item();
+        wxGetApp().sidebar().show_object_list(false);
+    }
+    Layout();
+}
+
 void ParamsPanel::switch_to_global()
 {
-    m_mode_region->SetValue(false);
+    set_scope_selection(m_mode_region, 0);
     set_active_tab(nullptr);
 }
 
 void ParamsPanel::switch_to_object(bool with_tips)
 {
-    m_mode_region->SetValue(true);
+    set_scope_selection(m_mode_region, 1);
     set_active_tab(nullptr);
     if (with_tips) {
         m_highlighter.init(std::pair(m_tips_arrow, &m_tips_arror_blink), m_top_panel);
@@ -783,17 +962,13 @@ void ParamsPanel::notify_object_config_changed()
     }
     if (has_config == m_has_object_config) return;
     m_has_object_config = has_config;
-    if (has_config)
-        m_mode_region->SetTextColor2(StateColor(std::pair{wxColour(Branding::accent_foreground), (int) StateColor::Checked}, std::pair{wxGetApp().get_label_clr_modified(), 0}));
-    else
-        m_mode_region->SetTextColor2(StateColor());
-    m_mode_region->Rescale();
+    apply_sidebar_style();
 }
 
 void ParamsPanel::switch_to_object_if_has_object_configs()
 {
     if (m_has_object_config)
-        m_mode_region->SetValue(true);
+        set_scope_selection(m_mode_region, 1);
     set_active_tab(nullptr);
 }
 
@@ -808,6 +983,8 @@ void ParamsPanel::free_sizers()
     m_left_sizer = nullptr;
     //m_right_sizer = nullptr;
     m_mode_sizer = nullptr;
+    m_scope_sizer = nullptr;
+    m_tools_sizer = nullptr;
     //m_print_sizer = nullptr;
     //m_filament_sizer = nullptr;
     //m_printer_sizer = nullptr;
@@ -832,6 +1009,7 @@ void ParamsPanel::delete_subwindows()
     {
         m_mode_view = nullptr;
     }
+    m_visibility_choice = nullptr;
 
     if (m_mode_icon) // ORCA m_title_view replacement
     {

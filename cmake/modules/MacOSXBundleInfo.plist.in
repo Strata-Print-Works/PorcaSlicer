@@ -16,6 +16,8 @@
 	<string>6.0</string>
 	<key>CFBundleLongVersionString</key>
 	<string>${MACOSX_BUNDLE_LONG_VERSION_STRING}</string>
+	<key>CFBundleDisplayName</key>
+	<string>${SLIC3R_APP_DISPLAY_NAME}</string>
 	<key>CFBundleName</key>
 	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
 	<key>CFBundlePackageType</key>
@@ -32,7 +34,9 @@
     <array>
       <dict>
         <key>CFBundleURLName</key>
-        <string>OrcaSlicer Downloads</string>
+        <string>Porca Downloads</string>
+        <!-- Still claims upstream OrcaSlicer's orcaslicer:// deep-link scheme; with both
+             apps installed, macOS opens these links in only one of them. -->
         <key>CFBundleURLSchemes</key>
         <array>
           <string>orcaslicer</string>
@@ -65,7 +69,7 @@
 			<string>OBJ</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
-			<string>images/OrcaSlicer.icns</string>
+			<string>images/Porca.icns</string>
 			<key>CFBundleTypeName</key>
 			<string>STL</string>
 			<key>CFBundleTypeRole</key>
@@ -82,7 +86,7 @@
 			<string>AMF</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
-			<string>images/OrcaSlicer.icns</string>
+			<string>images/Porca.icns</string>
 			<key>CFBundleTypeName</key>
 			<string>AMF</string>
 			<key>CFBundleTypeRole</key>
@@ -99,7 +103,7 @@
 			<string>3MF</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
-			<string>images/OrcaSlicer.icns</string>
+			<string>images/Porca.icns</string>
 			<key>CFBundleTypeName</key>
 			<string>3MF</string>
 			<key>CFBundleTypeRole</key>

@@ -63,6 +63,27 @@ bool Snapshot::is_topmost() const
 	return this->name == topmost_snapshot_name;
 }
 
+bool discard_topmost_snapshot(std::vector<Snapshot> &snapshots, size_t &active_time, size_t &current_time,
+                              size_t &saved_time, size_t timestamp)
+{
+	// The first snapshot of a stack is never removed.
+	if (snapshots.size() < 3)
+		return false;
+	Snapshot &topmost = snapshots.back();
+	const Snapshot &action = snapshots[snapshots.size() - 2];
+	if (! topmost.is_topmost() || topmost.is_topmost_captured() || topmost.timestamp != active_time ||
+		topmost.timestamp != current_time || topmost.timestamp != timestamp + 1 ||
+		action.is_topmost() || action.timestamp != timestamp)
+		return false;
+	// A state saved after the snapshot is not the restored one.
+	if (saved_time == topmost.timestamp)
+		saved_time = size_t(-1);
+	topmost.timestamp = timestamp;
+	active_time = current_time = timestamp;
+	snapshots.erase(snapshots.end() - 2);
+	return true;
+}
+
 // Time interval, start is closed, end is open.
 struct Interval
 {
@@ -590,6 +611,7 @@ public:
 	void take_snapshot(const std::string& snapshot_name, const Slic3r::Model& model, const Slic3r::GUI::Selection& selection, const Slic3r::GUI::GLGizmosManager& gizmos, const Slic3r::GUI::PartPlateList& plate_list, const SnapshotData& snapshot_data);
     void take_snapshot(const std::string& snapshot_name, const Slic3r::Model& model, const Slic3r::GUI::Selection& selection, const Slic3r::GUI::GLGizmosManager& gizmos, const SnapshotData &snapshot_data);
     void reduce_noisy_snapshots(const std::string& new_name);
+    bool discard_topmost_snapshot(size_t timestamp);
     void load_snapshot(size_t timestamp, Slic3r::Model& model, Slic3r::GUI::GLGizmosManager& gizmos, Slic3r::GUI::PartPlateList& plate_list);
 
 	bool has_undo_snapshot() const;
@@ -1006,6 +1028,18 @@ void StackImpl::reduce_noisy_snapshots(const std::string& new_name)
 	}
 }
 
+bool StackImpl::discard_topmost_snapshot(size_t timestamp)
+{
+	if (! UndoRedo::discard_topmost_snapshot(m_snapshots, m_active_snapshot_time, m_current_time, m_saved_snapshot_time, timestamp))
+		return false;
+	// Release the object states serialized for the discarded snapshot, as taking the next one would.
+	for (auto &kvp : m_objects)
+		kvp.second->release_after_timestamp(timestamp);
+	this->collect_garbage();
+	assert(this->valid());
+	return true;
+}
+
 void StackImpl::load_snapshot(size_t timestamp, Slic3r::Model& model, Slic3r::GUI::GLGizmosManager& gizmos, Slic3r::GUI::PartPlateList& plate_list)
 {
 	// Find the snapshot by time. It must exist.
@@ -1378,6 +1412,7 @@ void Stack::take_snapshot(const std::string& snapshot_name, const Slic3r::Model&
 void Stack::take_snapshot(const std::string& snapshot_name, const Slic3r::Model& model, const Slic3r::GUI::Selection& selection, const Slic3r::GUI::GLGizmosManager& gizmos, const Slic3r::GUI::PartPlateList& plate_list, const SnapshotData& snapshot_data)
 	{ pimpl->take_snapshot(snapshot_name, model, selection, gizmos, plate_list, snapshot_data); }
 void Stack::reduce_noisy_snapshots(const std::string& new_name) { pimpl->reduce_noisy_snapshots(new_name); }
+bool Stack::discard_topmost_snapshot(size_t timestamp) { return pimpl->discard_topmost_snapshot(timestamp); }
 bool Stack::has_undo_snapshot() const { return pimpl->has_undo_snapshot(); }
 bool Stack::has_undo_snapshot(size_t time_to_load) const { return pimpl->has_undo_snapshot(time_to_load); }
 bool Stack::has_redo_snapshot() const { return pimpl->has_redo_snapshot(); }

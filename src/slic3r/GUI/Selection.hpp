@@ -210,6 +210,17 @@ private:
 public:
     Selection();
 
+    // Placement-only updates keep the selection but invalidate its cached bounds.
+    void set_bounding_boxes_dirty() {
+        m_bounding_box.reset();
+        m_unscaled_instance_bounding_box.reset(); m_scaled_instance_bounding_box.reset();
+        m_full_unscaled_instance_bounding_box.reset();
+        m_full_scaled_instance_bounding_box.reset();
+        m_full_unscaled_instance_local_bounding_box.reset();
+        m_bounding_box_in_current_reference_system.reset();
+        m_bounding_sphere.reset();
+    }
+
     void set_volumes(GLVolumePtrs* volumes);
     bool init();
 
@@ -419,15 +430,6 @@ private:
     void do_remove_volume(unsigned int volume_idx);
     void do_remove_instance(unsigned int object_idx, unsigned int instance_idx);
     void do_remove_object(unsigned int object_idx);
-    void set_bounding_boxes_dirty() {
-        m_bounding_box.reset();
-        m_unscaled_instance_bounding_box.reset(); m_scaled_instance_bounding_box.reset();
-        m_full_unscaled_instance_bounding_box.reset();
-        m_full_scaled_instance_bounding_box.reset();
-        m_full_unscaled_instance_local_bounding_box.reset();
-        m_bounding_box_in_current_reference_system.reset();
-        m_bounding_sphere.reset();
-    }
     void render_synchronized_volumes();
     void render_bounding_box(const BoundingBoxf3& box, const Transform3d& trafo, const bool auto_drop, const ColorRGB& color);
     void render_sidebar_position_hints(const std::string& sidebar_field, GLShaderProgram& shader, const Transform3d& matrix);

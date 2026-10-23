@@ -4,6 +4,7 @@
 #include <cmath>
 #include "libslic3r/Config.hpp"
 #include "libslic3r/PlatePrintSetup.hpp"
+#include "libslic3r/PlateCapacity.hpp"
 #include <memory>
 #include <utility>
 #include "libslic3r/Point.hpp"
@@ -20,6 +21,7 @@
 #include <cereal/specialize.hpp>
 #include <vector>
 #include <set>
+#include <unordered_set>
 #include <array>
 #include <functional>
 #include <optional>
@@ -54,8 +56,6 @@ typedef class GLUquadric GLUquadricObject;
 // and use PLATE_ALL_IDX
 #define PLATE_CURRENT_IDX   -1
 #define PLATE_ALL_IDX       -2
-
-#define MAX_PLATE_COUNT     36
 
 inline int compute_colum_count(int count)
 {
@@ -118,6 +118,7 @@ private:
     Vec3d m_origin;
     bool m_has_workspace_position {false};
     Vec2d m_workspace_position {Vec2d::Zero()};
+    std::string m_stage_id;
     int m_width;
     int m_depth;
     double m_height;
@@ -158,6 +159,7 @@ private:
     GLModel m_wrapping_detection_triangles;
     GLModel m_logo_triangles;
     GLModel m_gridlines;
+    GLModel m_workspace_outline;
     GLModel m_gridlines_bolder;
     std::vector<GLModel> m_imex_copy_zones;        // blue tint (Wong #56B4E9)
     std::vector<GLModel> m_imex_mirror_zones;      // orange tint (Wong #E69F00)
@@ -181,6 +183,7 @@ private:
     PickingModel m_plate_settings_icon;
     PickingModel m_plate_filament_map_icon;
     PickingModel m_plate_name_edit_icon;
+    PickingModel m_plate_actions_icon;
     PickingModel m_move_front_icon;
     PickingModel m_imex_mode_icon;
     GLModel      m_imex_warn_icon;   // warning badge: IMEX parallel mode + multi-material conflict
@@ -207,6 +210,24 @@ private:
     std::string m_name;
     GLModel m_plate_name_icon;
     GLTexture m_name_texture;
+    std::array<GLTexture, 3> m_name_hover_textures;
+    // What the floating title textures were last rendered from.
+    struct NameLabelInputs
+    {
+        std::string name;
+        std::string printer;
+        int index{-1};
+        int width{0};
+        double resolution{0.};
+        bool active_selected{false};
+        bool group_selected{false};
+        bool locked{false};
+        bool independent{false};
+        bool done{false};
+        bool dark{false};
+        bool failed{false};
+    };
+    NameLabelInputs m_name_label_inputs;
     wxCoord m_name_texture_width;
     wxCoord m_name_texture_height;
 
@@ -258,7 +279,8 @@ private:
     void set_hover_tooltip(const std::string& tooltip);
     void render_icons(bool bottom, bool only_name = false, int hover_id = -1);
     void render_only_numbers(bool bottom);
-    void render_plate_name_texture();
+    void render_plate_name_texture(int hover_id = -1);
+    void generate_floating_plate_name_texture(GLCanvas3D& canvas);
     void invalidate_plate_name_texture();
     void register_raycasters_for_picking(GLCanvas3D& canvas);
     int picking_id_component(int idx) const;
@@ -270,7 +292,8 @@ public:
         PLATE_NAME_HOVER_ID = 6;
     static constexpr unsigned int PLATE_FILAMENT_MAP_ID = 8;
     static constexpr unsigned int PLATE_IMEX_MODE_ID = 9;
-    static constexpr unsigned int GRABBER_COUNT = 10;
+    static constexpr unsigned int PLATE_ACTIONS_HOVER_ID = 10;
+    static constexpr unsigned int GRABBER_COUNT = 11;
 
     // Sentinel encoded into GLVolume::composite_id.object_id for IMEX ghost volumes.
     // Real object_ids are small non-negative ints, so a large-negative base is unambiguous.
@@ -463,7 +486,19 @@ public:
     ModelInstance* get_instance(int obj_id, int instance_id);
     BoundingBoxf3 get_objects_bounding_box();
 
-    Vec3d get_origin() { return m_origin; }
+    Vec3d get_origin() const { return m_origin; }
+    bool has_workspace_position() const { return m_has_workspace_position; }
+    const Vec2d& workspace_position() const { return m_workspace_position; }
+    // Cancellation only: roll geometry back through move_plate/move_stage first,
+    // then restore the original automatic/free-placement bookkeeping.
+    bool restore_workspace_position(bool fixed, const Vec2d& position)
+    {
+        if (fixed && (!position.allFinite() || position.cwiseAbs().maxCoeff() > 100000.0 ||
+                      (position - m_origin.head<2>()).squaredNorm() > 1e-12)) return false;
+        m_has_workspace_position = fixed;
+        m_workspace_position = position;
+        return true;
+    }
     //Vec3d calculate_wipe_tower_size(const DynamicPrintConfig &config, const double w, const double wipe_volume, int plate_extruder_size = 0, bool use_global_objects = false) const;
     // plate_extruder_size: a floor on the filaments purged on the plate; its own are always
     //                      counted, so 0 sizes for exactly those.
@@ -534,7 +569,7 @@ public:
     void set_vase_mode_related_object_config(int obj_id = -1);
 
     //whether it is empty
-    bool empty() { return obj_to_instance_set.empty(); }
+    bool empty() const { return obj_to_instance_set.empty(); }
 
     int printable_instance_size();
 
@@ -564,7 +599,7 @@ public:
     void set_selected();
     void set_unselected();
     void set_hover_id(int id) { m_hover_id = id; }
-    const BoundingBoxf3& get_bounding_box(bool extended = false) { return extended ? m_extended_bounding_box : m_bounding_box; }
+    const BoundingBoxf3& get_bounding_box(bool extended = false) const { return extended ? m_extended_bounding_box : m_bounding_box; }
     const BoundingBox get_bounding_box_crd();
     BoundingBoxf3 get_plate_box() {return get_build_volume();}
     BoundingBoxf3 get_build_volume(bool use_share = false);
@@ -580,6 +615,7 @@ public:
     void update_states();
 
     //is locked or not
+    const std::string& stage_id() const { return m_stage_id; }
     bool is_locked() const { return m_locked; }
     void lock(bool state) { m_locked = state; }
 
@@ -706,7 +742,7 @@ public:
         std::vector<std::pair<int, int>>	objects_and_instances;
         std::vector<std::pair<int, int>>	instances_outside;
 
-        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config, m_print_setup, m_has_workspace_position, m_workspace_position);
+        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config, m_print_setup, m_has_workspace_position, m_workspace_position, m_stage_id);
 
         for (std::vector<std::pair<int, int>>::iterator it = objects_and_instances.begin(); it != objects_and_instances.end(); ++it)
             obj_to_instance_set.insert(std::pair(it->first, it->second));
@@ -724,7 +760,7 @@ public:
         for (std::set<std::pair<int, int>>::iterator it = obj_to_instance_set.begin(); it != obj_to_instance_set.end(); ++it)
             objects_and_instances.emplace_back(it->first, it->second);
 
-        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config, m_print_setup, m_has_workspace_position, m_workspace_position);
+        ar(m_plate_index, m_name, m_print_index, m_origin, m_width, m_depth, m_height, m_locked, m_selected, m_ready_for_slice, m_slice_result_valid, m_apply_invalid, m_printable, m_tmp_gcode_path, objects_and_instances, instances_outside, m_config, m_print_setup, m_has_workspace_position, m_workspace_position, m_stage_id);
     }
     /*template<class Archive> void serialize(Archive& ar)
     {
@@ -767,6 +803,24 @@ class PartPlateList : public ObjectBase
     BoundingBoxf3 m_bounding_box;
     bool m_intialized;
     bool m_independent_setups{false};
+    std::vector<WorkspaceStage> m_stages;
+    ProcessSettingsScopes m_process_scopes;
+    std::map<std::string, BoundingBoxf> m_plate_drag_stage_bounds;
+    std::vector<ObjectID> m_workspace_selection;
+    bool m_workspace_selection_explicit {false};
+    // Parsed production record for the plate labels, refreshed only when it changes.
+    std::string m_production_record;
+    std::unordered_set<std::string> m_production_ready_keys;
+    bool m_production_record_valid {false};
+    void reset_production_ready_keys();
+    // The first layout change fixes every bed's absolute position so later
+    // additions, removals and moves cannot reflow the existing plates.
+    void freeze_workspace_positions();
+    void workspace_layout_changed(bool beds_moved);
+    std::vector<WorkspacePlateBounds> workspace_plate_bounds() const;
+    bool stage_area_is_available(const std::string& id, const BoundingBoxf& current, const BoundingBoxf& proposed) const;
+    bool can_move_stage_internal(const std::string& id, const Vec2d& position, bool check_stage_area) const;
+    bool move_stage_internal(const std::string& id, const Vec2d& position, bool check_stage_area);
     std::string m_logo_texture_filename;
     GLTexture m_logo_texture;
     GLTexture m_del_texture;
@@ -795,7 +849,7 @@ class PartPlateList : public ObjectBase
     std::array<GLTexture, 4> m_imex_mode_textures;          // indexed by ImexModeKind
     std::array<GLTexture, 4> m_imex_mode_hovered_textures;
     GLTexture m_imex_warn_texture;  // warning badge for IMEX + multi-material conflict
-    GLTexture m_idx_textures[MAX_PLATE_COUNT];
+    GLTexture m_idx_textures[max_project_plates];
     // set render option
     bool render_bedtype_logo = true;
     bool render_plate_settings = true;
@@ -864,7 +918,7 @@ public:
         void                     reset();
     };
 
-    static constexpr unsigned int MAX_PLATES_COUNT = MAX_PLATE_COUNT;
+    static constexpr unsigned int MAX_PLATES_COUNT = max_project_plates;
     static GLTexture bed_textures[(unsigned int)btCount];
     static bool is_load_bedtype_textures;
     static bool is_load_cali_texture;
@@ -931,8 +985,53 @@ public:
     }
 
     int get_curr_plate_index() const { return m_current_plate; }
+    // Ascending indices of empty, unlocked plates; leaves one selected plate if all are empty.
+    std::vector<int> empty_plate_indices_to_remove() const;
     bool move_plate(int index, const Vec2d& position);
+    // First free origin in a stage's grid for a new plate copying the current
+    // plate's bed, or nothing when every candidate is blocked.
+    std::optional<Vec2d> new_stage_plate_position(const Vec2d& anchor) const;
+    // Proposed origins for movable ungrouped plates, excluding plates that an
+    // optimization preview will remove. Empty when there is nothing to arrange
+    // or a safe layout cannot be computed.
+    std::vector<std::pair<int, Vec2d>> workspace_arrangement(const std::vector<int>& removed = {}) const;
+    bool arrange_workspace_plates();
+    bool can_move_plates(const std::vector<int>& indices, const Vec2d& delta) const;
+    bool move_plates(const std::vector<int>& indices, const Vec2d& delta);
+    std::vector<int> workspace_selection() const;
+    bool is_workspace_selected(int index) const;
+    // False once the explicit selection holds no plate; the active plate then keeps its cue.
+    bool has_workspace_selection() const;
+    void select_workspace_plate(int index, bool toggle = false);
+    void clear_workspace_selection();
+    void begin_plate_drag(int index);
+    void end_plate_drag();
+    const std::vector<WorkspaceStage>& stages() const { return m_stages; }
+    ProcessSettingsScopes& process_scopes() { return m_process_scopes; }
+    const ProcessSettingsScopes& process_scopes() const { return m_process_scopes; }
+    PlatePrintSetup process_setup(int index) const;
+    bool refresh_process_cascade();
+    std::string create_stage(const std::string& name, const Vec2d& position, int member_index = -1);
+    bool rename_stage(const std::string& id, const std::string& name);
+    bool remove_stage(const std::string& id);
+    bool can_set_plate_stage(int index, const std::string& id) const;
+    bool set_plate_stage(int index, const std::string& id);
+    bool can_set_plates_stage(const std::vector<int>& indices, const std::string& id) const;
+    bool set_plates_stage(const std::vector<int>& indices, const std::string& id);
+    // position is the stage anchor; all members retain their bed-relative placement.
+    bool move_stage(const std::string& id, const Vec2d& position);
+    bool can_move_stage(const std::string& id, const Vec2d& position) const;
+    // Trusted gesture cancellation may restore a pre-existing overlapping area.
+    bool restore_stage_position(const std::string& id, const Vec2d& position);
+    BoundingBoxf stage_bounds(const std::string& id) const;
+    BoundingBoxf stage_minimum_bounds(const std::string& id) const;
+    bool can_resize_stage(const std::string& id, const BoundingBoxf& bounds) const;
+    bool resize_stage(const std::string& id, const BoundingBoxf& bounds);
+    // Gesture cancellation restores the original relative frame, including auto sizing.
+    bool restore_stage_frame(const std::string& id, const BoundingBoxf& frame);
     bool independent_setups() const { return m_independent_setups; }
+    // Production parts whose required count is accepted, or null without a valid record.
+    const std::unordered_set<std::string>* production_ready_keys(const Model& model);
     void enable_independent_setups();
     PartPlate* get_curr_plate() { return m_plate_list[m_current_plate]; }
     const PartPlate* get_curr_plate() const { return m_plate_list[m_current_plate]; }
@@ -954,7 +1053,9 @@ public:
     std::set<int> get_extruders(bool conside_custom_gcode = false) const;
 
     //select plate
-    int select_plate(int index);
+    // discard_live_setup: the editing context belonged to a plate that no longer
+    // exists, so load the selected plate's setup without capturing into it.
+    int select_plate(int index, bool discard_live_setup = false);
 
     //get the plate counts, not including the invalid plate
     int get_plate_count() const;
@@ -1092,6 +1193,9 @@ public:
     */
     int store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool with_slice_info = true, int plate_idx = -1);
     int load_from_3mf_structure(PlateDataPtrs& plate_data_list, int filament_count = 1);
+    // Incoming positions and setup have been validated on an isolated model.
+    // Existing jobs, their slice results and the active editing setup stay owned here.
+    void append_project_plates(const Model& incoming, const std::vector<PlateData>& plates);
     //load gcode files
     int load_gcode_files();
 
@@ -1099,7 +1203,7 @@ public:
     {
         //ar(cereal::base_class<ObjectBase>(this));
         //Cancel undo/redo for m_shape ,Because the printing area of different models is different, currently if the grid changes, it cannot correspond to the model on the left ui
-        ar(m_plate_width, m_plate_depth, m_plate_height, m_height_to_lid, m_height_to_rod, m_height_limit_mode, m_plate_count, m_current_plate, m_plate_list, unprintable_plate, m_independent_setups);
+        ar(m_plate_width, m_plate_depth, m_plate_height, m_height_to_lid, m_height_to_rod, m_height_limit_mode, m_plate_count, m_current_plate, m_plate_list, unprintable_plate, m_independent_setups, m_stages, m_process_scopes);
         //ar(m_plate_width, m_plate_depth, m_plate_height, m_plate_count, m_current_plate);
     }
     struct Rect

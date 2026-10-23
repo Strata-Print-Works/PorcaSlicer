@@ -755,6 +755,7 @@ void ViewerImpl::SegmentsUniforms::init(unsigned int shader_id)
     segment_index_tex      = glGetUniformLocation(shader_id, "segment_index_tex");
     reverse_order          = glGetUniformLocation(shader_id, "reverse_order");
     instances_count        = glGetUniformLocation(shader_id, "instances_count");
+    segments_per_instance  = glGetUniformLocation(shader_id, "segments_per_instance");
     // ORCA: section view
     clipping_plane         = glGetUniformLocation(shader_id, "clipping_plane");
 }
@@ -2144,6 +2145,7 @@ void ViewerImpl::render_segments(const Mat4x4& view_matrix, const Mat4x4& projec
     auto draw = [this, &uni](size_t count) {
         glsafe(glUniform1i(uni.instances_count, static_cast<int>(count)));
         if (!m_rendering_shadow_casters) {
+            glsafe(glUniform1i(uni.segments_per_instance, static_cast<int>(SegmentTemplate::SEGMENTS_PER_INSTANCE)));
             m_segment_template.render(count);
             return;
         }

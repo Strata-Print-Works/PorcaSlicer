@@ -8,6 +8,7 @@
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/Config.hpp"
 #include "libslic3r/Color.hpp"
 // BBS
 #include "libslic3r/ObjectID.hpp"
@@ -50,6 +51,7 @@ extern Slic3r::ColorRGBA              adjust_color_for_rendering(const Slic3r::C
 namespace Slic3r {
 namespace GUI {
     class Size;
+    class PartPlateList;
 }
 
 class SLAPrintObject;
@@ -62,6 +64,7 @@ class ExtrusionLoop;
 class ExtrusionEntity;
 class ExtrusionEntityCollection;
 class ModelObject;
+class Model;
 class ModelVolume;
 class GLShaderProgram;
 enum ModelInstanceEPrintVolumeState : unsigned char;
@@ -355,6 +358,7 @@ public:
     BoundingBoxf3        transformed_non_sinking_bounding_box(const Transform3d& trafo) const;
     // caching variant
     const BoundingBoxf3& transformed_non_sinking_bounding_box() const;
+    const BoundingBoxf3& transformed_non_sinking_bounding_box(const Model& model) const;
     // convex hull
     const TriangleMesh*  convex_hull() const { return m_convex_hull.get(); }
 
@@ -380,6 +384,7 @@ public:
     bool                is_sla_pad() const;
 
     bool                is_sinking() const;
+    bool                is_sinking(PrinterTechnology technology) const;
     bool                is_below_printbed() const;
     void                render_sinking_contours();
 
@@ -558,6 +563,10 @@ public:
     // returns true if all the volumes are completely contained in the print volume
     // returns the containment state in the given out_state, if non-null
     bool check_outside_state(const Slic3r::BuildVolume& build_volume, ModelInstanceEPrintVolumeState* out_state, ObjectFilamentResults* object_results) const;
+    // Explicit scene context also permits collision validation without a window or GL context.
+    bool check_outside_state(const BuildVolume& build_volume, const Model& model, GUI::PartPlateList& plates,
+                             const DynamicPrintConfig& project_config, PrinterTechnology technology, ModelInstanceEPrintVolumeState* out_state,
+                             ObjectFilamentResults* object_results) const;
     void reset_outside_state();
     bool check_wipe_tower_outside_state(const Slic3r::BuildVolume &build_volume, int plate_id) const;
 

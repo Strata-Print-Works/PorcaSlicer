@@ -1,0 +1,130 @@
+/* Home inherits Porca's palette from light.css and the app-selected dark.css.
+   Keep this after home.css/global.css: the OS theme does not select this page's theme. */
+@font-face {
+  font-family: Figtree;
+  src: url('../../../design-system/fonts/Figtree-Variable.woff2') format('woff2');
+  font-weight: 300 900;
+  font-display: swap;
+}
+
+:root {
+  --main-color: var(--porca-accent-ink);
+  --main-color-hover: var(--porca-primary-hover);
+  --main-color-fixed: var(--porca-accent-ink);
+  --bg-color: var(--porca-bg);
+  --bg-color-secondary: var(--porca-surface);
+  --bg-color-alt: var(--porca-surface-raised);
+  --fg-color-text: var(--porca-ink);
+  --fg-color-label: var(--porca-ink-muted);
+  --fg-color-disabled: var(--porca-ink-disabled);
+  --focus-bg-item: var(--porca-accent-soft);
+  --focus-bg-box: var(--porca-surface-hover);
+  --border-color: var(--porca-line);
+  --icon-color: var(--porca-ink-muted);
+  --button-fg-light: var(--porca-on-primary);
+  --button-fg-text: var(--porca-ink);
+  --button-fg-disabled: var(--porca-ink-disabled);
+  --button-bg-normal: var(--porca-surface-raised);
+  --button-bg-hover: var(--porca-surface-hover);
+  --button-bg-disabled: var(--porca-surface-raised);
+  --button-bg-alert: var(--porca-danger-soft);
+  --row-hover: var(--porca-surface-hover);
+  --warn-color: var(--porca-warning);
+  --account-avatar-bg: var(--porca-surface-hover);
+  --account-avatar-glyph: var(--porca-ink-muted);
+  --account-surface: var(--porca-surface-raised);
+  --account-name: var(--porca-ink);
+  --account-meta: var(--porca-ink-muted);
+  --account-border: var(--porca-line-control);
+  --account-divider: var(--porca-line);
+  --account-action: var(--porca-accent-ink);
+  --account-danger: var(--porca-danger);
+  --account-danger-bg: var(--porca-danger-soft);
+  --account-warn-bg: var(--porca-warning-soft);
+  --account-dot-off: var(--porca-ink-disabled);
+  --account-dot-on: var(--porca-success);
+  --account-menu-shadow: none;
+}
+
+* { box-sizing: border-box; font-family: Figtree, system-ui, sans-serif; border-color: var(--porca-line); }
+html, body { background: var(--porca-bg); color: var(--porca-ink); font-size: 14px; line-height: 1.45; }
+body { overflow: hidden; }
+button { font: inherit; color: inherit; text-align: left; background: none; cursor: pointer; }
+::selection { background: var(--porca-accent); color: var(--porca-on-accent); }
+button:focus-visible, [role=button]:focus-visible, [role=menuitem]:focus-visible, .LinkBtn:focus-visible {
+  outline: 2px solid var(--porca-focus);
+  outline-offset: -2px;
+}
+.TextS1 { color: var(--porca-ink); }
+.TextS2, .MenuDesc, .FileDate, .UG_DESC, #HotModel_RIGHT_Title { color: var(--porca-ink-muted); }
+.LinkBtn { color: var(--porca-accent-ink); text-underline-offset: 3px; }
+.ZScrol, #FileList { scrollbar-width: thin; scrollbar-color: var(--porca-ink-disabled) var(--porca-bg); }
+.ZScrol::-webkit-scrollbar, #FileList::-webkit-scrollbar { width: 8px; height: 8px; }
+.ZScrol::-webkit-scrollbar-thumb, #FileList::-webkit-scrollbar-thumb { background: var(--porca-ink-disabled); border-radius: 4px; box-shadow: none; }
+.ZScrol::-webkit-scrollbar-track, #FileList::-webkit-scrollbar-track { background: var(--porca-bg); box-shadow: none; }
+
+#LeftBoard { flex: 0 0 244px; width: 244px; background: var(--porca-surface); }
+#LoginArea { width: 100%; padding: 14px 10px 12px; }
+.AccountRow { padding: 10px 12px; gap: 10px; border-radius: 6px; min-height: 54px; }
+.AccountAvatar { width: 32px; height: 32px; }
+.AccountName, .AccountSecondary { font-size: 14px; }
+#BambuCloudHeader { padding-left: 12px; height: 32px; }
+.AccountRowCompact { padding-left: 22px; }
+#BtnArea { padding: 14px 10px; }
+.BtnItem { width: 100%; height: 42px; line-height: normal; padding: 0 14px; gap: 6px; align-items: center; border-radius: 6px; margin-bottom: 4px; color: var(--porca-ink-muted); }
+.BtnItem:hover { background: var(--porca-surface-hover); color: var(--porca-ink); }
+.BtnItemSelected { color: var(--porca-accent-ink); background: var(--porca-accent-soft); }
+.BtnItemSelected:hover { color: var(--porca-accent-ink); background: var(--porca-accent-soft); }
+.BtnIcon { margin-right: 4px; }
+.BtnIcon svg { width: 19px; height: 19px; }
+.ShortcutBrandIcon { filter: grayscale(1); opacity: .8; }
+.ShortcutTextRow { min-width: 0; }
+
+#RightBoard { flex: 1 1 auto; width: auto; min-width: 0; overflow: hidden; }
+#ContentBoard { padding: 26px 36px 20px; overflow: hidden; }
+#MenuArea { height: auto; flex: 0 0 auto; gap: 12px; padding: 0 0 30px; align-items: stretch; }
+.MenuItem { width: 220px; min-height: 76px; height: auto; margin: 0; padding: 18px; gap: 12px; border: 1px solid var(--porca-line-control); border-radius: 8px; background: var(--porca-surface); font-weight: 550; }
+.MenuItem:hover { border-color: var(--porca-accent-ink); background: var(--porca-surface-hover); }
+.MenuIcon { margin: 0; display: flex; color: var(--porca-accent-ink); }
+.MenuIcon svg { width: 26px; height: 26px; }
+.MenuIcon svg, .BtnIcon svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#DebugText { display: none; }
+#RecentFileArea { margin: 0; }
+#RecentTitleBlock { padding: 0 0 16px; min-height: 40px; gap: 16px; }
+#RecentTitle { font-size: 16px; font-weight: 650; line-height: 1.4; }
+#RecentClearAllBtn { margin: 0; height: 28px; padding: 0 10px; line-height: 28px; border-radius: 5px; font-size: 12px; font-weight: 450; background: transparent; color: var(--porca-ink-muted); }
+#RecentClearAllBtn:hover { background: var(--porca-surface-hover); color: var(--porca-ink); }
+#FileList { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 24px 20px; align-content: start; padding: 2px 4px 24px 2px; }
+.FileItem { width: auto; min-width: 0; margin: 0; border-radius: 8px; overflow: visible; }
+.FileTip { z-index: 1; border-radius: 8px; }
+.FileItem:focus-visible { outline: 2px solid var(--porca-focus); outline-offset: 3px; }
+.FileImg { display: flex; align-items: center; justify-content: center; background: var(--porca-surface-raised); width: 100%; height: auto; aspect-ratio: 1; border-radius: 8px; border: 1px solid transparent; overflow: hidden; }
+.FileItem:hover .FileImg, .FileItem:focus-visible .FileImg { border-color: var(--porca-accent-ink); background: var(--porca-surface-hover); }
+.FileItem img { display: block; width: 100%; height: 100%; border-radius: 0; object-fit: contain; }
+.FileNamePack { margin-top: 10px; }
+.FileName { font-size: 13px; font-weight: 550; line-height: 19px; }
+.FileDate { font-size: 11px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.FilePublishedBadge { background: var(--porca-accent-soft); color: var(--porca-accent-ink); }
+.FileImg .FilePlaceholder { width: 34%; height: 34%; opacity: .45; }
+.FileImg .FileLogoBadge { background: var(--porca-surface); border-radius: 5px; }
+#recnet_context_menu { padding: 5px; border: 1px solid var(--porca-line-control); background: var(--porca-surface-raised); color: var(--porca-ink); border-radius: 8px; box-shadow: none; z-index: 25; }
+.CT_Item { width: 100%; min-height: 32px; padding: 5px 10px; border-radius: 4px; }
+.CT_Item:hover { background: var(--porca-surface-hover); color: var(--porca-ink); }
+.CT_Icon, #CT_Delete_Bar:hover .CT_Delete, #CT_Folder_Bar:hover .CT_Explore { background: currentColor; }
+.CT_Delete { -webkit-mask: url('../img/remove.svg') center / contain no-repeat; mask: url('../img/remove.svg') center / contain no-repeat; }
+.CT_Explore { -webkit-mask: url('../img/open_folder.svg') center / contain no-repeat; mask: url('../img/open_folder.svg') center / contain no-repeat; }
+.CT_Seperate { border-color: var(--porca-line); }
+
+@media (max-width: 1000px) {
+  #LeftBoard { flex-basis: 220px; width: 220px; }
+  #ContentBoard { padding: 24px; }
+  #FileList { grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); gap: 20px 16px; }
+  .MenuItem { width: 200px; }
+}
+@media (max-width: 720px) {
+  #LeftBoard { flex-basis: 190px; width: 190px; }
+  #ContentBoard { padding: 18px; }
+  #MenuArea { gap: 10px; padding-bottom: 24px; }
+  .MenuItem { width: auto; flex: 1; padding: 12px; min-height: 64px; gap: 8px; }
+  .MenuIcon svg { width: 20px; height: 20px; }
+}

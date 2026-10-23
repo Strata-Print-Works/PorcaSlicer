@@ -5,6 +5,7 @@
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/MainFrame.hpp"
 #include "libslic3r_version.h"
+#include "libslic3r/PrintConfig.hpp"
 
 #include <boost/filesystem/path.hpp>
 #include <utility>
@@ -206,14 +207,15 @@ void PrinterWebView::reset_browser()
     m_url_deferred = m_url;
 }
 
-void PrinterWebView::load_url(wxString& url, wxString apikey)
+void PrinterWebView::load_url(wxString& url, wxString apikey, const DynamicPrintConfig* config)
 {
 //    this->Show();
 //    this->Raise();
     m_url = url;
     m_apikey = apikey;
     m_apikey_sent = false;
-    m_handler = create_printer_webview_handler(*this);
+    m_config = config ? std::make_unique<DynamicPrintConfig>(*config) : nullptr;
+    m_handler = create_printer_webview_handler(*this, m_config.get());
 
     if (this->IsShown()) {
         //ORCA: m_url_deferred will be cleared on load success
@@ -228,9 +230,19 @@ void PrinterWebView::load_url(wxString& url, wxString apikey)
 
 bool PrinterWebView::Show(bool show)
 {
+    if (!show && IsShown() && !m_url.empty()) {
+        // Unload the document, including vendor camera streams and timers.
+        // Keep credentials and the requested URL local for the next explicit view.
+        m_url_deferred = m_url;
+        // Retire queued IPC and cancel any owned upload before unloading this page.
+        if (m_config) m_handler.reset();
+        m_apikey_sent = false;
+        m_browser->LoadURL("about:blank");
+    }
     if (show && std::exchange(m_reset_on_show, false))
         reset_browser();
     if (show && !m_url_deferred.empty()) {
+        if (m_config && !m_handler) m_handler = create_printer_webview_handler(*this, m_config.get());
         m_browser->LoadURL(m_url_deferred);
         //ORCA: m_url_deferred will be cleared on load success
         //m_url_deferred.clear();
@@ -328,16 +340,19 @@ void PrinterWebView::OnError(wxWebViewEvent &evt)
         e = "wxWEBVIEW_NAV_ERR_OTHER";
         break;
       }
-    BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(": error loading page %1% %2% %3% %4%") %evt.GetURL() %evt.GetTarget() %e %evt.GetString();
+    // Local vendor URLs may contain access codes. Never log the URL, target or
+    // server-supplied error text; the navigation category is sufficient here.
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": " << e;
 }
 
 void PrinterWebView::OnLoaded(wxWebViewEvent& evt)
 {
+    if (!IsShownOnScreen() || evt.GetURL() == "about:blank") return;
     if (evt.GetURL().IsEmpty())
         return;
     //ORCA: url loaded successfully, safe to clear
     m_url_deferred.clear();
-    SendAPIKey();
+    if (!m_handler) SendAPIKey(); // Elegoo uses its own access-code/IPC handshake.
   
     if (m_handler != nullptr) {
         m_handler->on_loaded(evt);
@@ -355,6 +370,8 @@ void PrinterWebView::OnNewWindow(wxWebViewEvent& evt)
 
 void PrinterWebView::OnScriptMessage(wxWebViewEvent& evt)
 {
+    if (!IsShownOnScreen()) return; // Hidden cached pages cannot act on the current inspector.
+
   if (m_handler != nullptr)
     m_handler->on_script_message(evt);
 }

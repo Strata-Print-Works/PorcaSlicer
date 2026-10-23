@@ -96,7 +96,8 @@ struct PlateData
 
     int plate_index;
     std::vector<std::pair<int, int>> objects_and_instances;
-    std::map<int, std::pair<int, int>> obj_inst_map;
+    // Several copies of one object may belong to the same plate.
+    std::multimap<int, std::pair<int, int>> obj_inst_map;
     std::string     printer_model_id;
     std::string     nozzle_diameters;
     std::string     nozzle_volume_types;
@@ -122,6 +123,14 @@ struct PlateData
     PlatePrintSetup print_setup;
     bool has_workspace_position {false};
     Vec2d workspace_position {Vec2d::Zero()};
+    // Origin used by the model's current instance transforms. GUI export supplies
+    // it; project import reads the conventional file origin without relocating meshes.
+    bool has_model_origin {false};
+    Vec2d model_origin {Vec2d::Zero()};
+    std::string stage_id;
+    // The first exported plate carries the project-wide catalog, including empty stages.
+    bool has_workspace_stages {false};
+    std::vector<WorkspaceStage> workspace_stages;
     bool            is_support_used {false};
     bool            is_sliced_valid = false;
     bool            toolpath_outside {false};

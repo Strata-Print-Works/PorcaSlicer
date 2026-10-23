@@ -11,7 +11,8 @@
 #include <type_traits>
 #include <limits>
 
-#define MAX_NUM_PLATES 36
+// Mirrors max_project_plates in src/libslic3r/PlateCapacity.hpp; ArrangeJob.cpp static_asserts it is large enough.
+#define MAX_NUM_PLATES 72
 
 #if defined(_MSC_VER) &&  _MSC_VER <= 1800 || __cplusplus < 201103L
     #define BP2D_NOEXCEPT

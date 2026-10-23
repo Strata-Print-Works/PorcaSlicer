@@ -1,4 +1,5 @@
 #include "HyperLink.hpp"
+#include "StateColor.hpp"
 #include "Label.hpp"
 #include <wx/string.h>
 #include <wx/wx.h>
@@ -14,10 +15,10 @@ namespace Slic3r { namespace GUI {
 HyperLink::HyperLink(wxWindow* parent, const wxString& label, const wxString& url, long style)
     : wxStaticText(parent, wxID_ANY, label)
     , m_url(url)
-    , m_normalColor(wxColour("#009687")) // used slightly different color otherwise automatically uses ColorForDark that not visible enough
+    , m_normalColor(wxColour("#009688"))
     , m_hoverColor(wxColour("#26A69A"))
 {
-    SetForegroundColour(m_normalColor);
+    SetForegroundColour(StateColor::darkModeColorFor(m_normalColor));
     HyperLink::SetFont(Label::Head_14);
     SetCursor(wxCursor(wxCURSOR_HAND));
 
@@ -30,11 +31,11 @@ HyperLink::HyperLink(wxWindow* parent, const wxString& label, const wxString& ur
          }));
 
     Bind(wxEVT_ENTER_WINDOW, ([this](wxMouseEvent& e) {
-             SetForegroundColour(m_hoverColor);
+             SetForegroundColour(StateColor::darkModeColorFor(m_hoverColor));
              Refresh();
          }));
     Bind(wxEVT_LEAVE_WINDOW, ([this](wxMouseEvent& e) {
-             SetForegroundColour(m_normalColor);
+             SetForegroundColour(StateColor::darkModeColorFor(m_normalColor));
              Refresh();
          }));
 }

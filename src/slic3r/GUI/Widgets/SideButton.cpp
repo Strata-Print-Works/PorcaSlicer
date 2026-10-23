@@ -3,6 +3,7 @@
 #include "Label.hpp"
 
 #include <vector>
+#include <algorithm>
 #include "slic3r/GUI/Widgets/StateHandler.hpp"
 #include <wx/colour.h>
 #include <wx/dc.h>
@@ -12,6 +13,7 @@
 #include <wx/stattext.h>
 #include <wx/gdicmn.h>
 #include <wx/event.h>
+#include <wx/defs.h>
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "slic3r/GUI/wxExtensions.hpp"
 
@@ -69,6 +71,13 @@ SideButton::SideButton(wxWindow* parent, wxString text, wxString icon, long stly
     wxWindow::SetLabel(text);
 
     messureSize();
+    Bind(wxEVT_CHAR, [this](wxKeyEvent& event) {
+        if (IsEnabled() && (event.GetKeyCode() == WXK_SPACE || event.GetKeyCode() == WXK_RETURN))
+            sendButtonEvent();
+        else event.Skip();
+    });
+    Bind(wxEVT_SET_FOCUS, [this](wxFocusEvent& event) { Refresh(); event.Skip(); });
+    Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent& event) { Refresh(); event.Skip(); });
 }
 
 void SideButton::SetCornerRadius(double radius)
@@ -223,9 +232,9 @@ void SideButton::dorender(wxDC& dc, wxDC& text_dc)
     if (icon.bmp().IsOk()) {
         if (radius > 1e-5) {
             dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
-            dc.DrawRectangle(radius, 0, size.x - radius, size.y);
+            dc.DrawRectangle(layout_style == 2 ? 0 : radius, 0, size.x - radius, size.y);
             dc.SetPen(wxNullPen);
-            dc.DrawRectangle(radius - pen_width, pen_width, radius, size.y - 2 * pen_width);
+            dc.DrawRectangle(layout_style == 2 ? pen_width : radius - pen_width, pen_width, radius, size.y - 2 * pen_width);
         }
         else {
             dc.DrawRectangle(0, 0, size.x, size.y);
@@ -237,6 +246,11 @@ void SideButton::dorender(wxDC& dc, wxDC& text_dc)
             if (layout_style == 1) {
                 dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
                 dc.SetPen(wxNullPen);
+            } else if (layout_style == 2) {
+                dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
+                dc.DrawRectangle(size.x - radius, 0, radius, size.y);
+                dc.SetPen(wxNullPen);
+                dc.DrawRectangle(radius, pen_width, size.x - radius - pen_width, size.y - 2 * pen_width);
             } else {
                 dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
                 dc.DrawRectangle(0, 0, radius, size.y);
@@ -249,6 +263,11 @@ void SideButton::dorender(wxDC& dc, wxDC& text_dc)
     }
 
     dc.SetBrush(*wxTRANSPARENT_BRUSH);
+    if (layout_style == 2 && HasFocus() && IsEnabled()) {
+        dc.SetPen(wxPen(text_color.colorForStates(states)));
+        dc.DrawRoundedRectangle(FromDIP(2), FromDIP(2), size.x - FromDIP(4), size.y - FromDIP(4),
+            std::max(0.0, radius - FromDIP(2)));
+    }
     // calc content size
     wxSize szIcon;
     wxSize szContent = textSize;

@@ -13,6 +13,8 @@
 #include <wx/arrstr.h>
 #include <wx/clntdata.h>
 #include <wx/event.h>
+#include <functional>
+#include <utility>
 
 #define CB_NO_DROP_ICON DD_NO_CHECK_ICON
 #define CB_NO_TEXT DD_NO_TEXT
@@ -41,6 +43,13 @@ public:
              long            style     = 0);
 
     DropDown & GetDropDown() { return drop; }
+
+    void SetPrinterPopupStyle(bool enabled = true) { drop.SetPrinterPopupStyle(enabled); }
+    bool HasPrinterPopupStyle() const { return drop.HasPrinterPopupStyle(); }
+    void SetPrinterPopupActions(std::function<void()> edit, std::function<void()> manage)
+    { drop.SetPrinterPopupActions(std::move(edit), std::move(manage)); }
+    void SetPrinterPopupFooterIndex(int index) { drop.SetPrinterPopupFooterIndex(index); }
+    void SetPrinterPopupAnchor(wxWindow* anchor) { drop.SetPrinterPopupAnchor(anchor); }
 
     // When true, item icon is shown as icon_1 (secondary), preserving drop_down arrow.
     // Note: item bitmaps are set via raw wxBitmap (not ScalableBitmap), so they won't
@@ -93,6 +102,9 @@ public:
 
     wxString GetItemAlias(unsigned int n) const;
     void     SetItemAlias(unsigned int n, wxString const &value);
+    void SetItemSubtitle(unsigned int n, const wxString& subtitle);
+    void SetItemStatusProvider(unsigned int n, std::function<DropDown::ItemStatus()> provider);
+    void SetPrinterPopupItemLabel(unsigned int n, const wxString& label);
 
     wxBitmap GetItemBitmap(unsigned int n);
     void     SetItemBitmap(unsigned int n, wxBitmap const &bitmap);

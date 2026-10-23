@@ -64,7 +64,6 @@ class ImGuiWrapper
     unsigned m_font_texture{ 0 };
     unsigned m_font_another_texture{ 0 };
     float m_style_scaling{ 1.0 };
-    unsigned m_mouse_buttons{ 0 };
     bool m_disabled{ false };
     bool m_new_frame_open{ false };
 #if ENABLE_ENHANCED_IMGUI_SLIDER_FLOAT
@@ -98,6 +97,7 @@ public:
     bool update_key_data(wxKeyEvent &evt);
 
     float get_font_size() const { return m_font_size; }
+    ImFont* get_code_font() const { return code_font; }
     float get_style_scaling() const { return m_style_scaling; }
     const ImWchar *get_glyph_ranges() const { return m_glyph_ranges; } // language specific
 
@@ -247,6 +247,7 @@ public:
     /// When input is activ it can't change value by application.
     /// </summary>
     static void left_inputs();
+    static void cancel_mouse_drag();
 
     /// <summary>
     /// Truncate text by ImGui draw function to specific width
@@ -416,6 +417,7 @@ private:
     LastSliderStatus m_last_slider_status;
     ImFont* default_font = nullptr;
     ImFont* bold_font = nullptr;
+    ImFont* code_font = nullptr;
     std::map<std::string, ImFont*> im_fonts_map;
     std::vector<std::string> m_fonts_names;
 };

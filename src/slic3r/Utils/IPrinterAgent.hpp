@@ -43,6 +43,18 @@ struct PrinterConnectionParams
     std::string password;
     bool use_ssl = false; // indicates if http or https
     std::string ca_file;
+    // Captured from this device's saved profile on the UI thread. Background
+    // connections must not obtain model identity from the active plate.
+    std::string model_name;
+    std::string model_id;
+
+    bool operator==(const PrinterConnectionParams& other) const
+    {
+        return dev_id == other.dev_id && host == other.host && port == other.port &&
+               username == other.username && password == other.password &&
+               use_ssl == other.use_ssl && ca_file == other.ca_file &&
+               model_name == other.model_name && model_id == other.model_id;
+    }
 };
 
 /**

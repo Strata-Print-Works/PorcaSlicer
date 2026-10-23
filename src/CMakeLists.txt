@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.13)
+
+# Directory-only target paths in worker copy commands must not create a reverse
+# dependency on the executable that consumes the copy.
+if (POLICY CMP0112)
+    cmake_policy(SET CMP0112 NEW)
+endif ()
+
 project(OrcaSlicer-native)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -209,6 +216,46 @@ target_link_libraries(OrcaSlicer libslic3r_gui wxInspector::wxInspector)
     #endif ()
 endif ()
 
+# Bambu LAN worker: one fresh SDK address space per printer. It links libslic3r_gui
+# for the Bambu SDK loader and printer agent but has no GUI entry point.
+# Credentials are transferred through inherited pipes, never argv or a spool file.
+if (SLIC3R_GUI)
+    add_executable(porca_bambu_worker slic3r/Utils/BambuLanWorker.cpp)
+    set_target_properties(porca_bambu_worker PROPERTIES MACOSX_BUNDLE FALSE)
+    target_include_directories(porca_bambu_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(porca_bambu_worker PRIVATE libslic3r_gui libslic3r)
+    if (WIN32)
+        target_link_libraries(porca_bambu_worker PRIVATE ws2_32 uxtheme setupapi)
+    elseif (UNIX AND NOT APPLE)
+        target_link_libraries(porca_bambu_worker PRIVATE ${CMAKE_DL_LIBS})
+    endif ()
+    if (APPLE)
+        target_link_options(porca_bambu_worker PRIVATE "LINKER:-rpath,@executable_path/python/lib")
+    elseif (UNIX)
+        set_target_properties(porca_bambu_worker PROPERTIES BUILD_RPATH "$ORIGIN/python/lib;$ORIGIN/../lib/python/lib"
+            INSTALL_RPATH "$ORIGIN/../libpython/lib")
+    endif ()
+    # CMP0112 is set NEW at the top of this file when available.
+    if (POLICY CMP0112)
+        add_custom_target(porca_bambu_worker_bundle
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:OrcaSlicer>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:porca_bambu_worker>" "$<TARGET_FILE_DIR:OrcaSlicer>/$<TARGET_FILE_NAME:porca_bambu_worker>"
+            DEPENDS porca_bambu_worker VERBATIM)
+        add_dependencies(OrcaSlicer porca_bambu_worker_bundle)
+    else ()
+        add_dependencies(OrcaSlicer porca_bambu_worker)
+        set_property(TARGET OrcaSlicer APPEND PROPERTY LINK_DEPENDS "$<TARGET_FILE:porca_bambu_worker>")
+        add_custom_command(TARGET OrcaSlicer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:porca_bambu_worker>" "$<TARGET_FILE_DIR:OrcaSlicer>/$<TARGET_FILE_NAME:porca_bambu_worker>"
+            VERBATIM)
+    endif ()
+    if (WIN32)
+        install(TARGETS porca_bambu_worker RUNTIME DESTINATION ".")
+    elseif (NOT APPLE)
+        install(TARGETS porca_bambu_worker RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif ()
+endif ()
+
 # On Windows, a shim application is required to produce a console / non console version of the Slic3r application.
 # Also the shim may load the Mesa software OpenGL renderer if the default renderer does not support OpenGL 2.0 and higher.
 if (WIN32)
@@ -345,7 +392,7 @@ else ()
             set(BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/OrcaSlicer.app/Contents/MacOS")
         endif()
         set(MACOSX_BUNDLE_ICON_FILE images/Porca.icns)
-        set(MACOSX_BUNDLE_BUNDLE_NAME "Porca")
+        set(MACOSX_BUNDLE_BUNDLE_NAME "${SLIC3R_APP_DISPLAY_NAME}")
         set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${SoftFever_VERSION})
         set(MACOSX_BUNDLE_COPYRIGHT "Copyright(C) 2022-2024 Li Jiang All Rights Reserved")
         if (XCODE)

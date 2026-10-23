@@ -1,4 +1,5 @@
 #include "WebView.hpp"
+#include "libslic3r/Utils.hpp"
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/Utils/MacDarkMode.hpp"
@@ -217,6 +218,29 @@ public:
     {
         RemoveScriptMessageHandler("wx");
     }
+
+    bool AddScriptMessageHandler(const wxString& name) override
+    {
+        const bool previous = std::exchange(m_registering_handler, true);
+        Slic3r::ScopeGuard restore([this, previous] { m_registering_handler = previous; });
+        return wxWebViewWebKit::AddScriptMessageHandler(name);
+    }
+
+    bool RunScript(const wxString& javascript, wxString* output = nullptr) const override
+    {
+        // wx registers the native handler and a document-start alias, then
+        // synchronously evaluates that alias in the current page. Its nested
+        // wxYield loop can hang inside a modal dialog. The alias needs no result.
+        if (m_registering_handler && !output) {
+            auto* backend = GetNativeBackend();
+            if (!backend) return false;
+            Slic3r::GUI::WKWebView_evaluateJavaScript(backend, javascript, nullptr);
+            return true;
+        }
+        return wxWebViewWebKit::RunScript(javascript, output);
+    }
+private:
+    bool m_registering_handler = false;
 };
 
 #endif

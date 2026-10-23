@@ -36,7 +36,7 @@
 namespace Slic3r {
 namespace GUI {
 
-static const wxColour TEXT_NORMAL_CLR = wxColour(0, 150, 136);
+static wxColour TEXT_NORMAL_CLR() { return StateColor::darkModeColorFor(wxColour("#009688")); }
 static const wxColour TEXT_FAILED_CLR = wxColour(255, 111, 0);
 
 static const std::unordered_map<wxString, wxString> ACCESSORY_DISPLAY_STR = {
@@ -1331,8 +1331,8 @@ void MachineInfoPanel::show_status(int status, std::string upgrade_status_str)
         m_upgrade_retry_img->Hide();
         m_staticText_upgrading_info->Show();
         m_staticText_upgrading_info->SetLabel(_L("Updating"));
-        m_staticText_upgrading_info->SetForegroundColour(TEXT_NORMAL_CLR);
-        m_staticText_upgrading_percent->SetForegroundColour(TEXT_NORMAL_CLR);
+        m_staticText_upgrading_info->SetForegroundColour(TEXT_NORMAL_CLR());
+        m_staticText_upgrading_percent->SetForegroundColour(TEXT_NORMAL_CLR());
         m_staticText_upgrading_percent->Show();
     } else if (status == (int) DevFirmwareUpgradingState::UpgradingFinished) {
         if (upgrade_status_str == "UPGRADE_FAIL") {
@@ -1348,8 +1348,8 @@ void MachineInfoPanel::show_status(int status, std::string upgrade_status_str)
             m_staticText_upgrading_info->Show();
             for (size_t i = 0; i < m_upgrading_sizer->GetItemCount(); i++) { m_upgrading_sizer->Show(true); }
             m_button_upgrade_firmware->Disable();
-            m_staticText_upgrading_info->SetForegroundColour(TEXT_NORMAL_CLR);
-            m_staticText_upgrading_percent->SetForegroundColour(TEXT_NORMAL_CLR);
+            m_staticText_upgrading_info->SetForegroundColour(TEXT_NORMAL_CLR());
+            m_staticText_upgrading_percent->SetForegroundColour(TEXT_NORMAL_CLR());
             m_staticText_upgrading_percent->Show();
             m_upgrade_retry_img->Hide();
         }
@@ -1753,7 +1753,7 @@ void UpgradePanel::update(MachineObject *obj)
                     }
                 });
             }
-            consistency_dlg->update_text(_L("The firmware version is abnormal. Repairing and updating are required before printing. Do you want to update now\? You can also update later on the printer or update next time you start Orca Slicer."));
+            consistency_dlg->update_text(_L("The firmware version is abnormal. Repairing and updating are required before printing. Do you want to update now\? You can also update later on the printer or update next time you start Porca."));
             consistency_dlg->on_show();
         }
     }

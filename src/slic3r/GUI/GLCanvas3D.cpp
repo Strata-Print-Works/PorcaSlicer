@@ -1,4 +1,15 @@
+#include "PlateTransfer.hpp"
+#include "PlateLayoutDialog.hpp"
+#include "PreviewLayout.hpp"
+#include "PreviewEstimate.hpp"
 #include "ToolbarStyle.hpp"
+#include "LiveToolbarStyle.hpp"
+#include "DesignTokens.hpp"
+#include "Widgets/Label.hpp"
+#include "Typography.hpp"
+#include <wx/font.h>
+#include <wx/dcclient.h>
+#include <wx/weakref.h>
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Point.hpp"
 #include <limits>
@@ -67,6 +78,7 @@
 #include "slic3r/GUI/Selection.hpp"
 #include "GLCanvas3D.hpp"
 #include "ViewportLighting.hpp"
+#include "WorkspaceStyle.hpp"
 #include <Eigen/Geometry>
 #ifdef SLIC3R_CAD
 #include "slic3r/GUI/CAD/DesignSketchTool.hpp"   // Design tab: interactive 2D sketch tool
@@ -82,6 +94,7 @@
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/Utils.hpp"
+#include "libslic3r/format.hpp"
 #include "libslic3r/Technologies.hpp"
 #include "libslic3r/Tesselate.hpp"
 #include "libslic3r/PresetBundle.hpp"
@@ -97,6 +110,8 @@
 #include "GUI_Preview.hpp"
 #include "OpenGLManager.hpp"
 #include "Plater.hpp"
+#include "PartPlate.hpp"
+#include "libslic3r/PlatePrintSetup.hpp"
 #include "MainFrame.hpp"
 #include "WipeTowerDialog.hpp"
 #include "GUI_App.hpp"
@@ -432,7 +447,7 @@ void GLCanvas3D::LayersEditing::render_variable_layer_height_dialog(GLCanvas3D& 
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(238 / 255.0f, 238 / 255.0f, 238 / 255.0f, 0.00f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(238 / 255.0f, 238 / 255.0f, 238 / 255.0f, 0.00f));
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.81f, 0.81f, 0.81f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.00f, 0.59f, 0.53f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::AccentInk, wxGetApp().dark_mode())));
     if(ImGui::BBLSliderScalar("##radius_slider", ImGuiDataType_S32, &radius, &v_min, &v_max)){
         radius = std::clamp(radius, 1, 10);
         m_smooth_params.radius = (unsigned int)radius;
@@ -443,9 +458,9 @@ void GLCanvas3D::LayersEditing::render_variable_layer_height_dialog(GLCanvas3D& 
     input_align = std::max(input_align, ImGui::GetCursorPosX());
     ImGui::SetCursorPosX(input_align);
     ImGui::PushItemWidth(input_box_width);
-    ImGui::PushStyleColor(ImGuiCol_BorderActive, ImVec4(0.00f, 0.59f, 0.53f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.00f, 0.59f, 0.53f, 0.00f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.00f, 0.59f, 0.53f, 0.00f));
+    ImGui::PushStyleColor(ImGuiCol_BorderActive, ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::AccentInk, wxGetApp().dark_mode())));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.f, 0.f, 0.f, 0.f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.f, 0.f, 0.f, 0.f));
     ImGui::BBLDragScalar("##radius_input", ImGuiDataType_S32, &radius, 1, &v_min, &v_max);
     ImGui::PopStyleColor(3);
 
@@ -1631,6 +1646,10 @@ GLCanvas3D::GLCanvas3D(wxGLCanvas* canvas, Bed3D &bed)
     }
     m_timer_set_color.Bind(wxEVT_TIMER, &GLCanvas3D::on_set_color_timer, this);
     m_fps_overlay_timer.Bind(wxEVT_TIMER, &GLCanvas3D::on_fps_overlay_timer, this);
+    if (DesignSystem::live_toolbar_style().enabled()) {
+        m_toolbar_style_timer.Bind(wxEVT_TIMER, &GLCanvas3D::on_toolbar_style_timer, this);
+        m_toolbar_style_timer.Start(500);
+    }
     load_arrange_settings();
 
     m_selection.set_volumes(&m_volumes.volumes);
@@ -1646,6 +1665,9 @@ GLCanvas3D::GLCanvas3D(wxGLCanvas* canvas, Bed3D &bed)
 
 GLCanvas3D::~GLCanvas3D()
 {
+    if (m_canvas && m_canvas->HasCapture()) m_canvas->ReleaseMouse();
+    m_toolbar_style_timer.Stop();
+    m_toolbar_style_timer.Unbind(wxEVT_TIMER, &GLCanvas3D::on_toolbar_style_timer, this);
     if (_set_current()) {
         m_scene_cache.reset();
         m_studio_environment.reset();
@@ -1671,6 +1693,14 @@ GLCanvas3D::~GLCanvas3D()
             m_shadow_map_fbo = 0;
         }
         m_plate_shadow_mask.reset();
+        m_stage_surfaces.reset();
+        m_stage_title_bars.reset();
+        m_stage_edit_texture.reset();
+        m_stage_outlines.reset();
+        m_stage_labels.clear();
+        m_stage_control_marks.reset();
+        m_stage_hover_mark.reset();
+        m_stage_drop_mark.reset();
         m_section_view_caps.clear();
     }
     m_plate_shadow_mask_key.clear();
@@ -2196,7 +2226,11 @@ void GLCanvas3D::set_color_by(const std::string& value)
 
 void GLCanvas3D::refresh_camera_scene_box()
 {
-    wxGetApp().plater()->get_camera().set_scene_box(scene_bounding_box());
+    Camera& camera = wxGetApp().plater()->get_camera();
+    camera.set_scene_box(scene_bounding_box());
+    // Ordinary Orca projects keep their zoom-out limit.
+    camera.set_min_zoom_factor(wxGetApp().plater()->get_partplate_list().independent_setups()
+        ? Camera::WorkspaceMinZoomFactor : Camera::DefaultMinZoomFactor);
 }
 
 BoundingBoxf3 GLCanvas3D::volumes_bounding_box(bool current_plate_only) const
@@ -2435,7 +2469,7 @@ float GLCanvas3D::get_collapse_toolbar_height() const
     return collapse_side() != CollapseSide::None ? collapse_toolbar().get_height() : 0;
 }
 
-// The bottom-left corner: the 3D navigator, then the column of round canvas buttons beside it, in
+// The canvas corner (top-left in Preview): the 3D navigator and round buttons beside it, in
 // units of the toolbar scale. Shared by _render_3d_navigator, _render_canvas_toolbar and
 // get_canvas_toolbar_right, so an overlay kept clear of the corner follows its layout.
 static constexpr float NAVIGATOR_SIZE         = 128.f;
@@ -2561,12 +2595,38 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
         camera.requires_zoom_to_volumes = false;
     }
 
-    const bool workspace_plane = m_canvas_type == CanvasView3D && !m_design_canvas &&
-        wxGetApp().plater()->get_partplate_list().independent_setups();
+    const bool workspace_plane = m_canvas_type == CanvasView3D && !m_design_canvas;
     // The workspace is larger than the printable beds. Give its surface room
     // in the depth range without including it in camera fitting or navigation.
-    camera.apply_projection(_max_bounding_box(true, true, true), workspace_plane ? 100.0 : -1.0,
-        workspace_plane ? camera.get_distance() + 50000.0 : -1.0);
+    const bool fixed_perspective_zoom = wxGetApp().app_config->get_bool("fixed_perspective_zoom") &&
+        camera.get_type() == Camera::EType::Perspective;
+    auto apply_projection = [&] {
+        camera.apply_projection(_max_bounding_box(true, true, true), workspace_plane && !fixed_perspective_zoom ? 100.0 : -1.0,
+            workspace_plane ? camera.get_distance() + 50000.0 : -1.0, fixed_perspective_zoom);
+
+        if (m_canvas_type == CanvasPreview && m_render_preview &&
+            (m_gcode_viewer.has_data() || is_select_plate_toolbar_enabled())) {
+            const float scale = get_scale();
+            const auto layout = preview_layout(float(cnv_size.get_width()), float(cnv_size.get_height()), scale,
+                is_select_plate_toolbar_enabled(), m_gcode_viewer.get_gcode_height(cnv_size.get_height()));
+            const bool sliced = m_gcode_viewer.has_data();
+            camera.apply_screen_insets(layout.center_left + 8.f * scale,
+                layout.inspector_width + (sliced ? IMSlider::vertical_slider_window_width() : 8.f) * scale,
+                layout.drawer_height + (sliced ? 60.f : 8.f) * scale);
+        }
+    };
+    apply_projection();
+
+    if (m_canvas_type == CanvasPreview && m_render_preview && m_check_preview_camera && m_gcode_viewer.has_data()) {
+        m_check_preview_camera = false;
+        // Prepare may be aimed at another plate. Recover a completely offscreen
+        // slice once it loads, while preserving any framing that still shows it.
+        const BoundingBoxf3& paths = m_gcode_viewer.get_paths_bounding_box();
+        if (paths.defined && !camera.is_box_visible(paths)) {
+            zoom_to_bed();
+            apply_projection();
+        }
+    }
 
     wxGetApp().imgui()->new_frame();
 
@@ -2691,6 +2751,16 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
     if (m_hover_ghost_head >= 0)
         tooltip.clear();
 
+    if (m_plate_drag_index >= 0 && m_mouse.dragging) {
+        const auto& stages = wxGetApp().plater()->get_partplate_list().stages();
+        const auto target = std::find_if(stages.begin(), stages.end(),
+            [&](const WorkspaceStage& stage) { return stage.id == m_plate_drop_stage; });
+        const bool group = m_plate_drag_indices.size() > 1;
+        tooltip = target != stages.end()
+            ? (boost::format(group ? _u8L("Release to move selected plates to %1%") : _u8L("Release to move this plate to %1%")) % target->name).str()
+            : (group ? _u8L("Release to leave selected plates outside the stages") : _u8L("Release to leave this plate outside the stages"));
+    }
+
     set_tooltip(tooltip);
 
     if (m_tooltip_enabled)
@@ -2721,7 +2791,10 @@ void GLCanvas3D::_render_frame(bool scene_dirty, bool only_init)
     ImDrawData* draw_data = wxGetApp().imgui()->end_frame();
 
     std::optional<size_t> signature;
-    if (_is_frame_skipping_enabled())
+    // A changed scene must be presented regardless of its overlay. Hashing all
+    // overlay vertices on every orbit/zoom frame cannot skip that frame; start
+    // comparing on the next overlay-only frame instead.
+    if (reuse_scene && _is_frame_skipping_enabled())
         signature = _overlay_signature(draw_data);
     m_frame_profiler.mark("imgui end");
 
@@ -2788,6 +2861,7 @@ void GLCanvas3D::_render_scene(const Camera& camera, const Size& cnv_size)
             _render_shadows(camera.get_view_matrix(), camera.get_projection_matrix(), true);
             m_frame_profiler.mark("shadows");
         }
+        // Only independent projects share a workspace plane; ordinary Orca projects keep their background.
         if (!m_design_canvas && show_bed && wxGetApp().plater()->get_partplate_list().independent_setups())
             _render_workspace_plane(camera.get_view_matrix(), camera.get_projection_matrix());
         // m_show_bed gates the plate list too: hiding the bed but leaving its grid and outline
@@ -3005,6 +3079,25 @@ void GLCanvas3D::select_curr_plate_all()
 {
     m_selection.add_curr_plate();
     m_dirty = true;
+}
+
+void GLCanvas3D::select_all_from_shortcut(long input_timestamp)
+{
+    if (!m_gizmos.is_allow_select_all() || m_layers_editing.is_enabled() ||
+        dynamic_cast<GLGizmoPainterBase*>(m_gizmos.get_current())) {
+        m_select_all_sequence.reset();
+        return;
+    }
+    if (m_selection.get_volume_idxs() != m_select_all_selection)
+        m_select_all_sequence.reset();
+    auto* plater = wxGetApp().plater();
+    const bool expand = m_select_all_sequence.press(SelectAllSequence::Clock::now(),
+                                                   plater->get_partplate_list().get_curr_plate_index(), input_timestamp);
+    if (expand)
+        plater->select_all();
+    else
+        plater->select_curr_plate_all();
+    m_select_all_selection = m_selection.get_volume_idxs();
 }
 
 void GLCanvas3D::select_object_from_idx(std::vector<int>& object_idxs) {
@@ -3813,9 +3906,17 @@ void GLCanvas3D::load_gcode_preview(const GCodeProcessorResult& gcode_result, co
     m_gcode_viewer.enable_legend(true);
 
 
+    const bool first_preview = !m_gcode_viewer.has_data();
     m_gcode_viewer.load_as_gcode(gcode_result, *this->fff_print(), str_tool_colors, str_color_print_colors, wxGetApp().plater()->build_volume(), exclude_bounding_box,
         wxGetApp().get_mode(), only_gcode);
+    // Equal bounds and segment counts do not imply equal toolpaths after a re-slice.
+    m_shadow_map_key = 0;
     m_gcode_layers_times_cache = m_gcode_viewer.get_layers_times();
+    m_check_preview_camera = true;
+    // The initial Prepare camera can cover many plates. Start Preview at the
+    // active bed; later reloads keep the user's camera unless the slice is lost.
+    if (first_preview && m_gcode_viewer.has_data() && !only_gcode)
+        wxGetApp().plater()->get_camera().requires_zoom_to_bed = true;
 
     m_gcode_viewer.get_moves_slider()->SetHigherValue(m_gcode_viewer.get_moves_slider()->GetMaxValue());
 
@@ -3850,6 +3951,7 @@ void GLCanvas3D::bind_event_handlers()
         m_canvas->Bind(wxEVT_KEY_DOWN, &GLCanvas3D::on_key, this);
         m_canvas->Bind(wxEVT_KEY_UP, &GLCanvas3D::on_key, this);
         m_canvas->Bind(wxEVT_MOUSEWHEEL, &GLCanvas3D::on_mouse_wheel, this);
+        m_canvas->Bind(wxEVT_MOUSE_CAPTURE_LOST, &GLCanvas3D::on_workspace_capture_lost, this);
         m_canvas->Bind(wxEVT_TIMER, &GLCanvas3D::on_timer, this);
         m_canvas->Bind(EVT_GLCANVAS_RENDER_TIMER, &GLCanvas3D::on_render_timer, this);
         m_toolbar_highlighter.set_timer_owner(m_canvas, 0);
@@ -3871,6 +3973,23 @@ void GLCanvas3D::bind_event_handlers()
         m_canvas->Bind(wxEVT_PAINT, &GLCanvas3D::on_paint, this);
         m_canvas->Bind(wxEVT_SET_FOCUS, &GLCanvas3D::on_set_focus, this);
         m_canvas->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent& evt) {
+                m_select_all_sequence.reset();
+                // Losing focus cancels a workspace gesture. Its rollback moves beds, edits the
+                // undo history, releases capture and refreshes the plater, so it runs after the
+                // focus change rather than inside it. Capture loss still cancels at once.
+                if ((m_plate_drag_index != -1 || !m_stage_drag_id.empty() || !m_stage_action_pressed.empty()) &&
+                    !std::exchange(m_workspace_drag_cancel_pending, true)) {
+                    wxWeakRef<wxGLCanvas> weak(m_canvas);
+                    m_canvas->CallAfter([weak] {
+                        if (!weak || wxGetApp().is_closing()) return;
+                        auto* plater = wxGetApp().plater();
+                        auto* canvas = plater ? plater->get_view3D_canvas3D() : nullptr;
+                        if (canvas && canvas->get_wxglcanvas() == weak.get())
+                            canvas->_finish_cancelled_workspace_drag();
+                    });
+                }
+                if (_is_shown_on_screen())
+                    ImGuiWrapper::cancel_mouse_drag();
                 // The key-up that would commit a keyboard edit goes to whatever took the focus.
                 if (m_selection_edit.kind != SelectionEdit::None)
                     finish_selection_edit();
@@ -3899,6 +4018,7 @@ void GLCanvas3D::unbind_event_handlers()
         m_canvas->Unbind(wxEVT_KEY_DOWN, &GLCanvas3D::on_key, this);
         m_canvas->Unbind(wxEVT_KEY_UP, &GLCanvas3D::on_key, this);
         m_canvas->Unbind(wxEVT_MOUSEWHEEL, &GLCanvas3D::on_mouse_wheel, this);
+        m_canvas->Unbind(wxEVT_MOUSE_CAPTURE_LOST, &GLCanvas3D::on_workspace_capture_lost, this);
         m_canvas->Unbind(wxEVT_TIMER, &GLCanvas3D::on_timer, this);
         m_canvas->Unbind(EVT_GLCANVAS_RENDER_TIMER, &GLCanvas3D::on_render_timer, this);
         m_canvas->Unbind(wxEVT_LEFT_DOWN, &GLCanvas3D::on_mouse, this);
@@ -4037,7 +4157,14 @@ void GLCanvas3D::on_char(wxKeyEvent& evt)
     auto obj_list = wxGetApp().obj_list();
     switch (keyCode)
     {
-    case WXK_ESCAPE: { deselect_all(); break; }
+    case WXK_ESCAPE: {
+        // Escape clears objects first; the plate selection goes only once no object is selected.
+        if (m_selection.is_empty())
+            wxGetApp().plater()->get_partplate_list().clear_workspace_selection();
+        m_dirty = true;
+        deselect_all();
+        break;
+    }
 
     // BBS: use keypad to change extruder
     case '1': {
@@ -4071,9 +4198,12 @@ bool GLCanvas3D::handle_shortcut(const KeyChord& chord)
 {
     const ShortcutContext                       context = m_canvas_type == CanvasPreview ? ShortcutContext::Preview : ShortcutContext::Plater;
     const std::optional<ShortcutRegistry::Match> match   = wxGetApp().shortcuts().match(context, chord);
-    if (!match.has_value())
+    if (!match.has_value()) {
+        if (chord.valid()) m_select_all_sequence.reset();
         return false;
+    }
     const Shortcut shortcut = match->shortcut;
+    if (shortcut != Shortcut::SelectAll) m_select_all_sequence.reset();
     const int      held     = match->step_modifiers;
     if (m_key_down.repeat && !shortcut_info(shortcut).repeatable)
         return true;
@@ -4107,8 +4237,7 @@ bool GLCanvas3D::handle_shortcut(const KeyChord& chord)
 
     switch (shortcut) {
     case Shortcut::SelectAll:
-        if (!painting && !m_layers_editing.is_enabled())
-            post_event(SimpleEvent(EVT_GLCANVAS_SELECT_CURR_PLATE_ALL));
+        select_all_from_shortcut(m_key_down.timestamp);
         break;
     case Shortcut::SelectAllPlates:
         if (!painting && !m_layers_editing.is_enabled())
@@ -4293,11 +4422,18 @@ void GLCanvas3D::finish_selection_edit()
 // focus, and with it the key-up, to another one.
 static std::set<int> s_keys_down;
 
-static bool key_repeats(int key)
+static bool key_repeats(const wxKeyEvent& event)
 {
+#if defined(__WXOSX__) || defined(__WXMSW__)
+    // Cocoa can omit key-up while Command is held. A second physical tap is
+    // still a fresh press; the native repeat flag distinguishes it from a hold.
+    return event.IsAutoRepeat();
+#else
+    const int key = event.GetKeyCode();
     for (auto it = s_keys_down.begin(); it != s_keys_down.end();)   // drops keys released while no canvas had the focus
         it = wxGetKeyState(wxKeyCode(*it)) ? std::next(it) : s_keys_down.erase(it);
     return !s_keys_down.insert(key).second;
+#endif
 }
 
 static void key_released(int key) { s_keys_down.erase(key); }
@@ -4306,8 +4442,13 @@ void GLCanvas3D::on_key(wxKeyEvent& evt)
 {
 
     const int keyCode = evt.GetKeyCode();
+    if (evt.GetEventType() == wxEVT_KEY_DOWN && keyCode == WXK_ESCAPE &&
+        (m_plate_drag_index != -1 || !m_stage_drag_id.empty() || !m_stage_action_pressed.empty())) {
+        _cancel_workspace_drag();
+        return;
+    }
     if (evt.GetEventType() == wxEVT_KEY_DOWN)
-        m_key_down = { keyCode, key_repeats(keyCode) };
+        m_key_down = { keyCode, key_repeats(evt), evt.GetTimestamp() };
     else if (evt.GetEventType() == wxEVT_KEY_UP)
         key_released(keyCode);
     const bool alt_wheel_released = evt.GetEventType() == wxEVT_KEY_UP && keyCode == WXK_ALT && std::exchange(m_alt_wheel_used, false);
@@ -4420,6 +4561,19 @@ void GLCanvas3D::on_mouse_wheel(wxMouseEvent& evt)
 #endif
 
     if (wxGetApp().imgui()->update_mouse_data(evt)) {
+        const ImGuiWindow* hovered = GImGui != nullptr ? GImGui->HoveredWindow : nullptr;
+        const ImGuiWindow* root = hovered != nullptr ? hovered->RootWindow : nullptr;
+        if (m_canvas_type == CanvasPreview && root != nullptr &&
+            (root == ImGui::FindWindowByName("Preview plates") ||
+             root == ImGui::FindWindowByName("Legend") ||
+             root == ImGui::FindWindowByName("###PreviewCodeDrawer"))) {
+            // Coalesce trackpad events at the normal frame rate and reuse the 3D scene.
+            // These panels scroll independently of the toolpaths and layer range. Drawing
+            // the whole slice here for every wheel event defeats source-list virtualization.
+            _set_overlay_as_dirty();
+            wxWakeUpIdle();
+            return;
+        }
         if (m_canvas_type == CanvasPreview) {
             IMSlider* m_layers_slider = get_gcode_viewer().get_layers_slider();
             IMSlider* m_moves_slider = get_gcode_viewer().get_moves_slider();
@@ -4523,6 +4677,32 @@ void GLCanvas3D::on_set_color_timer(wxTimerEvent& evt)
 void GLCanvas3D::on_fps_overlay_timer(wxTimerEvent& evt)
 {
     m_fps_overlay_tick = true;
+    _set_overlay_as_dirty();
+    wxWakeUpIdle();
+}
+
+void GLCanvas3D::on_toolbar_style_timer(wxTimerEvent&)
+{
+    if (!wxTheApp || wxGetApp().is_closing() || !m_initialized || m_benchmarking ||
+        m_canvas_type != CanvasView3D || m_design_canvas || !m_canvas || !m_canvas->IsShownOnScreen() ||
+        is_dragging() || m_mouse.dragging || m_rectangle_selection.is_dragging() ||
+        m_layers_editing.state == LayersEditing::Editing || m_canvas->HasCapture())
+        return;
+
+    auto& style = DesignSystem::live_toolbar_style();
+    const std::string previous_error = style.error();
+    style.poll();
+    if (!style.error().empty() && style.error() != previous_error)
+        BOOST_LOG_TRIVIAL(warning) << "Toolbar style reload: " << style.error();
+    if (m_toolbar_style_revision == style.revision()) return;
+    m_toolbar_style_revision = style.revision();
+    // Geometry and hit bounds use these same layout fields. GPU uploads wait
+    // for the next render, where the canvas owns the current GL context.
+    _check_and_update_toolbar_icon_scale();
+    m_main_toolbar.set_icon_dirty();
+    m_assemble_view_toolbar.set_icon_dirty();
+    m_separator_toolbar.set_icon_dirty();
+    m_gizmos.set_icon_dirty();
     _set_overlay_as_dirty();
     wxWakeUpIdle();
 }
@@ -4654,10 +4834,50 @@ void GLCanvas3D::on_gesture(wxGestureEvent &evt)
     m_dirty = true;
 }
 
+static void queue_stage_action(wxGLCanvas* canvas, std::function<void(Plater&)> action);
+
+std::string GLCanvas3D::_plate_drop_stage_at(const Vec2d& screen)
+{
+    auto& plates = wxGetApp().plater()->get_partplate_list();
+    if (m_plate_drag_index < 0 || m_plate_drag_index >= plates.get_plate_count()) return {};
+    const auto& camera = wxGetApp().plater()->get_camera();
+    const auto& viewport = camera.get_viewport();
+    const auto center = plates.get_plate(m_plate_drag_index)->get_bounding_box().center().head<2>().eval();
+    std::vector<Vec2d> candidates;
+    if (screen.x() >= 0. && screen.y() >= m_main_toolbar.get_height() &&
+        screen.x() < viewport[2] && screen.y() < viewport[3] && camera.is_looking_downward()) {
+        const Linef3 ray = mouse_ray(Point(coord_t(screen.x()), coord_t(screen.y())));
+        if (std::abs(ray.vector().z()) >= 1e-9) {
+            const double distance = (WorkspaceStyle::chrome_z - ray.a.z()) / ray.vector().z();
+            const Vec3d pointer = ray.a + distance * ray.vector();
+            if (distance >= 0. && distance <= 1. && pointer.allFinite()) candidates.emplace_back(pointer.head<2>());
+        }
+    }
+    if (center.allFinite()) candidates.emplace_back(center);
+    // The grip stays under the pointer. Prefer that visible drop position, then
+    // accept a bed already inside a stage even if its title is just above it.
+    for (const Vec2d& point : candidates)
+        for (auto stage = plates.stages().rbegin(); stage != plates.stages().rend(); ++stage) {
+            const auto bounds = WorkspaceStyle::stage_display_area(plates.stage_bounds(stage->id));
+            if (!bounds.defined) continue;
+            if (bounds.contains(point) && plates.can_set_plates_stage(m_plate_drag_indices, stage->id))
+                return stage->id;
+        }
+    return {};
+}
+
 void GLCanvas3D::on_mouse(wxMouseEvent& evt)
 {
+    if (evt.ButtonDown() || evt.ButtonDClick()) m_select_all_sequence.reset();
     if (!m_initialized || !_set_current())
         return;
+
+    // A focus loss cancelled the workspace gesture: finish it before this event can
+    // continue or commit it. Its button release belongs to the cancelled gesture.
+    if (m_workspace_drag_cancel_pending) {
+        _finish_cancelled_workspace_drag();
+        if (evt.ButtonUp()) return;
+    }
 
     // BBS: single snapshot
     Plater::SingleSnapshot single(wxGetApp().plater());
@@ -4688,34 +4908,202 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
 
     Point pos(evt.GetX(), evt.GetY());
 
-    // Finish plate gestures before overlays can consume their release event.
+    // Once a plate grip owns the gesture, keep routing motion here even when
+    // the cursor crosses a stage, an overlay, or leaves the original hit area.
     if (m_plate_drag_index != -1) {
-        // Keep overlay button state in sync while the plate owns the gesture.
         wxGetApp().imgui()->update_mouse_data(evt);
         m_mouse.position = pos.cast<double>();
         m_tooltip.set_in_imgui(false);
         auto* plater = wxGetApp().plater();
         auto& plates = plater->get_partplate_list();
-        if (m_plate_drag_index >= 0 && evt.Dragging() && evt.LeftIsDown() && m_mouse.is_move_threshold_met(pos)) {
-            const Vec3d point = mouse_ray(pos).intersect_plane(0.0);
-            if (point.allFinite() && m_plate_drag_anchor.allFinite()) {
+        const int index = m_plate_drag_index;
+        if (index >= 0 && index < plates.get_plate_count() && evt.Dragging() && evt.LeftIsDown() &&
+            m_mouse.is_move_threshold_met(pos) && !plater->is_background_process_slicing()) {
+            const Vec3d point = mouse_ray(pos).intersect_plane(WorkspaceStyle::chrome_z);
+            const Vec2d destination = m_plate_drag_origin.head<2>() + (point - m_plate_drag_anchor).head<2>();
+            const Vec2d delta = destination - plates.get_plate(index)->get_origin().head<2>();
+            if (point.allFinite() && m_plate_drag_anchor.allFinite() && destination.allFinite() &&
+                destination.cwiseAbs().maxCoeff() <= 100000. && plates.can_move_plates(m_plate_drag_indices, delta)) {
                 if (!m_plate_drag_snapshot) {
-                    plater->take_snapshot(_u8L("Move plate"));
+                    m_workspace_drag_snapshot_time = plater->take_cancellable_snapshot(
+                        m_plate_drag_indices.size() > 1 ? _u8L("Move plates") : _u8L("Move plate"));
                     m_plate_drag_snapshot = true;
                 }
-                plates.move_plate(m_plate_drag_index, (m_plate_drag_origin + point - m_plate_drag_anchor).head<2>());
-                m_mouse.dragging = true;
-                m_dirty = true;
+                if (plates.move_plates(m_plate_drag_indices, delta)) {
+                    m_mouse.dragging = true;
+                    m_dirty = true;
+                }
+            }
+            m_plate_drop_stage = _plate_drop_stage_at(pos.cast<double>());
+            m_dirty = true;
+        }
+        if (evt.LeftUp()) {
+            const bool moved = m_mouse.dragging;
+            const bool pending = m_workspace_drag_pending_update;
+            if (moved && index >= 0 && index < plates.get_plate_count()) {
+                const std::string destination = _plate_drop_stage_at(pos.cast<double>());
+                if (plates.can_set_plates_stage(m_plate_drag_indices, destination)) {
+                    for (const auto& entry : m_plate_drag_source_bounds) {
+                        if (entry.first == destination || !entry.second.defined) continue;
+                        const auto source = std::find_if(plates.stages().begin(), plates.stages().end(),
+                            [&](const WorkspaceStage& stage) { return stage.id == entry.first; });
+                        if (source != plates.stages().end())
+                            plates.restore_stage_frame(source->id, BoundingBoxf(entry.second.min - source->position,
+                                entry.second.max - source->position));
+                    }
+                    plates.set_plates_stage(m_plate_drag_indices, destination);
+                }
+            }
+            mouse_up_cleanup();
+            if (index >= 0) plater->schedule_background_process(moved || pending);
+            if (moved) post_event(SimpleEvent(EVT_GLCANVAS_MOUSE_DRAGGING_FINISHED));
+        }
+        return;
+    }
+
+    if (!m_stage_action_pressed.empty()) {
+        wxGetApp().imgui()->update_mouse_data(evt);
+        m_mouse.position = pos.cast<double>();
+        if (evt.LeftUp()) {
+            const auto* control = _workspace_stage_control_at(pos.cast<double>());
+            const std::string id = m_stage_action_pressed;
+            const auto kind = m_stage_action_kind;
+            const bool clicked = control && control->kind == kind && control->id == id;
+            mouse_up_cleanup();
+            if (clicked) queue_stage_action(m_canvas, [id, kind](Plater& plater) {
+                if (kind == StageControl::Rename) plater.rename_workspace_stage(id);
+                else plater.show_workspace_stage_menu(id);
+            });
+        }
+        return;
+    }
+
+    if (!m_stage_drag_id.empty()) {
+        wxGetApp().imgui()->update_mouse_data(evt);
+        m_mouse.position = pos.cast<double>();
+        m_tooltip.set_in_imgui(false);
+        auto* plater = wxGetApp().plater();
+        auto& plates = plater->get_partplate_list();
+        if (!m_stage_drag_blocked && evt.Dragging() && evt.LeftIsDown() && m_mouse.is_move_threshold_met(pos)) {
+            const Vec3d point = mouse_ray(pos).intersect_plane(WorkspaceStyle::chrome_z);
+            const Vec2d delta = (point - m_stage_drag_anchor).head<2>();
+            const auto stage = std::find_if(plates.stages().begin(), plates.stages().end(),
+                [&](const WorkspaceStage& value) { return value.id == m_stage_drag_id; });
+            if (point.allFinite() && delta.allFinite() && !plater->is_background_process_slicing() && stage != plates.stages().end()) {
+                if (m_stage_resize_corner >= 0) {
+                    auto bounds = m_stage_resize_origin;
+                    const auto minimum = plates.stage_minimum_bounds(m_stage_drag_id);
+                    const auto members = plates.get_plate_list();
+                    const bool has_members = std::any_of(members.begin(), members.end(),
+                        [&](const PartPlate* plate) { return plate->stage_id() == m_stage_drag_id; });
+                    for (int axis = 0; axis < 2; ++axis) {
+                        if (m_stage_resize_corner & (1 << axis))
+                            bounds.max[axis] = std::max({bounds.max[axis] + delta[axis], has_members ? minimum.max[axis] : bounds.min[axis] + 200., bounds.min[axis] + 200.});
+                        else bounds.min[axis] = std::min({bounds.min[axis] + delta[axis], has_members ? minimum.min[axis] : bounds.max[axis] - 200., bounds.max[axis] - 200.});
+                    }
+                    const auto current = plates.stage_bounds(m_stage_drag_id);
+                    if ((bounds.min != current.min || bounds.max != current.max) && plates.can_resize_stage(m_stage_drag_id, bounds)) {
+                        if (!m_stage_drag_snapshot) {
+                            m_workspace_drag_snapshot_time = plater->take_cancellable_snapshot(_u8L("Resize stage"));
+                            m_stage_drag_snapshot = true;
+                        }
+                        if (m_stage_drag_snapshot && plates.resize_stage(m_stage_drag_id, bounds)) {
+                            m_mouse.dragging = true;
+                            m_dirty = true;
+                        }
+                    }
+                } else {
+                    const Vec2d destination = m_stage_drag_origin + delta;
+                    if (plates.can_move_stage(m_stage_drag_id, destination)) {
+                        if (!m_stage_drag_snapshot) {
+                            m_workspace_drag_snapshot_time = plater->take_cancellable_snapshot(_u8L("Move stage"));
+                            m_stage_drag_snapshot = true;
+                        }
+                        if (plates.move_stage(m_stage_drag_id, destination)) {
+                            m_mouse.dragging = true;
+                            m_dirty = true;
+                        }
+                    }
+                }
             }
         }
         if (evt.LeftUp()) {
-            const bool accepted = m_plate_drag_index >= 0;
+            const bool moved = m_mouse.dragging;
+            const bool pending = m_workspace_drag_pending_update;
+            const bool resizing = m_stage_resize_corner >= 0;
             mouse_up_cleanup();
-            if (accepted) {
-                plater->schedule_background_process();
-                post_event(SimpleEvent(EVT_GLCANVAS_MOUSE_DRAGGING_FINISHED));
+            plater->schedule_background_process((moved && !resizing) || pending);
+            if (moved && !resizing) post_event(SimpleEvent(EVT_GLCANVAS_MOUSE_DRAGGING_FINISHED));
+        }
+        return;
+    }
+
+    const auto* stage_control = _workspace_stage_control_at(pos.cast<double>());
+    if (evt.Moving() || evt.Leaving()) {
+        const std::string id = stage_control && !evt.Leaving() ? stage_control->id : std::string();
+        const auto kind = stage_control ? stage_control->kind : StageControl::Title;
+        const int corner = stage_control ? stage_control->corner : -1;
+        if (id != m_stage_hover_id || kind != m_stage_hover_kind || corner != m_stage_hover_corner) {
+            m_stage_hover_id = id;
+            m_stage_hover_kind = kind;
+            m_stage_hover_corner = corner;
+            m_dirty = true;
+        }
+    }
+    // Plane controls own their press before ImGui can consume the gesture.
+    if (stage_control && evt.LeftDown()) {
+        auto* plater = wxGetApp().plater();
+        auto& plates = plater->get_partplate_list();
+        if (stage_control->kind == StageControl::Actions || stage_control->kind == StageControl::Rename) {
+            m_stage_action_pressed = stage_control->id;
+            m_stage_action_kind = stage_control->kind;
+            m_canvas->SetFocus();
+            if (!has_mouse_capture()) m_canvas->CaptureMouse();
+            wxGetApp().imgui()->update_mouse_data(evt);
+            return;
+        }
+        auto stage = std::find_if(plates.stages().begin(), plates.stages().end(),
+            [&](const WorkspaceStage& value) { return value.id == stage_control->id; });
+        if (stage != plates.stages().end()) {
+            m_stage_drag_id = stage->id;
+            m_stage_drag_origin = stage->position;
+            m_stage_resize_corner = stage_control->kind == StageControl::Resize ? stage_control->corner : -1;
+            m_stage_resize_origin = plates.stage_bounds(stage->id);
+            m_stage_resize_original_frame = stage->frame;
+            m_stage_drag_anchor = mouse_ray(pos).intersect_plane(WorkspaceStyle::chrome_z);
+            m_stage_drag_blocked = plater->is_background_process_slicing() || !m_stage_drag_anchor.allFinite();
+            if (m_stage_resize_corner < 0)
+                for (int i = 0; i < plates.get_plate_count(); ++i)
+                    m_stage_drag_blocked |= plates.get_plate(i)->stage_id() == stage->id && plates.is_locked(i);
+            m_mouse.drag.move_start_threshold_position_2D = pos;
+            m_canvas->SetFocus();
+            _capture_workspace_drag_state(m_stage_drag_id, -1);
+            if (!m_stage_drag_blocked) plater->suppress_background_process(true);
+            if (!has_mouse_capture()) m_canvas->CaptureMouse();
+            wxGetApp().imgui()->update_mouse_data(evt);
+            return;
+        }
+    }
+
+    if (stage_control && evt.Moving() && !evt.AltDown() && !evt.ShiftDown()) {
+        wxGetApp().imgui()->update_mouse_data(evt);
+        m_mouse.position = pos.cast<double>();
+        m_tooltip.set_in_imgui(false);
+        if (stage_control->kind == StageControl::Resize) m_tooltip.set_text(_u8L("Drag to resize this stage"));
+        else if (stage_control->kind == StageControl::Actions) m_tooltip.set_text(_u8L("Stage actions"));
+        else if (stage_control->kind == StageControl::Rename) m_tooltip.set_text(_u8L("Rename stage"));
+        else {
+            auto& plates = wxGetApp().plater()->get_partplate_list();
+            const auto& stages = plates.stages();
+            const auto stage = std::find_if(stages.begin(), stages.end(), [&](const WorkspaceStage& value) { return value.id == stage_control->id; });
+            if (stage != stages.end()) {
+                bool locked = false;
+                for (int i = 0; i < plates.get_plate_count(); ++i)
+                    locked |= plates.get_plate(i)->stage_id() == stage->id && plates.is_locked(i);
+                m_tooltip.set_text(stage->name + "\n" + (locked ? _u8L("Unlock the plates to move this stage") : _u8L("Drag to move this stage")));
             }
         }
+        _set_overlay_as_dirty();
         return;
     }
 
@@ -4738,7 +5126,11 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
 
         // ORCA keep tracking mouse position while drag active and cursor not in window bounds
         const bool imgui_dragging_active = (GImGui != nullptr && ImGui::GetIO().MouseDown[0] && GImGui->ActiveId != 0) || m_navigator_dragging;
-        if (!has_mouse_capture() && imgui_dragging_active)
+        // Any press ImGui takes must deliver its release here. ImGui clears a held button only
+        // from that release, so a right or middle release outside the canvas would otherwise
+        // leave the overlay owning the mouse. The release below and capture loss both end it.
+        const bool imgui_press = evt.ButtonDown() || evt.ButtonDClick();
+        if (!has_mouse_capture() && (imgui_dragging_active || imgui_press))
             m_canvas->CaptureMouse();
 
         // release capture as soon as the button goes up
@@ -4746,7 +5138,10 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
             mouse_up_cleanup();
 
         // Hovering an ImGui window only changes the overlay.
-        const bool overlay_only = evt.Moving() && !m_mouse.dragging;
+        const ImGuiWindow* active_window = GImGui != nullptr ? GImGui->ActiveIdWindow : nullptr;
+        const bool code_drag = m_canvas_type == CanvasPreview && evt.Dragging() && active_window != nullptr &&
+            active_window->RootWindow == ImGui::FindWindowByName("###PreviewCodeDrawer");
+        const bool overlay_only = (evt.Moving() || code_drag) && !m_mouse.dragging;
         // ImGui takes a press or a release only inside a frame. Motion is rendered from on_idle().
         if (evt.ButtonDown() || evt.ButtonUp() || evt.ButtonDClick())
             _render_frame(true);
@@ -4868,28 +5263,51 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
             const ClippingPlane clipping_plane = get_raycaster_clipping_plane();
             const auto hit = m_scene_raycaster.hit(pos.cast<double>(), plater->get_camera(), &clipping_plane);
             if (hit.type == SceneRaycaster::EType::Bed && hit.is_valid() &&
-                hit.raycaster_id % PartPlate::GRABBER_COUNT == PartPlate::PLATE_DRAG_HOVER_ID)
+                (hit.raycaster_id % PartPlate::GRABBER_COUNT == PartPlate::PLATE_DRAG_HOVER_ID ||
+                 (evt.ShiftDown() && hit.raycaster_id % PartPlate::GRABBER_COUNT == 0)))
                 handle_id = hit.raycaster_id;
         }
         if (handle_id >= 0) {
             const int index = handle_id / PartPlate::GRABBER_COUNT;
-            if (plates.is_locked(index) || plater->is_background_process_slicing()) {
+            if (evt.ShiftDown()) {
+                // Selection changes neither the active printer nor the camera.
+                plates.select_workspace_plate(index, true);
+                deselect_all();
+                m_gizmos.reset_all_states();
+                m_plate_drag_index = -2;
+                m_canvas->SetFocus();
+                m_dirty = true;
+                if (!has_mouse_capture()) m_canvas->CaptureMouse();
+                return;
+            }
+            if (!plates.is_workspace_selected(index)) plates.select_workspace_plate(index);
+            m_plate_drag_indices = plates.workspace_selection();
+            m_dirty = true;
+            if (std::any_of(m_plate_drag_indices.begin(), m_plate_drag_indices.end(),
+                    [&](int i) { return plates.is_locked(i); }) || plater->is_background_process_slicing()) {
                 m_plate_drag_index = -2; // Consume a blocked handle gesture without orbiting the camera.
                 if (!has_mouse_capture()) m_canvas->CaptureMouse();
                 return;
             }
-            if (plater->select_plate(index) == 0) {
+            // A group grip must not switch configurations just to move beds.
+            if (m_plate_drag_indices.size() > 1 || plater->select_plate(index) == 0) {
                 deselect_all();
                 m_gizmos.reset_all_states();
                 m_plate_drag_index = index;
                 m_plate_drag_origin = plates.get_plate(index)->get_origin();
-                m_plate_drag_anchor = mouse_ray(pos).intersect_plane(0.0);
+                m_plate_drag_anchor = mouse_ray(pos).intersect_plane(WorkspaceStyle::chrome_z);
+                m_canvas->SetFocus();
+                _capture_workspace_drag_state({}, index);
+                plates.begin_plate_drag(index);
                 plater->suppress_background_process(true);
                 m_mouse.drag.move_start_threshold_position_2D = pos;
-                m_canvas->SetFocus();
                 if (!has_mouse_capture()) m_canvas->CaptureMouse();
                 return;
             }
+            // A refused switch (a running task) still owns the grip: never orbit from a title.
+            m_plate_drag_index = -2;
+            if (!has_mouse_capture()) m_canvas->CaptureMouse();
+            return;
         }
 
     }
@@ -5363,6 +5781,7 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
             wxGetApp().plater()->on_imex_ghost_click(m_hover_ghost_head);
         }
         else if (evt.LeftUp() && !m_mouse.ignore_left_up && !m_mouse.dragging && m_hover_volume_idxs.empty() && m_hover_plate_idxs.empty() && !is_layers_editing_enabled()) {
+            wxGetApp().plater()->get_partplate_list().clear_workspace_selection();
             // deselect and propagate event through callback
             if (!evt.ShiftDown() && (!any_gizmo_active || !evt.CmdDown()) && m_picking_enabled)
                 deselect_all();
@@ -5373,7 +5792,18 @@ void GLCanvas3D::on_mouse(wxMouseEvent& evt)
         else if (evt.LeftUp() && !m_mouse.ignore_left_up && !m_mouse.dragging && m_picking_enabled && !m_hover_plate_idxs.empty() && (m_canvas_type == CanvasView3D) && !is_layers_editing_enabled())
         {
                 int hover_idx = m_hover_plate_idxs.front();
-                wxGetApp().plater()->select_plate_by_hover_id(hover_idx);
+                auto& plates = wxGetApp().plater()->get_partplate_list();
+                if (hover_idx % PartPlate::GRABBER_COUNT == 0)
+                    plates.select_workspace_plate(hover_idx / PartPlate::GRABBER_COUNT);
+                const int result = wxGetApp().plater()->select_plate_by_hover_id(hover_idx);
+                if (result == 0 && hover_idx % PartPlate::GRABBER_COUNT == PartPlate::PLATE_ACTIONS_HOVER_ID) {
+                    Vec2d logical_pos = pos.cast<double>();
+#if ENABLE_RETINA_GL
+                    const float factor = m_retina_helper->get_scale_factor();
+                    logical_pos = logical_pos.cwiseQuotient(Vec2d(factor, factor));
+#endif
+                    post_event(RBtnPlateEvent(EVT_GLCANVAS_PLATE_RIGHT_CLICK, {logical_pos, hover_idx}));
+                }
                 //wxGetApp().plater()->get_partplate_list().select_plate_view();
                 //deselect all the objects
                 if (m_gizmos.get_current_type() != GLGizmosManager::MeshBoolean && m_hover_volume_idxs.empty())
@@ -5610,6 +6040,9 @@ void GLCanvas3D::set_tooltip(const std::string& tooltip)
 void GLCanvas3D::do_move(const std::string& snapshot_type)
 {
     if (m_model == nullptr)
+        return;
+
+    if (defer_plate_transfer(*this, snapshot_type))
         return;
 
     if (!snapshot_type.empty())
@@ -6267,11 +6700,26 @@ void GLCanvas3D::set_cursor(ECursorType type)
 
 void GLCanvas3D::mouse_up_cleanup()
 {
+    const bool refresh_workspace = is_workspace_dragging() && m_mouse.dragging;
+    if (m_plate_drag_index >= 0)
+        wxGetApp().plater()->get_partplate_list().end_plate_drag();
+    m_plate_drop_stage.clear();
     m_moving = false;
     m_camera_movement = false;
     m_mouse.drag.move_volume_idx = -1;
     m_plate_drag_index = -1;
     m_plate_drag_snapshot = false;
+    m_plate_drag_indices.clear();
+    m_plate_drag_source_bounds.clear();
+    m_stage_drag_id.clear();
+    m_stage_action_pressed.clear();
+    m_stage_drag_snapshot = false;
+    m_stage_drag_blocked = false;
+    m_stage_resize_corner = -1;
+    m_workspace_drag_plate_states.clear();
+    m_workspace_drag_pending_update = false;
+    m_workspace_drag_snapshot_time.reset();
+    m_workspace_drag_cancel_pending = false;
     m_mouse.set_start_position_3D_as_invalid();
     m_mouse.set_start_position_2D_as_invalid();
     m_mouse.dragging = false;
@@ -6281,6 +6729,117 @@ void GLCanvas3D::mouse_up_cleanup()
 
     if (m_canvas->HasCapture())
         m_canvas->ReleaseMouse();
+
+    if (refresh_workspace) {
+        wxGetApp().plater()->update();
+        wxGetApp().plater()->update_title_dirty_status();
+    }
+}
+
+void GLCanvas3D::_capture_workspace_drag_state(const std::string& stage_id, int plate_index)
+{
+    auto* plater = wxGetApp().plater();
+    auto& plates = plater->get_partplate_list();
+    m_workspace_drag_pending_update = plater->is_background_process_update_scheduled();
+    m_workspace_drag_has_canvas_config = m_config != nullptr;
+    m_workspace_drag_canvas_config = m_config ? *m_config : DynamicPrintConfig();
+    m_workspace_drag_plate_states.clear();
+    for (int i = 0; i < plates.get_plate_count(); ++i) {
+        auto* plate = plates.get_plate(i);
+        const bool affected = plate_index >= 0
+            ? std::find(m_plate_drag_indices.begin(), m_plate_drag_indices.end(), i) != m_plate_drag_indices.end()
+            : plate->stage_id() == stage_id;
+        if (plate_index >= 0 && affected && !plate->stage_id().empty())
+            m_plate_drag_source_bounds.emplace(plate->stage_id(), plates.stage_bounds(plate->stage_id()));
+        // Only moved plates can have their slice state restored, so only they need their
+        // settings for comparison. Stationary plates keep just their placement.
+        m_workspace_drag_plate_states.push_back({plate->id(), plate->get_origin(), affected,
+            plate->has_workspace_position(), plate->workspace_position(), plate->is_slice_result_valid(),
+            plate->is_apply_result_invalid(), plate->get_slicing_percent(),
+            affected ? plate->print_setup().config : DynamicPrintConfig(), affected ? *plate->config() : DynamicPrintConfig()});
+    }
+}
+
+void GLCanvas3D::_cancel_workspace_drag()
+{
+    if (m_plate_drag_index == -1 && m_stage_drag_id.empty()) {
+        if (!m_stage_action_pressed.empty()) mouse_up_cleanup();
+        return;
+    }
+    auto* plater = wxGetApp().plater();
+    auto& plates = plater->get_partplate_list();
+    const bool pending = m_workspace_drag_pending_update;
+    const bool idle = !plater->is_background_process_slicing();
+    const bool had_motion = m_plate_drag_snapshot || m_stage_drag_snapshot;
+    bool rolled_back = idle;
+    if (idle && m_plate_drag_index >= 0 && m_plate_drag_snapshot && !m_workspace_drag_plate_states.empty()) {
+        std::vector<int> indices;
+        Vec2d delta = Vec2d::Zero();
+        rolled_back = true;
+        for (const auto& original : m_workspace_drag_plate_states) {
+            if (!original.affected) continue;
+            int index = -1;
+            for (int i = 0; i < plates.get_plate_count(); ++i)
+                if (plates.get_plate(i)->id() == original.id) { index = i; break; }
+            if (index < 0) { rolled_back = false; break; }
+            const Vec2d displacement = (original.origin - plates.get_plate(index)->get_origin()).head<2>();
+            if (!indices.empty() && !delta.isApprox(displacement, 1e-8)) { rolled_back = false; break; }
+            delta = displacement;
+            indices.push_back(index);
+        }
+        rolled_back = rolled_back && !indices.empty() && (delta.squaredNorm() < 1e-12 || plates.move_plates(indices, delta));
+    }
+    if (idle && !m_stage_drag_id.empty() && m_stage_drag_snapshot) {
+        const auto stage = std::find_if(plates.stages().begin(), plates.stages().end(),
+            [&](const WorkspaceStage& value) { return value.id == m_stage_drag_id; });
+        rolled_back = stage != plates.stages().end() && (m_stage_resize_corner >= 0
+            ? plates.restore_stage_frame(m_stage_drag_id, m_stage_resize_original_frame)
+            : ((stage->position - m_stage_drag_origin).squaredNorm() < 1e-12 || plates.restore_stage_position(m_stage_drag_id, m_stage_drag_origin)));
+    }
+    const bool same_settings = (m_config != nullptr) == m_workspace_drag_has_canvas_config &&
+        (!m_config || *m_config == m_workspace_drag_canvas_config);
+    if (had_motion && rolled_back) {
+        bool restored = true;
+        for (const auto& original : m_workspace_drag_plate_states) {
+            bool found = false;
+            for (int i = 0; i < plates.get_plate_count(); ++i) {
+                auto* plate = plates.get_plate(i);
+                if (plate->id() != original.id) continue;
+                found = true;
+                if ((plate->get_origin() - original.origin).squaredNorm() < 1e-12) {
+                    plate->restore_workspace_position(original.has_workspace_position, original.workspace_position);
+                    if (original.affected && same_settings && plate->print_setup().config == original.setup_config &&
+                        *plate->config() == original.plate_config) {
+                        plate->update_slice_result_valid_state(original.slice_valid);
+                        plate->update_apply_result_invalid(original.apply_invalid);
+                        plate->update_slicing_percent(original.slice_percent);
+                    }
+                } else restored = false;
+                break;
+            }
+            restored &= found;
+        }
+        // With the layout restored, the cancelled drag leaves no undo step.
+        if (restored && m_workspace_drag_snapshot_time)
+            plater->discard_cancelled_snapshot(*m_workspace_drag_snapshot_time);
+    }
+    mouse_up_cleanup();
+    plater->schedule_background_process(pending);
+}
+
+void GLCanvas3D::_finish_cancelled_workspace_drag()
+{
+    // Escape, capture loss or a release may already have ended the gesture.
+    if (!std::exchange(m_workspace_drag_cancel_pending, false)) return;
+    _cancel_workspace_drag();
+    m_dirty = true;
+}
+
+void GLCanvas3D::on_workspace_capture_lost(wxMouseCaptureLostEvent&)
+{
+    _cancel_workspace_drag();
+    ImGuiWrapper::cancel_mouse_drag();
+    m_dirty = true;
 }
 
 bool GLCanvas3D::can_sequential_clearance_show_in_gizmo() {
@@ -6734,6 +7293,12 @@ void GLCanvas3D::_render_arrange_menu(float left, float right, float bottom, flo
 
     imgui->begin(_L("Arrange options"), ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
+    if (imgui->button(_L("Arrange with preview"))) wxGetApp().plater()->preview_plate_layout();
+    imgui->disabled_begin(!can_fill_plate(*wxGetApp().plater()));
+    if (imgui->button(_L("Fill plate"))) wxGetApp().plater()->fill_bed_with_instances();
+    imgui->disabled_end();
+    ImGui::Separator();
+
     ArrangeSettings &settings_out = get_arrange_settings();
     const float slider_icon_width = imgui->get_slider_icon_size().x;
     const float cursor_slider_left = imgui->calc_text_size(_L("Spacing")).x + imgui->scaled(1.5f);
@@ -6877,8 +7442,10 @@ void GLCanvas3D::_render_3d_navigator()
     sc *= (float) dpi / (float) DPI_DEFAULT;
 #endif // WIN32
 
-    const float viewManipulateLeft = 0;
-    const float viewManipulateTop  = io.DisplaySize.y;
+    const auto preview = preview_layout(io.DisplaySize.x, io.DisplaySize.y, get_scale(), is_select_plate_toolbar_enabled(),
+        m_gcode_viewer.get_gcode_height(int(io.DisplaySize.y)));
+    const float viewManipulateLeft = m_canvas_type == CanvasPreview ? preview.center_left : 0.f;
+    const float viewManipulateTop  = m_canvas_type == CanvasPreview ? CANVAS_TOOLBAR_MARGIN * sc : io.DisplaySize.y - NAVIGATOR_SIZE * sc;
     const float camDistance        = 8.f;
 
     Camera&     camera           = wxGetApp().plater()->get_camera();
@@ -6897,7 +7464,7 @@ void GLCanvas3D::_render_3d_navigator()
     const float size  = NAVIGATOR_SIZE * sc;
     m_canvas_toolbar_pos[0] = size;
     const auto result = ImGuizmo::ViewManipulate(cameraView, cameraProjection, ImGuizmo::OPERATION::ROTATE, ImGuizmo::MODE::WORLD, nullptr,
-                                                 camDistance, ImVec2(viewManipulateLeft, viewManipulateTop - size), ImVec2(size, size),
+                                                 camDistance, ImVec2(viewManipulateLeft, viewManipulateTop), ImVec2(size, size),
                                                  0x00101010);
 
     // Restore the real mouse-down state
@@ -7602,6 +8169,25 @@ bool GLCanvas3D::_init_main_toolbar()
     if (!m_main_toolbar.add_item(item))
         return false;
 
+    if (token_toolbar) {
+        item.name = "addstage";
+        item.icon_filename = "toolbar_add_stage.svg";
+        item.tooltip = _u8L("Add stage…");
+        item.sprite_id++;
+        item.left.action_callback = []() {
+            wxWeakRef<Plater> weak(wxGetApp().plater());
+            if (weak) weak->CallAfter([weak]() {
+                if (weak && !weak->IsBeingDeleted()) weak->create_workspace_stage();
+            });
+        };
+        item.enabling_callback = []() {
+            const auto* plater = wxGetApp().plater();
+            return plater && plater->printer_technology() == ptFFF && !plater->is_background_process_slicing();
+        };
+        if (!m_main_toolbar.add_item(item))
+            return false;
+    }
+
     item.name = "orient";
     item.icon_filename = m_is_dark ? "toolbar_orient_dark.svg" : "toolbar_orient.svg";
     item.sprite_id++;
@@ -7646,7 +8232,26 @@ bool GLCanvas3D::_init_main_toolbar()
     if (!m_main_toolbar.add_separator())
         return false;
 
+    item.name = "align";
+    item.icon_filename = "toolbar_align.svg";
+    item.tooltip = _u8L("Align objects");
+    item.sprite_id++;
+    item.left.render_callback = nullptr;
+    item.left.toggable = false;
+    item.left.action_callback = [] { wxGetApp().plater()->align_selection(); };
+    item.enabling_callback = [] { return can_align_selection(*wxGetApp().plater()); };
+    if (!m_main_toolbar.add_item(item)) return false;
+
+    item.name = "fillplate";
+    item.icon_filename = "toolbar_fill_plate.svg";
+    item.tooltip = _u8L("Fill plate");
+    item.sprite_id++;
+    item.left.action_callback = [] { wxGetApp().plater()->fill_bed_with_instances(); };
+    item.enabling_callback = [] { return can_fill_plate(*wxGetApp().plater()); };
+    if (!m_main_toolbar.add_item(item)) return false;
+
     item.name = "more";
+    item.tooltip.clear();
     item.icon_filename = m_is_dark ? "instance_add_dark.svg" : "instance_add.svg";
     item.sprite_id++;
     item.left.render_callback = nullptr;
@@ -7752,6 +8357,10 @@ void GLCanvas3D::_update_select_plate_toolbar_stats_item(bool force_selected) {
 bool GLCanvas3D::_update_imgui_select_plate_toolbar()
 {
     bool result = true;
+    // A changed slice badge may dirty this even when movement itself does not.
+    // Keep thumbnail rendering out of the pointer-motion path in either case.
+    if (is_workspace_dragging())
+        return false;
     if (!m_sel_plate_toolbar.is_enabled()) {
         return false;
     }
@@ -7982,7 +8591,14 @@ BoundingBoxf3 GLCanvas3D::_max_bounding_box(bool include_gizmos, bool include_be
 
     bb.merge(include_bed_model ? m_bed.extended_bounding_box() : m_bed.build_volume().bounding_volume());
     if (include_plates) {
-        bb.merge(wxGetApp().plater()->get_partplate_list().get_bounding_box());
+        auto& plates = wxGetApp().plater()->get_partplate_list();
+        bb.merge(plates.get_bounding_box());
+        if (m_canvas_type == CanvasView3D && !m_design_canvas && plates.independent_setups())
+            for (const auto& stage : plates.stages()) {
+                const auto bounds = plates.stage_bounds(stage.id);
+                if (bounds.defined) bb.merge(BoundingBoxf3(Vec3d(bounds.min.x(), bounds.min.y(), -3.),
+                    Vec3d(bounds.max.x(), bounds.max.y(), 0.)));
+            }
     }
 
     if (!m_main_toolbar.is_enabled()) {
@@ -8817,6 +9433,28 @@ void GLCanvas3D::_render_ssao_pass(unsigned int width, unsigned int height)
     if (shader == nullptr)
         return;
 
+    // Preview panels are opaque. Resolving and shading the pixels they cover
+    // wastes bandwidth, especially on a multisampled Retina canvas.
+    const bool clip_to_preview = m_canvas_type == CanvasPreview && m_render_preview &&
+        m_gcode_viewer.has_data() && m_gcode_viewer.is_legend_shown();
+    int left = 0, bottom = 0, right = int(width);
+    if (clip_to_preview) {
+        const auto layout = preview_layout(float(width), float(height), get_scale(),
+            is_select_plate_toolbar_enabled(), m_gcode_viewer.get_gcode_height(height));
+        left = std::clamp(int(std::floor(layout.center_left)), 0, int(width));
+        right = std::clamp(int(std::ceil(layout.center_right)), left, int(width));
+        bottom = std::clamp(int(std::floor(float(height) - layout.scene_bottom)), 0, int(height));
+    }
+    if (right <= left || int(height) <= bottom)
+        return;
+    // The shader samples up to eight pixels away and reconstructs normals from
+    // neighbouring depth values. Preserve those samples along the panel edges.
+    constexpr int guard = 12;
+    const int copy_left = std::max(0, left - guard);
+    const int copy_bottom = std::max(0, bottom - guard);
+    const int copy_width = std::min(int(width), right + guard) - copy_left;
+    const int copy_height = int(height) - copy_bottom;
+
     if (m_ssao_color_texture_id == 0) {
         glsafe(::glGenTextures(1, &m_ssao_color_texture_id));
          glsafe(::glBindTexture(GL_TEXTURE_2D, m_ssao_color_texture_id));
@@ -8843,11 +9481,33 @@ void GLCanvas3D::_render_ssao_pass(unsigned int width, unsigned int height)
     }
 
     glsafe(::glBindTexture(GL_TEXTURE_2D, m_ssao_color_texture_id));
-    glsafe(::glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height));
+    glsafe(::glCopyTexSubImage2D(GL_TEXTURE_2D, 0, copy_left, copy_bottom, copy_left, copy_bottom, copy_width, copy_height));
     glsafe(::glBindTexture(GL_TEXTURE_2D, m_ssao_depth_texture_id));
-    glsafe(::glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height));
+    glsafe(::glCopyTexSubImage2D(GL_TEXTURE_2D, 0, copy_left, copy_bottom, copy_left, copy_bottom, copy_width, copy_height));
 
     const Camera& camera = wxGetApp().plater()->get_camera();
+
+    GLboolean previous_scissor_enabled = GL_FALSE;
+    GLint previous_scissor[4] = {};
+    if (clip_to_preview) {
+        previous_scissor_enabled = ::glIsEnabled(GL_SCISSOR_TEST);
+        glsafe(::glGetIntegerv(GL_SCISSOR_BOX, previous_scissor));
+        int clip_left = left, clip_bottom = bottom, clip_right = right, clip_top = int(height);
+        if (previous_scissor_enabled) {
+            clip_left = std::max(clip_left, previous_scissor[0]);
+            clip_bottom = std::max(clip_bottom, previous_scissor[1]);
+            clip_right = std::min(clip_right, previous_scissor[0] + previous_scissor[2]);
+            clip_top = std::min(clip_top, previous_scissor[1] + previous_scissor[3]);
+        }
+        glsafe(::glEnable(GL_SCISSOR_TEST));
+        glsafe(::glScissor(clip_left, clip_bottom, std::max(0, clip_right - clip_left), std::max(0, clip_top - clip_bottom)));
+    }
+    Slic3r::ScopeGuard scissor_guard([&] {
+        if (clip_to_preview) {
+            glsafe(::glScissor(previous_scissor[0], previous_scissor[1], previous_scissor[2], previous_scissor[3]));
+            if (!previous_scissor_enabled) glsafe(::glDisable(GL_SCISSOR_TEST));
+        }
+    });
 
     glsafe(::glDisable(GL_DEPTH_TEST));
     glsafe(::glDisable(GL_BLEND));
@@ -8904,10 +9564,29 @@ SceneCache::Key GLCanvas3D::_scene_cache_key(const Camera& camera) const
     const GLGizmoBase* gizmo = m_gizmos.get_current();
     key.gizmo_hover_id = gizmo != nullptr ? gizmo->get_hover_id() : -1;
     key.render_preview = m_render_preview;
+    if (m_canvas_type == CanvasView3D && !m_design_canvas) {
+        auto& plates = wxGetApp().plater()->get_partplate_list();
+        boost::hash_combine(key.render_settings_signature, m_stage_hover_id);
+        boost::hash_combine(key.render_settings_signature, int(m_stage_hover_kind));
+        boost::hash_combine(key.render_settings_signature, m_stage_hover_corner);
+        boost::hash_combine(key.render_settings_signature, m_plate_drop_stage);
+        for (const auto& stage : plates.stages()) {
+            boost::hash_combine(key.render_settings_signature, stage.id);
+            boost::hash_combine(key.render_settings_signature, stage.name);
+            const auto bounds = plates.stage_bounds(stage.id);
+            for (int axis = 0; axis < 2; ++axis) {
+                boost::hash_combine(key.render_settings_signature, stage.position[axis]);
+                boost::hash_combine(key.render_settings_signature, bounds.min[axis]);
+                boost::hash_combine(key.render_settings_signature, bounds.max[axis]);
+            }
+        }
+        for (int i = 0; i < plates.get_plate_count(); ++i)
+            boost::hash_combine(key.render_settings_signature, plates.get_plate(i)->stage_id());
+    }
     if (const AppConfig* cfg = wxGetApp().app_config) {
         for (const char* setting : {SETTING_OPENGL_ENHANCED_MATERIAL_SURFACE, SETTING_OPENGL_REALISTIC_MODE,
                 SETTING_OPENGL_REALISTIC_PHONG, SETTING_OPENGL_REALISTIC_SHADOWS,
-                SETTING_OPENGL_PHONG_SSAO, SETTING_OPENGL_FXAA_ENABLED})
+                SETTING_OPENGL_PHONG_SSAO, SETTING_OPENGL_FXAA_ENABLED, "fixed_perspective_zoom"})
             boost::hash_combine(key.render_settings_signature, cfg->get(setting));
         boost::hash_combine(key.render_settings_signature, GUI_App::dark_mode());
         if (_is_prepare_plastic_enabled()) {
@@ -8971,6 +9650,8 @@ void GLCanvas3D::_render_background()
 
     ColorRGBA background_color = m_is_dark ? DEFAULT_BG_LIGHT_COLOR_DARK : DEFAULT_BG_LIGHT_COLOR;
     ColorRGBA error_background_color = m_is_dark ? ERROR_BG_LIGHT_COLOR_DARK : ERROR_BG_LIGHT_COLOR;
+    if ((m_canvas_type == CanvasView3D || m_canvas_type == CanvasPreview) && !m_design_canvas)
+        background_color = WorkspaceStyle::color(DesignSystem::ColorRole::Viewport, m_is_dark);
     const ColorRGBA bottom_color = use_error_color ? error_background_color : background_color;
 
     if (!m_background.is_initialized()) {
@@ -9008,7 +9689,13 @@ void GLCanvas3D::_render_background()
 
 void GLCanvas3D::_render_workspace_plane(const Transform3d& view_matrix, const Transform3d& projection_matrix)
 {
-    const auto& bounds = wxGetApp().plater()->get_partplate_list().get_bounding_box();
+    auto& plates = wxGetApp().plater()->get_partplate_list();
+    BoundingBoxf3 bounds = plates.get_bounding_box();
+    for (const auto& stage : plates.stages()) {
+        const auto frame = plates.stage_bounds(stage.id);
+        if (frame.defined) bounds.merge(BoundingBoxf3(Vec3d(frame.min.x(), frame.min.y(), WorkspaceStyle::floor_z),
+            Vec3d(frame.max.x(), frame.max.y(), 0.)));
+    }
     const Vec2d low = (bounds.min.head<2>() / 1000.0).array().floor().matrix() * 1000.0 - Vec2d::Constant(10000.0);
     const Vec2d high = (bounds.max.head<2>() / 1000.0).array().ceil().matrix() * 1000.0 + Vec2d::Constant(10000.0);
     if (!m_workspace_surface.is_initialized() || m_workspace_extent.min != low || m_workspace_extent.max != high) {
@@ -9016,10 +9703,10 @@ void GLCanvas3D::_render_workspace_plane(const Transform3d& view_matrix, const T
         m_workspace_surface.reset();
         GLModel::Geometry surface;
         surface.format = {GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3};
-        surface.add_vertex(Vec3f(float(low.x()), float(low.y()), -3.0f));
-        surface.add_vertex(Vec3f(float(high.x()), float(low.y()), -3.0f));
-        surface.add_vertex(Vec3f(float(high.x()), float(high.y()), -3.0f));
-        surface.add_vertex(Vec3f(float(low.x()), float(high.y()), -3.0f));
+        surface.add_vertex(Vec3f(float(low.x()), float(low.y()), WorkspaceStyle::floor_z));
+        surface.add_vertex(Vec3f(float(high.x()), float(low.y()), WorkspaceStyle::floor_z));
+        surface.add_vertex(Vec3f(float(high.x()), float(high.y()), WorkspaceStyle::floor_z));
+        surface.add_vertex(Vec3f(float(low.x()), float(high.y()), WorkspaceStyle::floor_z));
         surface.add_triangle(0, 1, 2);
         surface.add_triangle(0, 2, 3);
         m_workspace_surface.init_from(std::move(surface));
@@ -9029,8 +9716,8 @@ void GLCanvas3D::_render_workspace_plane(const Transform3d& view_matrix, const T
             lines.format = {GLModel::Geometry::EPrimitiveType::Lines, GLModel::Geometry::EVertexLayout::P3};
             auto line = [&](double x1, double y1, double x2, double y2) {
                 const unsigned int index = static_cast<unsigned int>(lines.vertices_count());
-                lines.add_vertex(Vec3f(float(x1), float(y1), -2.98f));
-                lines.add_vertex(Vec3f(float(x2), float(y2), -2.98f));
+                lines.add_vertex(Vec3f(float(x1), float(y1), WorkspaceStyle::floor_z + 0.002f));
+                lines.add_vertex(Vec3f(float(x2), float(y2), WorkspaceStyle::floor_z + 0.002f));
                 lines.add_line(index, index + 1);
             };
             for (double x = low.x(); x <= high.x(); x += step)
@@ -9057,13 +9744,305 @@ void GLCanvas3D::_render_workspace_plane(const Transform3d& view_matrix, const T
     }
     glsafe(::glEnable(GL_DEPTH_TEST));
     const bool dark = GUI_App::dark_mode();
-    m_workspace_surface.set_color(dark ? ColorRGBA(0.27f, 0.285f, 0.31f, 1.0f) : ColorRGBA(0.91f, 0.925f, 0.937f, 1.0f));
+    const ColorRGBA ground = WorkspaceStyle::color(DesignSystem::ColorRole::Viewport, dark);
+    const ColorRGBA line = WorkspaceStyle::color(DesignSystem::ColorRole::LineControl, dark);
+    m_workspace_surface.set_color(ground);
     m_workspace_surface.render();
     glsafe(::glLineWidth(1.0f));
-    m_workspace_grid_minor.set_color(dark ? ColorRGBA(0.31f, 0.33f, 0.36f, 1.0f) : ColorRGBA(0.84f, 0.867f, 0.886f, 1.0f));
+    m_workspace_grid_minor.set_color(lerp(ground, line, 0.12f));
     m_workspace_grid_minor.render();
-    m_workspace_grid_major.set_color(dark ? ColorRGBA(0.38f, 0.41f, 0.45f, 1.0f) : ColorRGBA(0.765f, 0.796f, 0.827f, 1.0f));
+    m_workspace_grid_major.set_color(lerp(ground, line, 0.35f));
     m_workspace_grid_major.render();
+    shader->stop_using();
+    _render_workspace_stages(view_matrix, projection_matrix);
+}
+
+void GLCanvas3D::_render_workspace_stages(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+{
+    auto& plates = wxGetApp().plater()->get_partplate_list();
+    m_stage_controls.clear();
+    for (auto label = m_stage_labels.begin(); label != m_stage_labels.end();) {
+        if (std::none_of(plates.stages().begin(), plates.stages().end(),
+            [&](const WorkspaceStage& stage) { return stage.id == label->first; })) label = m_stage_labels.erase(label);
+        else ++label;
+    }
+    if (plates.stages().empty()) return;
+    const bool dark = GUI_App::dark_mode();
+    const wxColour ink(DesignSystem::color_hex(DesignSystem::ColorRole::Ink, dark));
+    const int font_size = std::max(48, wxGetApp().em_unit() * 4);
+    auto font = DesignSystem::font(DesignSystem::TypeStyle::Heading);
+    font.SetPixelSize(wxSize(0, font_size));
+    constexpr double title_height = WorkspaceStyle::stage_title_text_height;
+    if (m_stage_edit_texture.get_id() == 0 || m_stage_edit_dark != dark) {
+        m_stage_edit_texture.reset();
+        m_stage_edit_texture.load_from_svg_file(resources_dir() + "/images/" +
+            (dark ? "stage_title_edit_dark.svg" : "stage_title_edit.svg"), true, false, false, 128);
+        m_stage_edit_dark = dark;
+    }
+    size_t signature = plates.stages().size();
+    boost::hash_combine(signature, dark);
+    boost::hash_combine(signature, font_size);
+    BoundingBoxf drop_bounds;
+    const auto rect = [](GLModel::Geometry& geometry, const BoundingBoxf& box, float z) {
+        const unsigned int base = static_cast<unsigned int>(geometry.vertices_count());
+        for (const Vec2d& point : {Vec2d(box.min.x(), box.min.y()), Vec2d(box.max.x(), box.min.y()),
+                                 Vec2d(box.max.x(), box.max.y()), Vec2d(box.min.x(), box.max.y())})
+            geometry.add_vertex(Vec3f(float(point.x()), float(point.y()), z));
+        geometry.add_triangle(base, base + 1, base + 2);
+        geometry.add_triangle(base, base + 2, base + 3);
+    };
+    for (const auto& stage : plates.stages()) {
+        const auto frame = plates.stage_bounds(stage.id);
+        if (!frame.defined) continue;
+        if (stage.id == m_plate_drop_stage)
+            drop_bounds = WorkspaceStyle::stage_display_area(frame);
+        auto& label = m_stage_labels[stage.id];
+        if (!label) label = std::make_unique<StageLabel>();
+        const double max_width = std::max(24., std::min(320., frame.size().x() - 140.));
+        if (label->name != stage.name || label->dark != dark || label->font_size != font_size ||
+            label->available_width != max_width || label->texture.get_id() == 0) {
+            wxString title = from_u8(stage.name);
+            wxInfoDC dc(m_canvas);
+            dc.SetFont(font);
+            bool shortened = false;
+            while (title.length() > 1 && title_height * dc.GetTextExtent(title + (shortened ? wxString("…") : wxString())).x /
+                std::max(1, dc.GetTextExtent(title).y) > max_width) {
+                title.RemoveLast();
+                shortened = true;
+            }
+            const std::string text = into_u8(title + (shortened ? wxString("…") : wxString()));
+            if (label->text != text || label->dark != dark || label->font_size != font_size || label->texture.get_id() == 0) {
+                label->texture.reset();
+                label->texture.generate_from_text_string(text, font, *wxBLACK, ink);
+                label->model.reset();
+            }
+            label->text = text;
+            label->name = stage.name;
+            label->dark = dark;
+            label->font_size = font_size;
+            label->available_width = max_width;
+        }
+        const double width = title_height * label->texture.m_original_width / std::max(1, label->texture.m_original_height);
+        const WorkspaceStyle::StageLayout layout = WorkspaceStyle::stage_layout(frame, width);
+        const Vec2d start = layout.text_origin;
+        const BoundingBoxf title_bounds(start, start + Vec2d(width, title_height));
+        if (!label->model.is_initialized() || label->bounds.min != title_bounds.min || label->bounds.max != title_bounds.max) {
+            label->model.reset();
+            label->bounds = title_bounds;
+            GLModel::Geometry geometry;
+            geometry.format = {GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3T2};
+            const float u = float(label->texture.m_original_width) / std::max(1, label->texture.get_width());
+            const float v = float(label->texture.m_original_height) / std::max(1, label->texture.get_height());
+            geometry.add_vertex(Vec3f(float(start.x()), float(start.y()), WorkspaceStyle::chrome_z), Vec2f(0.f, v));
+            geometry.add_vertex(Vec3f(float(start.x() + width), float(start.y()), WorkspaceStyle::chrome_z), Vec2f(u, v));
+            geometry.add_vertex(Vec3f(float(start.x() + width), float(start.y() + title_height), WorkspaceStyle::chrome_z), Vec2f(u, 0.f));
+            geometry.add_vertex(Vec3f(float(start.x()), float(start.y() + title_height), WorkspaceStyle::chrome_z), Vec2f(0.f, 0.f));
+            geometry.add_triangle(0, 1, 2);
+            geometry.add_triangle(0, 2, 3);
+            label->model.init_from(std::move(geometry));
+        }
+        const BoundingBoxf& rename = layout.rename;
+        if (!label->rename_model.is_initialized() || label->rename_bounds.min != rename.min || label->rename_bounds.max != rename.max) {
+            // This small quad follows the same bar placement as the text.
+            label->rename_model.reset();
+            label->rename_bounds = rename;
+            GLModel::Geometry geometry;
+            geometry.format = {GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3T2};
+            const Vec2d low = rename.min + Vec2d(6., 6.), high = rename.max - Vec2d(6., 6.);
+            geometry.add_vertex(Vec3f(float(low.x()), float(low.y()), WorkspaceStyle::chrome_z), Vec2f(0.f, 1.f));
+            geometry.add_vertex(Vec3f(float(high.x()), float(low.y()), WorkspaceStyle::chrome_z), Vec2f(1.f, 1.f));
+            geometry.add_vertex(Vec3f(float(high.x()), float(high.y()), WorkspaceStyle::chrome_z), Vec2f(1.f, 0.f));
+            geometry.add_vertex(Vec3f(float(low.x()), float(high.y()), WorkspaceStyle::chrome_z), Vec2f(0.f, 0.f));
+            geometry.add_triangle(0, 1, 2);
+            geometry.add_triangle(0, 2, 3);
+            label->rename_model.init_from(std::move(geometry));
+        }
+        m_stage_controls.push_back({stage.id, layout.title, StageControl::Title});
+        m_stage_controls.push_back({stage.id, layout.rename, StageControl::Rename});
+        m_stage_controls.push_back({stage.id, layout.actions, StageControl::Actions});
+        for (int corner = 0; corner < 4; ++corner)
+            m_stage_controls.push_back({stage.id, layout.corners[corner], StageControl::Resize, corner});
+        boost::hash_combine(signature, stage.id);
+        boost::hash_combine(signature, label->text);
+        for (int axis = 0; axis < 2; ++axis) {
+            boost::hash_combine(signature, frame.min[axis]);
+            boost::hash_combine(signature, frame.max[axis]);
+        }
+    }
+    const bool rebuild_geometry = !m_stage_surfaces.is_initialized() || signature != m_stage_geometry_signature;
+    if (rebuild_geometry) {
+        m_stage_surfaces.reset();
+        m_stage_outlines.reset();
+        m_stage_control_marks.reset();
+        m_stage_title_bars.reset();
+        GLModel::Geometry surfaces, bars, outlines, marks;
+        surfaces.format = bars.format = marks.format = {GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3};
+        outlines.format = {GLModel::Geometry::EPrimitiveType::Lines, GLModel::Geometry::EVertexLayout::P3};
+        for (const auto& stage : plates.stages()) {
+            const auto bounds = plates.stage_bounds(stage.id);
+            if (!bounds.defined) continue;
+            rect(surfaces, bounds, WorkspaceStyle::floor_z + 0.005f);
+            const unsigned int bar_base = static_cast<unsigned int>(bars.vertices_count());
+            const auto bar = WorkspaceStyle::stage_layout(bounds, m_stage_labels.at(stage.id)->bounds.size().x()).bar;
+            const double radius = 6.;
+            const Vec3f center(float(bar.center().x()), float(bar.center().y()), WorkspaceStyle::floor_z + 0.01f);
+            bars.add_vertex(center);
+            for (int corner = 0; corner < 4; ++corner)
+                for (int segment = 0; segment <= 6; ++segment) {
+                    const double angle = (corner * .5 + segment / 12.) * PI;
+                    const double x = corner == 0 || corner == 3 ? bar.max.x() - radius : bar.min.x() + radius;
+                    const double y = corner < 2 ? bar.max.y() - radius : bar.min.y() + radius;
+                    bars.add_vertex(Vec3f(float(x + radius * std::cos(angle)),
+                        float(y + radius * std::sin(angle)), WorkspaceStyle::floor_z + 0.01f));
+                }
+            const unsigned int bar_count = static_cast<unsigned int>(bars.vertices_count()) - bar_base - 1;
+            for (unsigned int i = 0; i < bar_count; ++i)
+                bars.add_triangle(bar_base, bar_base + 1 + i, bar_base + 1 + (i + 1) % bar_count);
+            const unsigned int edge = static_cast<unsigned int>(outlines.vertices_count());
+            for (const Vec2d& corner : {Vec2d(bounds.min.x(), bounds.min.y()), Vec2d(bounds.max.x(), bounds.min.y()),
+                                       Vec2d(bounds.max.x(), bounds.max.y()), Vec2d(bounds.min.x(), bounds.max.y())})
+                outlines.add_vertex(Vec3f(float(corner.x()), float(corner.y()), WorkspaceStyle::floor_z + 0.015f));
+            for (unsigned int i = 0; i < 4; ++i) outlines.add_line(edge + i, edge + (i + 1) % 4);
+        }
+        for (const auto& control : m_stage_controls) {
+            const auto& box = control.bounds;
+            if (control.kind == StageControl::Resize) {
+                // Small corner brackets, rather than a large control over the workspace.
+                const Vec2d corner(control.corner & 1 ? box.max.x() : box.min.x(),
+                    control.corner & 2 ? box.max.y() : box.min.y());
+                const double sx = control.corner & 1 ? -1. : 1.;
+                const double sy = control.corner & 2 ? -1. : 1.;
+                const Vec2d end = corner + Vec2d(20. * sx, 20. * sy);
+                rect(marks, BoundingBoxf(corner.cwiseMin(Vec2d(end.x(), corner.y() + 2. * sy)),
+                    corner.cwiseMax(Vec2d(end.x(), corner.y() + 2. * sy))), WorkspaceStyle::floor_z + 0.035f);
+                rect(marks, BoundingBoxf(corner.cwiseMin(Vec2d(corner.x() + 2. * sx, end.y())),
+                    corner.cwiseMax(Vec2d(corner.x() + 2. * sx, end.y()))), WorkspaceStyle::floor_z + 0.035f);
+            } else if (control.kind == StageControl::Actions) {
+                for (int dot = 0; dot < 3; ++dot) {
+                    const Vec2d center(box.center().x() - 6. + dot * 6., box.center().y());
+                    rect(marks, BoundingBoxf(center - Vec2d(1.2, 1.2), center + Vec2d(1.2, 1.2)), WorkspaceStyle::floor_z + 0.04f);
+                }
+            } else if (control.kind == StageControl::Title) {
+                for (int column = 0; column < 2; ++column)
+                    for (int row = 0; row < 3; ++row) {
+                        const Vec2d center(box.min.x() + 12. + column * 8., box.min.y() + 10. + row * 8.);
+                        rect(marks, BoundingBoxf(center - Vec2d(1.5, 1.5), center + Vec2d(1.5, 1.5)), WorkspaceStyle::floor_z + 0.04f);
+                    }
+            }
+        }
+        m_stage_surfaces.init_from(std::move(surfaces));
+        m_stage_title_bars.init_from(std::move(bars));
+        m_stage_outlines.init_from(std::move(outlines));
+        m_stage_control_marks.init_from(std::move(marks));
+        m_stage_geometry_signature = signature;
+    }
+    // Hovering chrome changes only its own mark, like the drop outline below. The
+    // stage surfaces, title bars and controls keep their existing GPU buffers.
+    size_t hover_signature = signature;
+    boost::hash_combine(hover_signature, m_stage_hover_id);
+    boost::hash_combine(hover_signature, int(m_stage_hover_kind));
+    boost::hash_combine(hover_signature, m_stage_hover_corner);
+    if (rebuild_geometry || hover_signature != m_stage_hover_signature) {
+        m_stage_hover_mark.reset();
+        GLModel::Geometry hover;
+        hover.format = {GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3};
+        for (const auto& control : m_stage_controls) {
+            if (control.id != m_stage_hover_id || control.kind != m_stage_hover_kind || control.corner != m_stage_hover_corner)
+                continue;
+            const auto& box = control.bounds;
+            if (control.kind != StageControl::Resize) rect(hover, box, WorkspaceStyle::floor_z + 0.025f);
+            else for (const auto& border : {
+                BoundingBoxf(box.min, Vec2d(box.max.x(), box.min.y() + 1.)),
+                BoundingBoxf(Vec2d(box.min.x(), box.max.y() - 1.), box.max),
+                BoundingBoxf(box.min, Vec2d(box.min.x() + 1., box.max.y())),
+                BoundingBoxf(Vec2d(box.max.x() - 1., box.min.y()), box.max)}) rect(hover, border, WorkspaceStyle::floor_z + 0.04f);
+        }
+        if (hover.vertices_count() > 0) m_stage_hover_mark.init_from(std::move(hover));
+        m_stage_hover_signature = hover_signature;
+    }
+    // Entering or leaving a drop target changes only its outline. Keep the
+    // stages' surfaces, title bars and controls in their existing GPU buffers.
+    if (drop_bounds.defined) {
+        // Compare at the same float precision used by GLModel's vertices.
+        const Vec2d low = drop_bounds.min.cast<float>().cast<double>();
+        const Vec2d high = drop_bounds.max.cast<float>().cast<double>();
+        const auto& cached = m_stage_drop_mark.get_bounding_box();
+        if (!m_stage_drop_mark.is_initialized() || cached.min.head<2>() != low || cached.max.head<2>() != high) {
+            m_stage_drop_mark.reset();
+            GLModel::Geometry drop;
+            drop.format = {GLModel::Geometry::EPrimitiveType::Triangles, GLModel::Geometry::EVertexLayout::P3};
+            for (const auto& border : {
+                BoundingBoxf(drop_bounds.min, Vec2d(drop_bounds.max.x(), drop_bounds.min.y() + 2.)),
+                BoundingBoxf(Vec2d(drop_bounds.min.x(), drop_bounds.max.y() - 2.), drop_bounds.max),
+                BoundingBoxf(drop_bounds.min, Vec2d(drop_bounds.min.x() + 2., drop_bounds.max.y())),
+                BoundingBoxf(Vec2d(drop_bounds.max.x() - 2., drop_bounds.min.y()), drop_bounds.max)})
+                rect(drop, border, WorkspaceStyle::floor_z + 0.04f);
+            m_stage_drop_mark.init_from(std::move(drop));
+        }
+    }
+    const bool plastic = _is_prepare_plastic_enabled();
+    const ShadowRenderContext shadow = _prepare_shadow_context();
+    const ShadowTextureBinding binding(plastic ? &shadow : nullptr);
+    auto* shader = wxGetApp().get_shader(plastic ? "prepare_flat_receiver" : "flat");
+    if (!shader) return;
+    shader->start_using();
+    shader->set_uniform("view_model_matrix", view_matrix);
+    shader->set_uniform("projection_matrix", projection_matrix);
+    if (plastic) {
+        shadow.set_uniforms(*shader);
+        shader->set_uniform("shadow_world_matrix", Transform3d::Identity());
+    }
+    const wxColour surface(DesignSystem::color_hex(DesignSystem::ColorRole::SurfaceRaised, dark));
+    const wxColour line(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl, dark));
+    const ColorRGBA plane = WorkspaceStyle::color(DesignSystem::ColorRole::Viewport, dark);
+    m_stage_surfaces.set_color(ColorRGBA(0.8f * plane.r() + 0.2f * surface.Red() / 255.f,
+        0.8f * plane.g() + 0.2f * surface.Green() / 255.f, 0.8f * plane.b() + 0.2f * surface.Blue() / 255.f, 1.f));
+    m_stage_outlines.set_color(ColorRGBA(line.Red() / 255.f, line.Green() / 255.f, line.Blue() / 255.f, 1.f));
+    m_stage_control_marks.set_color(WorkspaceStyle::color(DesignSystem::ColorRole::InkMuted, dark));
+    glsafe(::glEnable(GL_DEPTH_TEST));
+    m_stage_surfaces.render();
+    shader->stop_using();
+    // Stage fills receive the same shadows as the surrounding plane. Keep the
+    // title bars and editing marks unlit so their contrast stays consistent.
+    shader = wxGetApp().get_shader("flat");
+    if (!shader) return;
+    shader->start_using();
+    shader->set_uniform("view_model_matrix", view_matrix);
+    shader->set_uniform("projection_matrix", projection_matrix);
+    m_stage_title_bars.set_color(WorkspaceStyle::color(DesignSystem::ColorRole::Surface, dark));
+    m_stage_title_bars.render();
+    glsafe(::glLineWidth(1.f));
+    m_stage_outlines.render();
+    m_stage_control_marks.render();
+    const wxColour accent(DesignSystem::color_hex(m_stage_hover_kind == StageControl::Resize
+        ? DesignSystem::ColorRole::AccentInk : DesignSystem::ColorRole::SurfaceHover, dark));
+    m_stage_hover_mark.set_color(ColorRGBA(accent.Red() / 255.f, accent.Green() / 255.f, accent.Blue() / 255.f, 1.f));
+    if (m_stage_hover_mark.is_initialized()) m_stage_hover_mark.render();
+    if (drop_bounds.defined && m_stage_drop_mark.is_initialized()) {
+        const wxColour drop_color(DesignSystem::color_hex(DesignSystem::ColorRole::AccentInk, dark));
+        m_stage_drop_mark.set_color(ColorRGBA(drop_color.Red() / 255.f, drop_color.Green() / 255.f, drop_color.Blue() / 255.f, 1.f));
+        m_stage_drop_mark.render();
+    }
+    shader->stop_using();
+    shader = wxGetApp().get_shader("printbed");
+    if (!shader) return;
+    shader->start_using();
+    shader->set_uniform("view_model_matrix", view_matrix);
+    shader->set_uniform("projection_matrix", projection_matrix);
+    shader->set_uniform("transparent_background", false);
+    shader->set_uniform("svg_source", false);
+    glsafe(::glEnable(GL_BLEND));
+    glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+    glsafe(::glDepthMask(GL_FALSE));
+    for (const auto& label : m_stage_labels) {
+        glsafe(::glBindTexture(GL_TEXTURE_2D, label.second->texture.get_id()));
+        label.second->model.render();
+        glsafe(::glBindTexture(GL_TEXTURE_2D, m_stage_edit_texture.get_id()));
+        label.second->rename_model.render();
+    }
+    glsafe(::glBindTexture(GL_TEXTURE_2D, 0));
+    glsafe(::glDepthMask(GL_TRUE));
+    glsafe(::glDisable(GL_BLEND));
     shader->stop_using();
 }
 
@@ -9090,6 +10069,10 @@ void GLCanvas3D::_render_bed(const Transform3d& view_matrix, const Transform3d& 
         // set_shape/set_axes_mode otherwise reset it to the bed corner).
         const Vec2d bc = m_bed.build_volume().bed_center();
         m_bed.set_axes_origin(Vec3d(bc.x(), bc.y(), 0.0));
+    } else if (m_canvas_type == ECanvasType::CanvasView3D || m_canvas_type == ECanvasType::CanvasPreview) {
+        // The active bed's position is its print-coordinate origin in the
+        // workspace, refreshed on selection and throughout plate/stage dragging.
+        m_bed.set_axes_mode(false);
     } else {
         m_bed.set_axes_mode(m_main_toolbar.is_enabled());
     }
@@ -9287,7 +10270,8 @@ void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform
         Matrix4d light_proj = Matrix4d::Identity();
         Vec3d eye = Vec3d::Zero();
         if (map_only) {
-            const auto fit = fit_workspace_shadow(obj_bb, dir_to_light, size);
+            const auto fit = fit_workspace_shadow(obj_bb, dir_to_light, size,
+                WorkspaceStyle::floor_z);
             if (!fit)
                 return;
             light_view = fit->view.matrix();
@@ -9399,9 +10383,11 @@ void GLCanvas3D::_render_shadows(const Transform3d& view_matrix, const Transform
         const Vec2d caster_z_range = m_use_clipping_planes ?
             Vec2d(-m_clipping_planes[0].get_data()[3], m_clipping_planes[1].get_data()[3]) :
             Vec2d(-FLT_MAX, FLT_MAX);
-        // A static light keeps the map until its frustum or the casters change.
+        // Panning and zooming do not change an orbit light's direction either.
+        // Reuse the toolpath map until the light frustum or enabled paths change;
+        // orbiting still changes light_view and invalidates it.
         size_t cache_key = 0;
-        if (mode == EShadowMode::Static) {
+        if (mode == EShadowMode::Static || toolpath_casters) {
             cache_key = _shadow_casters_signature(toolpath_casters, map_only);
             for (int i = 0; i < 16; ++i)
                 boost::hash_combine(cache_key, m_shadow_light_vp.matrix().data()[i]);
@@ -10142,7 +11128,8 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
     Size cnv_size = get_canvas_size();
 
     //BBS: GUI refactor: GLToolbar
-    const float base_size = m_canvas_type == CanvasView3D && !m_design_canvas ? DesignSystem::control_md : GLToolbar::Default_Icons_Size;
+    const auto& toolbar_style = DesignSystem::live_toolbar_style().snapshot();
+    const float base_size = m_canvas_type == CanvasView3D && !m_design_canvas ? toolbar_style.control_size : GLToolbar::Default_Icons_Size;
     int size_i = int(base_size * scale);
     // force even size
     if (size_i % 2 != 0)
@@ -10151,12 +11138,11 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
 
     // Set current size for all top toolbars. It will be used for next calculations
     //BBS: GUI refactor: GLToolbar
-    const float inset = DesignSystem::space_4 * get_scale();
     if (m_canvas_type == CanvasView3D && !m_design_canvas) {
         for (GLToolbar* toolbar : {&m_main_toolbar, &m_assemble_view_toolbar, &m_separator_toolbar}) {
-            toolbar->set_border(inset);
-            toolbar->set_gap_size(inset);
-            toolbar->set_separator_size(inset);
+            toolbar->set_border(toolbar_style.border * get_scale());
+            toolbar->set_gap_size(toolbar_style.gap * get_scale());
+            toolbar->set_separator_size(toolbar_style.gap * get_scale());
         }
     }
     m_main_toolbar.set_icons_size(size);
@@ -10205,6 +11191,76 @@ void GLCanvas3D::_check_and_update_toolbar_icon_scale()
     // tab's canvas) always fits at the largest.
     if (items_cnt > collapse_toolbar.get_visible_items_cnt() && fabs(new_scale - scale) > 0.05) // scale is changed by 5% and more
         wxGetApp().set_auto_toolbar_icon_scale(new_scale);
+}
+
+static void queue_stage_action(wxGLCanvas* canvas, std::function<void(Plater&)> action)
+{
+    if (!canvas || wxGetApp().is_closing()) return;
+    wxWeakRef<wxGLCanvas> weak(canvas);
+    canvas->CallAfter([weak, action = std::move(action)] {
+        if (!weak || wxGetApp().is_closing()) return;
+        auto* plater = wxGetApp().plater();
+        if (plater && plater->get_view3D_canvas3D()->get_wxglcanvas() == weak.get()) action(*plater);
+    });
+}
+
+const GLCanvas3D::StageControl* GLCanvas3D::_workspace_stage_control_at(const Vec2d& screen)
+{
+    if (m_canvas_type != CanvasView3D || m_design_canvas || !m_show_bed ||
+        screen.y() < m_main_toolbar.get_height() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return nullptr;
+    const auto& plates = wxGetApp().plater()->get_partplate_list();
+    if (!plates.independent_setups() || plates.stages().empty() || m_gizmos.is_dragging() || m_mouse.dragging ||
+        m_rectangle_selection.is_dragging() || m_layers_editing.state == LayersEditing::Editing) return nullptr;
+    if (m_main_toolbar.contains_point(screen, *this) || collapse_toolbar().contains_point(screen, *this) ||
+        m_assemble_view_toolbar.contains_point(screen, *this)) return nullptr;
+    // The label stays on the plane, but UI drawn over it retains input priority.
+    if (GImGui)
+        for (const auto* window : GImGui->Windows)
+            if ((window->Active || window->WasActive) && !window->Hidden && !(window->Flags & ImGuiWindowFlags_NoMouseInputs) &&
+                window->OuterRectClipped.Contains(ImVec2(float(screen.x()), float(screen.y())))) return nullptr;
+    const auto* gizmo = m_gizmos.get_current();
+    if (gizmo && gizmo->get_hover_id() >= 0) return nullptr;
+    const auto& camera = wxGetApp().plater()->get_camera();
+    const auto& viewport = camera.get_viewport();
+    if (!camera.is_looking_downward()) return nullptr;
+    const double navigator = m_canvas_toolbar_pos[0];
+    if (navigator > 0. && screen.x() < navigator && screen.y() > viewport[3] - navigator) return nullptr;
+    const Linef3 ray = mouse_ray(Point(coord_t(screen.x()), coord_t(screen.y())));
+    if (std::abs(ray.vector().z()) < 1e-9) return nullptr;
+    const double distance = (WorkspaceStyle::chrome_z - ray.a.z()) / ray.vector().z();
+    if (distance < 0. || distance > 1.) return nullptr;
+    const Vec3d point = ray.a + distance * ray.vector();
+    if (!point.allFinite()) return nullptr;
+    const StageControl* candidate = nullptr;
+    for (auto control = m_stage_controls.rbegin(); control != m_stage_controls.rend() && !candidate; ++control)
+        if (control->bounds.contains(point.head<2>())) candidate = &*control;
+    if (!candidate) {
+        // Padding is used only when no exact control hit exists.
+        const Matrix4d projection = camera.get_projection_matrix().matrix() * camera.get_view_matrix().matrix();
+        double nearest_distance = m_canvas->FromDIP(18) * get_scale();
+        for (const auto& control : m_stage_controls) {
+            const Vec2d center = control.kind == StageControl::Title
+                ? Vec2d(control.bounds.min.x() + 16., control.bounds.center().y()) : control.bounds.center();
+            const Vec4d clip = projection * Vec4d(center.x(), center.y(), WorkspaceStyle::chrome_z, 1.);
+            if (!clip.allFinite() || clip.w() <= 0.) continue;
+            const Vec3d ndc = clip.head<3>() / clip.w();
+            if (ndc.z() < -1. || ndc.z() > 1.) continue;
+            const Vec2d projected((ndc.x() + 1.) * .5 * viewport[2], (1. - ndc.y()) * .5 * viewport[3]);
+            const double distance = (screen - projected).norm();
+            if (distance <= nearest_distance) {
+                candidate = &control;
+                nearest_distance = distance;
+            }
+        }
+    }
+    // A control, or its screen-size padding, must not cover a visible plate grip, pencil or bed.
+    // Use the press position, since hover picking may still describe the previous frame. Pick
+    // only near a control: most pointer motion over the workspace has no candidate at all.
+    if (candidate && m_picking_enabled) {
+        const ClippingPlane clipping_plane = get_raycaster_clipping_plane();
+        if (m_scene_raycaster.hit(screen, camera, &clipping_plane).is_valid()) return nullptr;
+    }
+    return candidate;
 }
 
 // The ImGui half of the overlay, drawn by ImGui at the end of the frame.
@@ -10289,6 +11345,9 @@ size_t GLCanvas3D::_overlay_signature(const ImDrawData* draw_data) const
                                collapse_toolbar().get_state_hash(),
                                m_gizmos.get_overlay_state_hash() })
         boost::hash_combine(hash, state_hash);
+    const auto& style = DesignSystem::live_toolbar_style();
+    if (m_canvas_type == CanvasView3D && !m_design_canvas && style.enabled())
+        boost::hash_combine(hash, style.revision());
     return hash;
 }
 
@@ -10490,6 +11549,377 @@ void GLCanvas3D::_render_main_toolbar()
 
 //BBS: GUI refactor: GLToolbar adjust
 //when rendering, {0, 0} is at the center, {-0.5, 0.5} at the left-up
+void GLCanvas3D::_render_preview_navigation()
+{
+    auto& plates = wxGetApp().plater()->get_partplate_list();
+    if (m_preview_plate_index != plates.get_curr_plate_index()) {
+        m_preview_scope_selected = false;
+        m_preview_plate_index = plates.get_curr_plate_index();
+    }
+    if (!m_preview_stage_id.empty() && std::none_of(plates.stages().begin(), plates.stages().end(),
+            [this](const WorkspaceStage& stage) { return stage.id == m_preview_stage_id; }))
+        m_preview_scope_selected = false;
+    const float scale = get_scale();
+    const auto size = get_canvas_size();
+    const auto layout = preview_layout(float(size.get_width()), float(size.get_height()), scale, true,
+        m_gcode_viewer.get_gcode_height(size.get_height()));
+    const auto color = [this](DesignSystem::ColorRole role) {
+        return ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(role, m_is_dark));
+    };
+    auto& imgui = *wxGetApp().imgui();
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, color(DesignSystem::ColorRole::Surface));
+    ImGui::PushStyleColor(ImGuiCol_Text, color(DesignSystem::ColorRole::Ink));
+    ImGui::PushStyleColor(ImGuiCol_Header, color(DesignSystem::ColorRole::AccentSoft));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, color(DesignSystem::ColorRole::SurfaceHover));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, color(DesignSystem::ColorRole::SurfaceHover));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, color(DesignSystem::ColorRole::Surface));
+    ImGui::PushStyleColor(ImGuiCol_Border, color(DesignSystem::ColorRole::Line));
+    ImGui::PushStyleColor(ImGuiCol_Separator, color(DesignSystem::ColorRole::Line));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, color(DesignSystem::ColorRole::Surface));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, color(DesignSystem::ColorRole::InkMuted));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, color(DesignSystem::ColorRole::Ink));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, color(DesignSystem::ColorRole::Ink));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f, 16.f) * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 3.f) * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 8.f * scale);
+    ImGui::SetNextWindowPos({0.f, 0.f}, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({layout.navigation_width, float(size.get_height())}, ImGuiCond_Always);
+    imgui.begin(std::string("Preview plates"), ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollWithMouse);
+    const auto navigation_button = [&](const std::string& label, bool settings, bool expanded) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, DesignSystem::radius_md * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(36.f, 8.f) * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.f, .5f));
+        ImGui::PushStyleColor(ImGuiCol_Button, color(expanded ? DesignSystem::ColorRole::AccentSoft : DesignSystem::ColorRole::SurfaceRaised));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color(DesignSystem::ColorRole::SurfaceHover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, color(DesignSystem::ColorRole::AccentSoft));
+        ImGui::PushStyleColor(ImGuiCol_Border, color(DesignSystem::ColorRole::LineControl));
+        ImGui::PushStyleColor(ImGuiCol_Text, color(expanded ? DesignSystem::ColorRole::AccentInk : DesignSystem::ColorRole::Ink));
+        const bool clicked = ImGui::Button(label.c_str(), {-1.f, DesignSystem::control_lg * scale});
+        auto* draw = ImGui::GetWindowDrawList();
+        const ImVec2 lo = ImGui::GetItemRectMin();
+        const ImVec2 hi = ImGui::GetItemRectMax();
+        const ImVec2 icon(lo.x + 18.f * scale, (lo.y + hi.y) * .5f);
+        const ImU32 ink = ImGui::GetColorU32(color(expanded ? DesignSystem::ColorRole::AccentInk : DesignSystem::ColorRole::InkMuted));
+        const float stroke = 1.5f * scale;
+        if (settings) {
+            for (int i = 0; i < 3; ++i) {
+                const float y = icon.y + (i - 1) * 5.f * scale;
+                const float x = icon.x + (i == 1 ? 3.f : -3.f) * scale;
+                draw->AddLine({icon.x - 7.f * scale, y}, {icon.x + 7.f * scale, y}, ink, stroke);
+                draw->AddCircleFilled({x, y}, 2.2f * scale, ink, 12);
+            }
+            const ImVec2 tip(hi.x - 15.f * scale, icon.y);
+            const float direction = expanded ? -1.f : 1.f;
+            draw->AddLine(tip + ImVec2(-direction * 2.f, -4.f) * scale,
+                tip + ImVec2(direction * 2.f, 0.f) * scale, ink, stroke);
+            draw->AddLine(tip + ImVec2(direction * 2.f, 0.f) * scale,
+                tip + ImVec2(-direction * 2.f, 4.f) * scale, ink, stroke);
+        } else {
+            draw->AddLine(icon + ImVec2(-6.f, 0.f) * scale, icon + ImVec2(6.f, 0.f) * scale, ink, stroke);
+            draw->AddLine(icon + ImVec2(-6.f, 0.f) * scale, icon + ImVec2(-1.f, -5.f) * scale, ink, stroke);
+            draw->AddLine(icon + ImVec2(-6.f, 0.f) * scale, icon + ImVec2(-1.f, 5.f) * scale, ink, stroke);
+        }
+        ImGui::PopStyleColor(5);
+        ImGui::PopStyleVar(4);
+        return clicked;
+    };
+    const bool settings_available = wxGetApp().plater()->is_sidebar_enabled();
+    if (settings_available) {
+        const bool collapsed = wxGetApp().plater()->is_sidebar_collapsed();
+        if (navigation_button(_u8L("Print settings"), true, !collapsed)) {
+            wxWeakRef<wxGLCanvas> weak(m_canvas);
+            m_canvas->CallAfter([weak, collapsed] {
+                if (!weak || wxGetApp().is_closing()) return;
+                auto* plater = wxGetApp().plater();
+                if (plater && plater->is_preview_shown())
+                    plater->collapse_sidebar(!collapsed);
+            });
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
+    imgui.bold_text(_u8L("Plates"));
+    ImGui::Spacing();
+    if (ImGui::Selectable(_u8L("All plates").c_str(), m_preview_scope_selected && m_preview_stage_id.empty(), 0, {0.f, 28.f * scale})) {
+        m_preview_scope_selected = true;
+        m_preview_stage_id.clear();
+        set_as_dirty(); request_extra_frame();
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    // Only the list scrolls; the title and project overview stay within reach.
+    ImGui::BeginChild("##plate_list", ImVec2(0.f, -50.f * scale), false);
+    const auto row_text = [&](const std::string& text, const ImVec2& pos, float right, DesignSystem::ColorRole role) {
+        if (right <= pos.x) return;
+        ImGui::PushStyleColor(ImGuiCol_Text, color(role));
+        ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), pos,
+            ImVec2(right, pos.y + ImGui::GetTextLineHeight()), right, right, text.c_str(), nullptr, nullptr);
+        ImGui::PopStyleColor();
+    };
+    const auto draw_plate = [&](int index) {
+        auto* plate = plates.get_plate(index);
+        const auto* result = plate->get_slice_result();
+        const bool fresh = plate->is_slice_result_valid() && !plate->is_apply_result_invalid() && result && !result->moves.empty();
+        static const std::string no_printer;
+        const std::string* printer_source = &plate->print_setup().destination_name;
+        if (printer_source->empty()) {
+            const auto& config = plates.independent_setups() ? plate->print_setup().config : wxGetApp().preset_bundle->printers.get_edited_preset().config;
+            const auto* model = config.option<ConfigOptionString>("printer_model");
+            printer_source = model ? &model->value : &no_printer;
+        }
+        const std::string& printer = *printer_source;
+        // Rows are drawn every frame; format their text only when it changes.
+        if (index >= int(m_preview_plate_rows.size())) m_preview_plate_rows.resize(index + 1);
+        auto& row = m_preview_plate_rows[index];
+        const bool empty = plate->empty();
+        const float time = fresh && !empty ? result->print_statistics.modes[0].time : 0.f;
+        std::string plate_name = plate->get_plate_name();
+        if (!row.valid || row.plate_name != plate_name || row.empty != empty || row.fresh != fresh || row.time != time) {
+            row = {true, std::move(plate_name), empty, fresh, time};
+            row.name = std::to_string(index + 1) + " · " + (row.plate_name.empty() ? _u8L("Untitled") : row.plate_name);
+            row.status = empty ? _u8L("Empty plate") : fresh ? _u8L("Sliced") : _u8L("Needs slicing");
+            if (fresh && !empty) {
+                PreviewEstimate estimate;
+                estimate.add_time(time);
+                if (estimate.seconds)
+                    row.status += " · " + short_time(get_time_dhms(*estimate.seconds));
+            }
+        }
+        const std::string& name = row.name;
+        const std::string& status = row.status;
+        ImGui::PushID(index);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const ImVec2 row_size(ImGui::GetContentRegionAvail().x, 68.f * scale);
+        const bool selected = !m_preview_scope_selected && index == plates.get_curr_plate_index();
+        const bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(pos, pos + row_size);
+        auto* draw = ImGui::GetWindowDrawList();
+        if (selected || hovered)
+            draw->AddRectFilled(pos, pos + row_size, ImGui::GetColorU32(color(selected
+                ? DesignSystem::ColorRole::AccentSoft : DesignSystem::ColorRole::SurfaceHover)), 5.f * scale);
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.f, 0.f, 0.f, 0.f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.f, 0.f, 0.f, 0.f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.f, 0.f, 0.f, 0.f));
+        const bool clicked = ImGui::Selectable("##plate", selected, 0, row_size);
+        ImGui::PopStyleColor(3);
+        if (clicked && (!m_process || !m_process->running())) {
+            m_preview_scope_selected = false;
+            m_render_preview = true;
+            if (plate->empty()) {
+                // Selecting an empty plate must not manufacture a slice result.
+                wxWeakRef<wxGLCanvas> weak(m_canvas);
+                m_canvas->CallAfter([weak, index] {
+                    if (!weak || wxGetApp().is_closing()) return;
+                    auto* plater = wxGetApp().plater();
+                    if (plater && index < plater->get_partplate_list().get_plate_count()) {
+                        plater->select_plate(index);
+                        plater->reset_gcode_toolpaths();
+                        plater->reload_print();
+                    }
+                });
+            } else {
+                auto* event = new wxCommandEvent(EVT_GLTOOLBAR_SELECT_SLICED_PLATE);
+                event->SetInt(index);
+                event->SetExtraLong(1); // keep the camera when switching plates
+                wxQueueEvent(wxGetApp().plater(), event);
+            }
+            set_as_dirty(); request_extra_frame();
+        }
+        if (index < int(m_sel_plate_toolbar.m_items.size())) {
+            const auto* item = m_sel_plate_toolbar.m_items[index];
+            if (item->texture_id) draw->AddImage(item->texture_id, pos + ImVec2(5.f, 14.f) * scale,
+                pos + ImVec2(41.f, 50.f) * scale, {0.f, 1.f}, {1.f, 0.f});
+        }
+        const float text_left = pos.x + 48.f * scale;
+        const float right = pos.x + row_size.x - 20.f * scale;
+        row_text(name, {text_left, pos.y + 8.f * scale}, right,
+            selected ? DesignSystem::ColorRole::AccentInk : DesignSystem::ColorRole::Ink);
+        ImGui::SetWindowFontScale(0.85f);
+        row_text(printer, {text_left, pos.y + 29.f * scale}, right, DesignSystem::ColorRole::InkMuted);
+        row_text(status, {text_left, pos.y + 46.f * scale}, right,
+            fresh || plate->empty() ? DesignSystem::ColorRole::InkMuted : DesignSystem::ColorRole::Warning);
+        ImGui::SetWindowFontScale(1.f);
+        const ImVec2 status_pos(pos.x + row_size.x - 12.f * scale, pos.y + 25.f * scale);
+        if (plate->empty())
+            draw->AddLine(status_pos - ImVec2(3.f, 0.f) * scale, status_pos + ImVec2(3.f, 0.f) * scale,
+                ImGui::GetColorU32(color(DesignSystem::ColorRole::InkMuted)), 1.5f * scale);
+        else if (fresh)
+            ImGui::RenderCheckMark(draw, status_pos - ImVec2(4.f, 4.f) * scale,
+                ImGui::GetColorU32(color(DesignSystem::ColorRole::Success)), 8.f * scale);
+        else
+            draw->AddCircle(status_pos, 3.f * scale,
+                ImGui::GetColorU32(color(DesignSystem::ColorRole::Warning)), 12, 1.5f * scale);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s\n%s", name.c_str(), printer.c_str(), status.c_str());
+        ImGui::PopID();
+    };
+    const auto group = [&](const std::string& id, const std::string& title, int count, bool selectable) {
+        ImGui::PushID(id.c_str());
+        ImGui::Spacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 7.f) * scale);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float right = pos.x + ImGui::GetContentRegionAvail().x - 5.f * scale;
+        const bool selected = selectable && m_preview_scope_selected && m_preview_stage_id == id;
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+            ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+        if (selectable) flags |= ImGuiTreeNodeFlags_OpenOnArrow;
+        if (selected) flags |= ImGuiTreeNodeFlags_Selected;
+        const bool open = ImGui::TreeNodeEx("##group", flags);
+        if (selectable && ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+            m_preview_scope_selected = true;
+            m_preview_stage_id = id;
+            set_as_dirty(); request_extra_frame();
+        }
+        const std::string count_text = std::to_string(count);
+        const float count_width = ImGui::CalcTextSize(count_text.c_str()).x;
+        row_text(title, pos + ImVec2(23.f, 7.f) * scale, right - count_width - 10.f * scale,
+            selected ? DesignSystem::ColorRole::AccentInk : DesignSystem::ColorRole::InkMuted);
+        row_text(count_text, {right - count_width, pos.y + 7.f * scale}, right, DesignSystem::ColorRole::InkMuted);
+        ImGui::PopStyleVar();
+        ImGui::PopID();
+        return open;
+    };
+    for (const auto& stage : plates.stages()) {
+        const int count = int(std::count_if(plates.get_plate_list().begin(), plates.get_plate_list().end(),
+            [&](const PartPlate* plate) { return plate->stage_id() == stage.id; }));
+        if (!group(stage.id, stage.name, count, true)) continue;
+        const ImVec2 guide = ImGui::GetCursorScreenPos() + ImVec2(5.f * scale, 0.f);
+        ImGui::Indent(12.f * scale);
+        for (int i = 0; i < plates.get_plate_count(); ++i)
+            if (plates.get_plate(i)->stage_id() == stage.id) draw_plate(i);
+        ImGui::Unindent(12.f * scale);
+        ImGui::GetWindowDrawList()->AddLine(guide, {guide.x, ImGui::GetCursorScreenPos().y - 3.f * scale},
+            ImGui::GetColorU32(color(DesignSystem::ColorRole::Line)), scale);
+        if (count == 0) ImGui::TextColored(color(DesignSystem::ColorRole::InkMuted), "%s", _u8L("No plates in this stage").c_str());
+    }
+    const int ungrouped = int(std::count_if(plates.get_plate_list().begin(), plates.get_plate_list().end(),
+        [](const PartPlate* plate) { return plate->stage_id().empty(); }));
+    if (ungrouped && group("##outside", _u8L("Outside stages"), ungrouped, false))
+        for (int i = 0; i < plates.get_plate_count(); ++i)
+            if (plates.get_plate(i)->stage_id().empty()) draw_plate(i);
+    ImGui::EndChild();
+    ImGui::Separator();
+    ImGui::Spacing();
+    if (navigation_button(_u8L("Edit in Prepare"), false, false)) {
+        wxWeakRef<wxGLCanvas> weak(m_canvas);
+        m_canvas->CallAfter([weak] {
+            if (!weak || wxGetApp().is_closing()) return;
+            wxGetApp().mainframe->select_tab(TAB_ID_PREPARE);
+        });
+    }
+    imgui.end();
+    m_sel_plate_toolbar.m_all_plates_stats_item->selected = false;
+    m_render_preview = !m_preview_scope_selected;
+    if (!m_preview_scope_selected && !m_gcode_viewer.has_data()) {
+        ImGui::SetNextWindowPos({layout.center_right, 0.f}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({layout.inspector_width, float(size.get_height())}, ImGuiCond_Always);
+        imgui.begin(std::string("Slice estimate###PreviewEmpty"), ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+        auto* plate = plates.get_curr_plate();
+        imgui.bold_text(format(_u8L("Plate %1%"), plates.get_curr_plate_index() + 1));
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        const bool slicing = m_process && m_process->running();
+        imgui.bold_text(plate->empty() ? _u8L("Empty plate") : slicing ? _u8L("Slicing") : _u8L("Needs slicing"));
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(ImGui::GetWindowContentRegionMax().x);
+        imgui.text(plate->empty() ? _u8L("Add a model in Prepare to slice this plate.") :
+            slicing ? _u8L("Your preview will appear when slicing finishes.") :
+            _u8L("Slice this plate to see its preview and estimate."));
+        ImGui::PopTextWrapPos();
+        imgui.end();
+    }
+    if (m_preview_scope_selected) {
+        std::string title = _u8L("All plates");
+        for (const auto& stage : plates.stages()) if (stage.id == m_preview_stage_id) title = stage.name;
+        const float width = layout.inspector_width;
+        const float overview_width = layout.center_width();
+        if (overview_width > 120.f * scale) {
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, color(DesignSystem::ColorRole::Viewport));
+            ImGui::SetNextWindowPos({layout.center_left, 0.f}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({overview_width, std::max(80.f * scale, float(size.get_height()))}, ImGuiCond_Always);
+            imgui.begin(std::string("Stage plates###PreviewStageOverview"), ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+            ImGui::SetWindowFontScale(1.3f);
+            imgui.bold_text(title);
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::Spacing();
+            ImGui::PushTextWrapPos(ImGui::GetWindowContentRegionMax().x);
+            imgui.text(_u8L("Choose a plate to inspect its slice."));
+            ImGui::PopTextWrapPos();
+            ImGui::Spacing();
+            bool empty = true;
+            for (int i = 0; i < plates.get_plate_count(); ++i) {
+                if (!m_preview_stage_id.empty() && plates.get_plate(i)->stage_id() != m_preview_stage_id) continue;
+                draw_plate(i);
+                empty = false;
+            }
+            if (empty) imgui.text(_u8L("No plates in this stage"));
+            imgui.end();
+            ImGui::PopStyleColor();
+        }
+        ImGui::SetNextWindowPos({layout.center_right, 0.f}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({width, float(size.get_height())}, ImGuiCond_Always);
+        imgui.begin(std::string("Stage estimate###PreviewScope"), ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+        imgui.bold_text(title);
+        size_t count = 0, sliced = 0;
+        PreviewEstimate estimate;
+        for (int i = 0; i < plates.get_plate_count(); ++i) {
+            auto* plate = plates.get_plate(i);
+            if (!m_preview_stage_id.empty() && plate->stage_id() != m_preview_stage_id) continue;
+            ++count;
+            const auto* result = plate->get_slice_result();
+            if (plate->empty() || !plate->is_slice_result_valid() || plate->is_apply_result_invalid() || !result || result->moves.empty()) continue;
+            ++sliced;
+            estimate.add_time(result->print_statistics.modes[0].time);
+            for (const auto& [slot, volume] : result->print_statistics.total_volumes_per_extruder) {
+                const double density = slot < result->filament_densities.size() ? result->filament_densities[slot] : 0.0;
+                const std::optional<double> price = slot < result->filament_costs.size()
+                    ? std::optional<double>(result->filament_costs[slot]) : std::nullopt;
+                estimate.add_filament(volume, density, price);
+            }
+        }
+        auto& summary = m_preview_scope_summary;
+        if (!summary.valid || summary.count != count || summary.sliced != sliced) {
+            summary.progress = format(_u8L("%1% of %2% plates sliced"), sliced, count);
+            summary.count = count;
+            summary.sliced = sliced;
+        }
+        if (!summary.valid || summary.seconds != estimate.seconds) {
+            summary.time = estimate.seconds ? short_time(get_time_dhms(*estimate.seconds)) : _u8L("Unavailable");
+            summary.seconds = estimate.seconds;
+        }
+        summary.valid = true;
+        ImGui::Spacing();
+        imgui.text(summary.progress);
+        if (sliced) {
+            ImGui::Spacing();
+            ImGui::SetWindowFontScale(1.4f);
+            imgui.text(summary.time);
+            ImGui::SetWindowFontScale(1.f);
+            ImGui::TextColored(color(DesignSystem::ColorRole::InkMuted), "%s", _u8L("Sum of plate times").c_str());
+            ImGui::Spacing();
+            imgui.text(_u8L("Filament")); ImGui::SameLine(160.f * scale);
+            if (estimate.grams) {
+                const bool imperial = wxGetApp().app_config->get_bool("use_inches");
+                ImGui::Text(imperial ? "%.2f oz" : "%.2f g", imperial ? *estimate.grams / GizmoObjectManipulation::oz_to_g : *estimate.grams);
+            } else imgui.text(_u8L("Unavailable"));
+            imgui.text(_u8L("Estimated cost")); ImGui::SameLine(160.f * scale);
+            if (estimate.cost) ImGui::Text("%.2f", *estimate.cost); else imgui.text(_u8L("Unavailable"));
+        }
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width - 32.f * scale);
+        imgui.text(_u8L("Select a plate to inspect its slice and G-code."));
+        imgui.text(_u8L("Plate times are added together. They do not predict when separate printers will finish."));
+        if (sliced < count) imgui.text(_u8L("Unsliced plates are excluded from the estimate."));
+        ImGui::PopTextWrapPos();
+        imgui.end();
+    }
+    m_render_preview = !m_preview_scope_selected;
+    ImGui::PopStyleVar(5);
+    ImGui::PopStyleColor(12);
+}
+
 void GLCanvas3D::_render_imgui_select_plate_toolbar()
 {
     if (!m_sel_plate_toolbar.is_enabled()) {
@@ -10499,6 +11929,11 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
     }
 
     _update_imgui_select_plate_toolbar();
+
+    if (m_canvas_type == CanvasPreview) {
+        _render_preview_navigation();
+        return;
+    }
 
     IMToolbarItem* all_plates_stats_item = m_sel_plate_toolbar.m_all_plates_stats_item;
 
@@ -10616,24 +12051,35 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(4.0f, 4.0f) * f_scale);
 
     int item_count           = m_sel_plate_toolbar.m_items.size() + (m_sel_plate_toolbar.show_stats_item ? 1 : 0);
-    float window_height_calc = (item_count * (button_height + (margin_size + button_margin) * 2.0f) + (item_count - 1) * ImGui::GetStyle().ItemSpacing.y + ImGui::GetStyle().WindowPadding.y * 2.0f);
+    float window_height_calc = std::max(0, item_count - 1) * ImGui::GetStyle().ItemSpacing.y + ImGui::GetStyle().WindowPadding.y * 2.0f;
+    if (m_sel_plate_toolbar.show_stats_item)
+        window_height_calc += button_height + (margin_size + button_margin) * 2.0f;
+    for (int i = 0; i < int(m_sel_plate_toolbar.m_items.size()); ++i)
+        window_height_calc += (plate_list.get_plate(i)->empty() ? 44.0f * f_scale : button_height) + (margin_size + button_margin) * 2.0f;
+    const bool stage_tools = m_canvas_type == CanvasView3D && !m_design_canvas;
+    if (stage_tools) window_height_calc += 36.f * f_scale;
     bool  show_scroll        = m_sel_plate_toolbar.is_display_scrollbar && (window_height_calc > window_height_max);
     float scrollbar_size     = 14.0f * f_scale;
     float window_height      = std::min(window_height_calc, window_height_max);
     float window_width       = button_width + (margin_size + button_margin + ImGui::GetStyle().WindowPadding.x) * 2 + (show_scroll ? scrollbar_size : 0);
 
-    ImVec4 window_bg     = m_is_dark ? ImVec4(.13f, .13f, .15f, .5f) : ImVec4(1.f, 1.f, 1.f, .7f);
-    ImVec4 button_active = ImGuiWrapper::COL_ORCA; // ORCA: Use orca color for selected sliced plate border
-    ImVec4 button_hover  = ImVec4(0.67f, 0.67f, 0.67, m_is_dark ? .6f : 1.0f);
-    ImVec4 orca_active   = m_is_dark ? ImGuiWrapper::COL_ORCA_DARK       : ImGuiWrapper::COL_ORCA;
-    ImVec4 orca_hover    = m_is_dark ? ImGuiWrapper::COL_ORCA_HOVER_DARK : ImGuiWrapper::COL_ORCA_HOVER;
-    ImVec4 scroll_col    = ImVec4(0.77f, 0.77f, 0.77f, m_is_dark ? .6f : 1.0f);
-    ImU32  plate_bg      = m_is_dark ? IM_COL32(255, 255, 255, 10) : IM_COL32(0, 0, 0, 10);
-    ImU32  plate_dim     = m_is_dark ? IM_COL32(30, 30, 30, 100) : IM_COL32(0, 0, 0, 50);
-    float  button_radius = 1.0f * f_scale;
-    //ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 1.0f));
-    //use white text as the background switch to black
-    ImGui::PushStyleColor(ImGuiCol_Text, m_is_dark ? ImVec4(.9f, .9f, .9f, 1) : ImVec4(.3f, .3f, .3f, 1)); // ORCA Plate number text > Add support for dark mode
+    const auto theme = [this](DesignSystem::ColorRole role) {
+        return ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(role, m_is_dark));
+    };
+    const ImVec4 window_bg = theme(DesignSystem::ColorRole::Surface);
+    const ImVec4 button_active = theme(DesignSystem::ColorRole::Accent);
+    const ImVec4 button_hover = theme(DesignSystem::ColorRole::SurfaceHover);
+    const ImVec4 orca_active = theme(DesignSystem::ColorRole::Accent);
+    const ImVec4 orca_hover = theme(DesignSystem::ColorRole::PrimaryHover);
+    const ImVec4 scroll_col = theme(DesignSystem::ColorRole::InkMuted);
+    ImVec4 plate_overlay = theme(DesignSystem::ColorRole::SurfaceHover);
+    plate_overlay.w = 0.18f;
+    const ImU32 plate_bg = ImGui::GetColorU32(plate_overlay);
+    plate_overlay = theme(DesignSystem::ColorRole::Surface);
+    plate_overlay.w = 0.72f;
+    const ImU32 plate_dim = ImGui::GetColorU32(plate_overlay);
+    const float button_radius = 6.0f * f_scale;
+    ImGui::PushStyleColor(ImGuiCol_Text, theme(DesignSystem::ColorRole::Ink));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, window_bg);
     ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0.f, 0.f, 0.f, 0.f)); // ORCA using background color with opacity creates a second color. This prevents secondary color
     ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, scroll_col);
@@ -10656,6 +12102,13 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
         imgui.begin(_L("Select Plate"), ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse);
     ImGui::SetWindowFontScale(1.2f);
 
+    if (stage_tools) {
+        ImGui::SetWindowFontScale(0.9f);
+        if (ImGui::Button(_u8L("New stage").c_str(), ImVec2(button_width + 2.f * margin_size, 30.f * f_scale)))
+            queue_stage_action(m_canvas, [](Plater& plater) { plater.create_workspace_stage(); });
+        ImGui::SetWindowFontScale(1.2f);
+    }
+
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f * f_scale);
 
     ImVec2 size = ImVec2(button_width, button_height); // Size of the image we want to make visible
@@ -10672,7 +12125,7 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
         bool is_stats_hovered = ImGui::IsMouseHoveringRect(stats_hover_rect, stats_hover_rect + size);
 
         if (all_plates_stats_item->selected) {
-            auto border_color = is_stats_hovered ? ImGuiWrapper::COL_ORCA_HOVER : ImGuiWrapper::COL_ORCA;
+            auto border_color = is_stats_hovered ? orca_hover : orca_active;
             ImGui::PushStyleColor(ImGuiCol_Button       , border_color);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, border_color);
             ImGui::PushStyleColor(ImGuiCol_ButtonActive , border_color);
@@ -10744,7 +12197,7 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
             text_bottom = std::to_string(sliced_plates_cnt) + " / " + std::to_string(total_plates_cnt);
             ImVec2 bar_fg_end = ImVec2(bar_bg_bgn.x + bar_total_perc_pos + bar_current_perc_pos, bar_bg_end.y);
             ImGui::GetWindowDrawList()->AddRectFilled(bar_bg_bgn, bar_bg_end, IM_COL32(128, 128, 128, 255), bar_size.y); // BAR BACKGROUND
-            ImGui::GetWindowDrawList()->AddRectFilled(bar_bg_bgn, bar_fg_end, IM_COL32(0, 150, 136, 255),   bar_size.y); // BAR PROGRESS
+            ImGui::GetWindowDrawList()->AddRectFilled(bar_bg_bgn, bar_fg_end, ImGui::GetColorU32(orca_active),   bar_size.y); // BAR PROGRESS
         }
         else if (all_plates_stats_item->slice_state == IMToolbarItem::SliceState::SLICE_FAILED) {
             text_top    = _u8L("Failed");
@@ -10775,6 +12228,7 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
         auto current_plate = plate_list.get_plate(i);
         bool can_slice     = current_plate->can_slice();
         bool is_empty      = current_plate->empty();
+        const ImVec2 size(button_width, is_empty ? 44.0f * f_scale : button_height);
 
         // draw image
         ImVec2 button_start_pos = ImGui::GetCursorScreenPos();
@@ -10800,7 +12254,7 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
         bool is_plate_hovered = ImGui::IsMouseHoveringRect(hover_rect, hover_rect + button_size);
 
         if (item->selected)
-            ImGui::PushStyleColor(ImGuiCol_Border, is_plate_hovered ? ImGuiWrapper::COL_ORCA_HOVER : ImGuiWrapper::COL_ORCA);
+            ImGui::PushStyleColor(ImGuiCol_Border, is_plate_hovered ? orca_hover : orca_active);
         else
             ImGui::PushStyleColor(ImGuiCol_Border, is_plate_hovered ? button_hover : ImVec4(.0f, .0f, .0f, .0f));
 
@@ -10846,7 +12300,6 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
         ImGui::PopStyleVar();
 
         ImVec2 start_pos = ImVec2(button_start_pos.x + frame_padding + margin.x, button_start_pos.y + frame_padding + margin.y);
-        ImVec2 size      = ImVec2(button_width, button_height);
         ImVec2 end_pos   = ImVec2(start_pos.x + size.x, start_pos.y + size.y);
         // ORCA show additional information depends on state
         auto draw_info_btn = [end_pos, f_scale, margin](std::string str, ImVec4 bg_color, ImVec4 fg_color){
@@ -10863,7 +12316,17 @@ void GLCanvas3D::_render_imgui_select_plate_toolbar()
         };
 
         if (is_empty){
-            ImGui::GetWindowDrawList()->AddRectFilled(start_pos, end_pos, plate_dim, button_radius);
+            ImGui::GetWindowDrawList()->AddRectFilled(start_pos, end_pos,
+                ImGui::GetColorU32(theme(DesignSystem::ColorRole::SurfaceHover)), button_radius);
+            const std::string empty_text = _u8L("Empty plate");
+            ImGui::SetWindowFontScale(0.85f);
+            const float text_width = ImGui::CalcTextSize(empty_text.c_str()).x;
+            if (text_width > size.x - 12.0f * f_scale)
+                ImGui::SetWindowFontScale(0.85f * (size.x - 12.0f * f_scale) / text_width);
+            const ImVec2 text_size = ImGui::CalcTextSize(empty_text.c_str());
+            ImGui::GetWindowDrawList()->AddText(start_pos + ImVec2(6.0f * f_scale, size.y - text_size.y - 4.0f * f_scale),
+                ImGui::GetColorU32(theme(DesignSystem::ColorRole::InkMuted)), empty_text.c_str());
+            ImGui::SetWindowFontScale(1.2f);
         } else if (can_slice && item->slice_state == IMToolbarItem::SliceState::UNSLICED) {
             ImGui::GetWindowDrawList()->AddRectFilled(start_pos, end_pos, plate_dim, button_radius);
             // ORCA add slice button to guide user
@@ -11037,9 +12500,17 @@ void GLCanvas3D::_render_canvas_toolbar()
         m_canvas_toolbar_pos[0]        + margin.x,
         get_canvas_size().get_height() - margin.y
     };
+    if (m_canvas_type == CanvasPreview) {
+        const auto size = get_canvas_size();
+        const auto layout = preview_layout(float(size.get_width()), float(size.get_height()), get_scale(),
+            is_select_plate_toolbar_enabled(), m_gcode_viewer.get_gcode_height(size.get_height()));
+        pos[0] += int(layout.center_left);
+        pos[1] = int(margin.y);
+    }
     bool          zoom_btn = wxGetApp().show_canvas_zoom_button();
 
-    imgui.set_next_window_pos(pos[0], pos[1], ImGuiCond_Always, 0, 1); // pivot bottom-left
+    const bool top_left = m_canvas_type == CanvasPreview;
+    imgui.set_next_window_pos(pos[0], pos[1], ImGuiCond_Always, 0, top_left ? 0.f : 1.f);
 
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0    );
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding   , {0,0});
@@ -11049,7 +12520,7 @@ void GLCanvas3D::_render_canvas_toolbar()
     imgui.begin(_L("Canvas Toolbar"), ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove |
                                            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollWithMouse);//
 
-    // Section view, on top so its panel opens above the toolbar.
+    // Preview opens its panel beside the controls; other views keep it above them.
     const bool  section_view = is_section_view_active();
     ImTextureID s_normal_id  = m_gizmos.get_icon_texture_id(section_view ?
         (m_is_dark ? GLGizmosManager::MENU_ICON_NAME::IC_CANVAS_SECTION_ACTIVE_DARK : GLGizmosManager::MENU_ICON_NAME::IC_CANVAS_SECTION_ACTIVE) :
@@ -11069,7 +12540,9 @@ void GLCanvas3D::_render_canvas_toolbar()
             align_section_view_to_camera();
         imgui.tooltip(_L("Section view"), ImGui::GetFontSize() * 20.0f);
     }
-    const ImVec2 section_panel_pos = ImGui::GetItemRectMin() - ImVec2(0.f, spacing.y);
+    const ImVec2 section_panel_pos = top_left ?
+        ImVec2(ImGui::GetItemRectMax().x + spacing.x, ImGui::GetItemRectMin().y) :
+        ImGui::GetItemRectMin() - ImVec2(0.f, spacing.y);
 
     ImGui::Dummy({ 0, spacing.y});
 
@@ -11078,7 +12551,10 @@ void GLCanvas3D::_render_canvas_toolbar()
 
     if (ImGui::ImageButton3(m_normal_id, m_hover_id, btn_size)) {
         if(!ImGui::IsPopupOpen("CanvasToolbarMenu")){
-            ImGui::SetNextWindowPos(ImVec2(pos[0] + padding.x, pos[1] - padding.y - (zoom_btn ? (btn_size.y + spacing.y) : 0.f)), ImGuiCond_Always, ImVec2(0, 1)); // pivot bottom-left
+            if (top_left)
+                ImGui::SetNextWindowPos({ImGui::GetItemRectMax().x + spacing.x, ImGui::GetItemRectMin().y}, ImGuiCond_Always);
+            else
+                ImGui::SetNextWindowPos(ImVec2(pos[0] + padding.x, pos[1] - padding.y - (zoom_btn ? (btn_size.y + spacing.y) : 0.f)), ImGuiCond_Always, ImVec2(0, 1));
             ImGui::OpenPopup("CanvasToolbarMenu");
         }
     }
@@ -11290,7 +12766,8 @@ void GLCanvas3D::_render_section_view_panel(const ImVec2& bottom_left)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f, 8.f) * sc);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.f, 4.f) * sc);
 
-    ImGui::SetNextWindowPos(bottom_left, ImGuiCond_Always, ImVec2(0.f, 1.f));
+    const bool top_left = m_canvas_type == CanvasPreview;
+    ImGui::SetNextWindowPos(bottom_left, ImGuiCond_Always, ImVec2(0.f, top_left ? 0.f : 1.f));
     imgui.begin(std::string("##CanvasSectionView"), ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
                                                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
 
@@ -11301,10 +12778,11 @@ void GLCanvas3D::_render_section_view_panel(const ImVec2& bottom_left)
         { _L("Right click on icon"),  _L("Toggle section view") },
         { _L("Middle click on icon"), _L("Set viewing angle") },
     };
-    // render_tooltip_button() puts the tips below y plus the panel height; they go above the panel.
+    // Keep tips below a top-anchored panel and above a bottom-anchored one.
     const ImGuiStyle& style  = ImGui::GetStyle();
     const float       tips_h = tips.size() * (ImGui::GetTextLineHeight() + style.ItemSpacing.y) - style.ItemSpacing.y + 2.f * style.WindowPadding.y;
     GLGizmoUtils::render_tooltip_button(&imgui, *this, tips, ImGui::GetWindowPos().x,
+        top_left ? ImGui::GetWindowPos().y + style.ItemSpacing.y :
         ImGui::GetWindowPos().y - style.ItemSpacing.y - tips_h - ImGui::GetContentRegionMax().y - ImGui::GetFrameHeight());
 
     ImGui::SameLine();
@@ -11376,7 +12854,8 @@ void GLCanvas3D::_render_separator_toolbar_left() const
 
 void GLCanvas3D::_render_collapse_toolbar() const
 {
-    if (!m_collapse_toolbar_enabled)
+    if (!m_collapse_toolbar_enabled ||
+        (m_canvas_type == CanvasPreview && wxGetApp().plater()->printer_technology() == ptFFF))
         return;
 
     const CollapseSide side = collapse_side();

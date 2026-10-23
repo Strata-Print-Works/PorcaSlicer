@@ -2,6 +2,7 @@
 
 #include "3DBed.hpp"
 #include "ViewportLighting.hpp"
+#include "WorkspaceStyle.hpp"
 #include "PartPlate.hpp"
 
 #include "libslic3r/Polygon.hpp"
@@ -34,7 +35,9 @@
 #include "slic3r/GUI/GLShader.hpp"
 #include "slic3r/GUI/3DScene.hpp"
 #include "libslic3r/Geometry.hpp"
+#include <map>
 #include <math.h>
+#include <memory>
 #include <tuple>
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/Config.hpp"
@@ -52,6 +55,26 @@ static const float GROUND_Z = -0.04f;
 
 namespace Slic3r {
 namespace GUI {
+
+namespace {
+// Plates shown together share one physical bed mesh per model file. Parsing the
+// STL is the slow part, so the first display of a printer loads it once rather
+// than once per bed, and placement changes never reload it. An entry lives only
+// while a bed uses it, so its GPU buffers are released where a bed's own were.
+std::shared_ptr<GLModel> shared_bed_mesh(const std::string& filename)
+{
+    static std::map<std::string, std::weak_ptr<GLModel>> meshes;
+    auto& entry = meshes[filename];
+    if (auto mesh = entry.lock()) return mesh;
+    auto mesh = std::make_shared<GLModel>();
+    if (!mesh->init_from_file(filename)) {
+        meshes.erase(filename);
+        return nullptr;
+    }
+    entry = mesh;
+    return mesh;
+}
+} // namespace
 
 bool init_model_from_poly(GLModel &model, const ExPolygon &poly, float z)
 {
@@ -393,10 +416,15 @@ void Bed3D::on_change_color_mode(bool is_dark)
 
 bool Bed3D::render_model_only(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow)
 {
-    // Fade inactive beds into the shared workspace while retaining their physical outline.
-    ColorRGBA color = PartPlate::UNSELECT_COLOR;
-    color.a(0.45f);
-    m_model.set_color(color);
+    m_workspace_sheet = true;
+    if (m_model_filename.empty()) return false;
+    if (!m_shared_model || m_shared_model->get_filename() != m_model_filename) {
+        m_shared_model = shared_bed_mesh(m_model_filename);
+        if (m_shared_model) update_model_offset();
+    }
+    if (!m_shared_model) return false;
+    // The mesh is shared with other beds: set its color for this draw only.
+    m_shared_model->set_color(WorkspaceStyle::bed_color(m_is_dark, false));
     const GLboolean blending = ::glIsEnabled(GL_BLEND);
     GLint src_rgb, dst_rgb, src_alpha, dst_alpha;
     glsafe(::glGetIntegerv(GL_BLEND_SRC_RGB, &src_rgb));
@@ -408,11 +436,11 @@ bool Bed3D::render_model_only(const Transform3d& view_matrix, const Transform3d&
         glsafe(::glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
     else
         glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
-    render_model(view_matrix, projection_matrix, shadow);
+    render_mesh(*m_shared_model, view_matrix, projection_matrix, shadow);
     glsafe(::glBlendFuncSeparate(src_rgb, dst_rgb, src_alpha, dst_alpha));
     if (!blending)
         glsafe(::glDisable(GL_BLEND));
-    return !m_model_filename.empty() && m_model.get_filename() == m_model_filename;
+    return true;
 }
 
 void Bed3D::render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes, const ShadowRenderContext* shadow)
@@ -430,7 +458,10 @@ void Bed3D::render_internal(GLCanvas3D& canvas, const Transform3d& view_matrix, 
 
     glsafe(::glEnable(GL_DEPTH_TEST));
 
-    m_model.set_color(m_is_dark ? DEFAULT_MODEL_COLOR_DARK : DEFAULT_MODEL_COLOR);
+    m_workspace_sheet = !canvas.is_design_canvas() &&
+        (canvas.get_canvas_type() == GLCanvas3D::CanvasView3D || canvas.get_canvas_type() == GLCanvas3D::CanvasPreview);
+    m_model.set_color(m_workspace_sheet ? WorkspaceStyle::bed_color(m_is_dark, true) :
+        (m_is_dark ? DEFAULT_MODEL_COLOR_DARK : DEFAULT_MODEL_COLOR));
 
     switch (m_type)
     {
@@ -736,20 +767,30 @@ void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& proj
         //register_raycasters_for_picking(m_model.model.get_geometry(), Geometry::assemble_transform(m_model_offset));
     }
 
-    if (!m_model.get_filename().empty()) {
-        const Camera& camera = wxGetApp().plater()->get_camera();
-        const Transform3d& render_view = shadow != nullptr ? view_matrix : camera.get_view_matrix();
-        const Transform3d& render_projection = shadow != nullptr ? projection_matrix : camera.get_projection_matrix();
-        GLShaderProgram* shader = wxGetApp().get_shader(shadow != nullptr ? "prepare_bed_receiver" : "hotbed");
-        if (shader != nullptr) {
-            shader->start_using();
-            shader->set_uniform("emission_factor", 0.0f);
-            if (shadow != nullptr)
-                shadow->set_uniforms(*shader);
-            Transform3d model_matrix = Geometry::assemble_transform(m_model_offset);
-            shader->set_uniform("volume_world_matrix",  model_matrix);
-            shader->set_uniform("view_model_matrix", render_view * model_matrix);
-            shader->set_uniform("projection_matrix", render_projection);
+    if (!m_model.get_filename().empty())
+        render_mesh(m_model, view_matrix, projection_matrix, shadow);
+}
+
+void Bed3D::render_mesh(GLModel& mesh, const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow)
+{
+    const Camera& camera = wxGetApp().plater()->get_camera();
+    const Transform3d& render_view = shadow != nullptr ? view_matrix : camera.get_view_matrix();
+    const Transform3d& render_projection = shadow != nullptr ? projection_matrix : camera.get_projection_matrix();
+    GLShaderProgram* shader = wxGetApp().get_shader(m_workspace_sheet ? (shadow != nullptr ? "prepare_flat_receiver" : "flat") :
+        (shadow != nullptr ? "prepare_bed_receiver" : "hotbed"));
+    if (shader != nullptr) {
+        shader->start_using();
+        if (!m_workspace_sheet) shader->set_uniform("emission_factor", 0.0f);
+        if (shadow != nullptr)
+            shadow->set_uniforms(*shader);
+        Transform3d model_matrix = m_workspace_sheet ? WorkspaceStyle::sheet_transform(m_model_offset, mesh.get_bounding_box()) :
+            Geometry::assemble_transform(m_model_offset);
+        if (m_workspace_sheet && shadow != nullptr)
+            shader->set_uniform("shadow_world_matrix", model_matrix);
+        if (!m_workspace_sheet) shader->set_uniform("volume_world_matrix", model_matrix);
+        shader->set_uniform("view_model_matrix", render_view * model_matrix);
+        shader->set_uniform("projection_matrix", render_projection);
+        if (!m_workspace_sheet) {
             const Matrix3d view_normal_matrix = render_view.matrix().block(0, 0, 3, 3) * model_matrix.matrix().block(0, 0, 3, 3).inverse().transpose();
             shader->set_uniform("view_normal_matrix", view_normal_matrix);
             if (m_build_volume.get_extruder_area_count() > 0) {
@@ -765,9 +806,9 @@ void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& proj
                 //use -1 ad a invalid type
                 shader->set_uniform("print_volume.type", -1);
             }
-            m_model.render();
-            shader->stop_using();
         }
+        mesh.render();
+        shader->stop_using();
     }
 }
 
@@ -867,6 +908,7 @@ void Bed3D::render_default(bool bottom, const Transform3d& view_matrix, const Tr
             glsafe(::glDepthMask(GL_FALSE));
             ColorRGBA color = m_is_dark ? DEFAULT_MODEL_COLOR_DARK : DEFAULT_MODEL_COLOR;   // ORCA add dark mode support
             color = ColorRGBA(color[0] * 0.8f, color[1] * 0.8f,color[2] * 0.8f, color[3]);  // ORCA shift color a darker tone to fix difference between flat / gouraud_light shader
+            if (m_workspace_sheet) color = WorkspaceStyle::bed_color(m_is_dark, true);
             m_triangles.set_color(color);
             m_triangles.render();
             glsafe(::glDepthMask(GL_TRUE));

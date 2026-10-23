@@ -1,3 +1,4 @@
+#include "Widgets/StateColor.hpp"
 #include "libslic3r/calib.hpp"
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include <wx/dcclient.h>
@@ -234,7 +235,7 @@ SelectMObjectPopup::SelectMObjectPopup(wxWindow* parent)
 
 
     m_scrolledWindow = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, SELECT_MACHINE_LIST_SIZE, wxHSCROLL | wxVSCROLL);
-    m_scrolledWindow->SetBackgroundColour(*wxWHITE);
+    m_scrolledWindow->SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
     m_scrolledWindow->SetMinSize(SELECT_MACHINE_LIST_SIZE);
     m_scrolledWindow->SetScrollRate(0, SELECT_MACHINE_ITEM_SIZE.y);
     auto m_sizxer_scrolledWindow = new wxBoxSizer(wxVERTICAL);
@@ -481,7 +482,7 @@ CalibrationPanel::CalibrationPanel(wxWindow* parent, wxWindowID id, const wxPoin
     : wxPanel(parent, id, pos, size, style),
     m_mobjectlist_popup(SelectMObjectPopup(this))
 {
-    SetBackgroundColour(*wxWHITE);
+    SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
 
     init_tabpanel();
 
@@ -505,7 +506,7 @@ void CalibrationPanel::init_tabpanel() {
 
     m_tabpanel = new Tabbook(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, sizer_side_tools, wxNB_LEFT | wxTAB_TRAVERSAL | wxNB_NOPAGETHEME);
     m_side_tools->set_table_panel(m_tabpanel);
-    m_tabpanel->SetBackgroundColour(wxColour("#FEFFFF")); // ORCA match sidebar background color
+    m_tabpanel->SetBackgroundColour(StateColor::darkModeColorFor(wxColour("#FEFFFF"))); // ORCA match sidebar background color
 
     m_cali_panels[0] = new PressureAdvanceWizard(m_tabpanel);
     m_cali_panels[1] = new FlowRateWizard(m_tabpanel);
@@ -723,6 +724,8 @@ void CalibrationPanel::msw_rescale()
 
 void CalibrationPanel::on_sys_color_changed()
 {
+    SetBackgroundColour(StateColor::darkModeColorFor(*wxWHITE));
+    m_tabpanel->SetBackgroundColour(StateColor::darkModeColorFor(wxColour("#FEFFFF")));
     for (int i = 0; i < (int)CALI_MODE_COUNT; i++) {
         m_cali_panels[i]->on_sys_color_changed();
     }

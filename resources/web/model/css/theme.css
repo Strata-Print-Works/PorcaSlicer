@@ -1,0 +1,86 @@
+/* Project information keeps its existing content and navigation, using the app
+   palette selected by globalapi.js. The generated light/dark tokens are shared
+   with Home; the OS browser preference does not choose this page's theme. */
+@font-face {
+  font-family: Figtree;
+  src: url('../../../design-system/fonts/Figtree-Variable.woff2') format('woff2');
+  font-weight: 300 900;
+  font-display: swap;
+}
+
+:root {
+  --main-color: var(--porca-primary);
+  --main-color-hover: var(--porca-primary-hover);
+  --main-color-fixed: var(--porca-accent-ink);
+  --bg-color: var(--porca-surface);
+  --bg-color-secondary: var(--porca-surface-raised);
+  --bg-color-alt: var(--porca-field);
+  --fg-color-text: var(--porca-ink);
+  --fg-color-label: var(--porca-ink-muted);
+  --fg-color-disabled: var(--porca-ink-disabled);
+  --focus-bg-item: var(--porca-accent-soft);
+  --focus-bg-box: var(--porca-surface-hover);
+  --border-color: var(--porca-line-control);
+  --button-fg-light: var(--porca-on-primary);
+  --button-fg-text: var(--porca-ink);
+  --button-bg-normal: var(--porca-surface-raised);
+  --button-bg-hover: var(--porca-surface-hover);
+}
+
+* { box-sizing: border-box; font-family: Figtree, system-ui, sans-serif; }
+html, body { background: var(--porca-surface); color: var(--porca-ink); }
+body { font-size: 14px; line-height: 1.5; }
+a { color: var(--porca-accent-ink); text-underline-offset: 3px; }
+::selection { background: var(--porca-accent); color: var(--porca-on-accent); }
+button { font: inherit; cursor: pointer; }
+button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--porca-focus);
+  outline-offset: 3px;
+}
+.Text_Title { color: var(--porca-ink); font-size: 16px; font-weight: 650; }
+.Text_Value { color: var(--porca-ink-muted); }
+.Text_TitleBoard { border-color: var(--porca-line); }
+.Block_BKGA, .InfoBlock { background: var(--porca-surface); }
+.Block_BKGB, .File_Board { background: var(--porca-field); }
+.FileItem { background: var(--porca-surface-raised); border-radius: 6px; }
+.FileMenu { border-radius: 4px; }
+.FileMenu:hover { background: var(--porca-surface-hover); }
+.LeftProcessBar { border-color: var(--porca-line); color: var(--porca-ink-muted); }
+.LeftProcessBar:hover { background: var(--porca-surface-hover); color: var(--porca-ink); }
+.LeftTipIcon { filter: grayscale(1); }
+.ProcessBarSelected { border-color: var(--porca-accent); background: var(--porca-accent-soft); }
+.ProcessBarSelected span { color: var(--porca-accent-ink); }
+.swiper { --swiper-theme-color: var(--porca-accent-ink); --swiper-navigation-color: var(--porca-accent-ink); }
+.ZScrol { scrollbar-width: thin; scrollbar-color: var(--porca-ink-disabled) var(--porca-surface); }
+.ZScrol::-webkit-scrollbar-thumb { background: var(--porca-ink-disabled); box-shadow: none; }
+.ZScrol::-webkit-scrollbar-track { background: var(--porca-surface); box-shadow: none; }
+
+#EmptyArea { gap: 14px; padding: 32px; text-align: center; }
+#EmptyArea img { width: 88px; height: auto; filter: grayscale(1); opacity: .65; }
+#EmptyArea .Text_Title { font-size: 20px; }
+#AddModelInfoBtn {
+  margin: 8px 0 0;
+  padding: 9px 16px;
+  height: auto;
+  border-radius: 6px;
+  background: var(--porca-primary);
+  color: var(--porca-on-primary);
+  font-weight: 600;
+}
+#AddModelInfoBtn:hover { background: var(--porca-primary-hover); }
+#AddModelInfoBtn:active { background: var(--porca-primary-pressed); }
+#WholeArea { min-width: 0; width: 100%; max-width: 1440px; }
+#LeftProcessBlock { width: 224px; }
+#LeftEmptyBlock { flex: 0 0 240px; }
+#ModelInfoBlock { width: auto; min-width: 0; flex: 1; }
+#Model_Name_Line { width: auto; min-width: 0; flex: 1; }
+.FileItem { width: calc(50% - 8px); min-width: 0; }
+.FileText { min-width: 0; flex: 1; }
+.InfoBlock { padding: 20px 28px; }
+@media (max-width: 1000px) {
+  #LeftProcessBlock { width: 184px; }
+  #LeftEmptyBlock { flex-basis: 200px; }
+  .InfoBlock { padding: 18px 20px; }
+  .FileItem { width: 100%; }
+  .FileItem:nth-child(2n+1) { margin-right: 0; }
+}

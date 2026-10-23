@@ -10,6 +10,7 @@
 
 #include "libslic3r/Color.hpp"
 #include "libslic3r/Point.hpp"
+#include <memory>
 #include <string>
 #include "libslic3r/BoundingBox.hpp"
 #include <tuple>
@@ -115,6 +116,9 @@ private:
     // temporary texture shown until the main texture has still no levels compressed
     //GLTexture m_temp_texture;
     GLModel m_model;
+    // Mesh of a bed drawn through render_model_only(), shared by every such bed
+    // using the same model file.
+    std::shared_ptr<GLModel> m_shared_model;
     Vec3d m_model_offset{ Vec3d::Zero() };
     GLModel m_gravity_arrow;
     float   m_gravity_arrow_length{ 0.f };
@@ -127,6 +131,7 @@ private:
     std::vector<std::vector<Vec2d>> m_extruder_shapes;
     std::vector<double> m_extruder_heights;
     bool m_is_dark = false;
+    bool m_workspace_sheet = false;
 
 public:
     Bed3D() = default;
@@ -188,6 +193,7 @@ private:
     void render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, const ShadowRenderContext* shadow = nullptr);
     //void render_texture(bool bottom, GLCanvas3D& canvas);
     void render_model(const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow = nullptr);
+    void render_mesh(GLModel& mesh, const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow);
     void render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, const ShadowRenderContext* shadow = nullptr);
     void render_default(bool bottom, const Transform3d& view_matrix, const Transform3d& projection_matrix, const ShadowRenderContext* shadow = nullptr);
     void render_gravity_arrow(const Transform3d& view_matrix, const Transform3d& projection_matrix);

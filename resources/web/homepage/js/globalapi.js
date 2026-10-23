@@ -324,6 +324,7 @@ function ExecuteDarkMode( DarkCssPath )
 	if( bDarkMode!=null )
 		nMode=1;
 	
+	document.documentElement.setAttribute("data-porca-theme", nMode ? "dark" : "light");
 	let nNow=CheckCssLinkExist(DarkCssPath);
 	if( nMode==0 )
 	{

@@ -1,4 +1,7 @@
 #include "ElegooLink.hpp"
+#include "ElegooLinkProtocol.hpp"
+#include <wx/app.h>
+#include <wx/thread.h>
 
 #include <algorithm>
 #include "libslic3r/Utils.hpp"
@@ -79,7 +82,6 @@ namespace Slic3r {
 
     namespace {
 
-        constexpr const char* ELEGOO_CC2_DEFAULT_TOKEN = "123456";
         // AppConfig section for CC2 serial numbers, keyed by normalized print_host (host/IP).
         constexpr const char* ELEGOO_DEV_SN_SECTION    = "dev_sn";
 
@@ -110,7 +112,7 @@ namespace Slic3r {
         {
             if (host_ip.empty())
                 return {};
-            AppConfig* app_cfg = GUI::get_app_config();
+            AppConfig* app_cfg = wxTheApp && wxIsMainThread() ? GUI::get_app_config() : nullptr;
             if (app_cfg == nullptr)
                 return {};
             return app_cfg->get(ELEGOO_DEV_SN_SECTION, host_ip);
@@ -121,34 +123,15 @@ namespace Slic3r {
             if (host_ip.empty() || sn.empty())
                 return;
             cache_sn(host_ip, token, sn);
-            AppConfig* app_cfg = GUI::get_app_config();
-            if (app_cfg == nullptr)
-                return;
-            app_cfg->set_str(ELEGOO_DEV_SN_SECTION, host_ip, sn);
+            if (!wxTheApp) return;
+            GUI::wxGetApp().CallAfter([host_ip, sn] {
+                if (!GUI::wxGetApp().is_closing())
+                    if (auto* config = GUI::get_app_config()) config->set_str(ELEGOO_DEV_SN_SECTION, host_ip, sn);
+            });
         }
 
-        enum class ElegooPrinterType {
-            Other,
-            CC,
-            CC2,
-        };
-
-        ElegooPrinterType classify_printer_model(const std::string& printer_model)
-        {
-            if (!boost::algorithm::starts_with(printer_model, "Elegoo Centauri"))
-                return ElegooPrinterType::Other;
-
-            const auto last_char = printer_model.find_last_not_of(" \t\r\n");
-            if (last_char != std::string::npos && printer_model[last_char] == '2')
-                return ElegooPrinterType::CC2;
-
-            return ElegooPrinterType::CC;
-        }
-
-        std::string get_cc2_token(const std::string& apikey)
-        {
-            return apikey.empty() ? ELEGOO_CC2_DEFAULT_TOKEN : apikey;
-        }
+        ElegooPrinterType classify_printer_model(const std::string& model) { return elegoo_printer_type(model); }
+        std::string get_cc2_token(const std::string& code) { return elegoo_cc2_token(code); }
 
         bool parse_cc2_response(const std::string& body, std::string& error_message, std::string* serial_number = nullptr)
         {
@@ -331,7 +314,7 @@ namespace Slic3r {
 
 
     ElegooLink::ElegooLink(DynamicPrintConfig *config):
-    OctoPrint(config), m_printerModel(config->opt_string("printer_model")) {
+    OctoPrint(config), m_printerModel(config->opt_string("printer_model")), m_expected_serial(lookup_cc2_serial(config)) {
 
     }
 
@@ -360,36 +343,19 @@ namespace Slic3r {
 
         std::string web_path = GUI::into_u8(GUI::file_url_from_path(boost::filesystem::path(resources_dir()) / "web/elegoolink/lan_service_web/index.html"));
         const std::string token   = get_cc2_token(config->opt_string("printhost_apikey"));
-        const std::string host_ip = Http::get_host_header_value(host);
+        const std::string host_ip = Http::get_host_from_url(host);
 
         // Pass sn= so the panel can subscribe to the correct MQTT topics.
         std::string sn = lookup_cc2_serial(config);
-        if (sn.empty()) {
-            std::string error_msg;
-            auto http = Http::get("http://" + host_ip + "/system/info?X-Token=" + escape_string(token));
-            http.timeout_connect(3).timeout_max(5);
-            http.header("X-Token", token);
-            http.header("Accept", "application/json");
-            http.on_complete([&](std::string body, unsigned /*status*/) {
-                parse_cc2_response(body, error_msg, &sn);
-            }).perform_sync();
-            if (!sn.empty())
-                persist_sn(host_ip, token, sn);
-        }
-
-        web_path += "?access_code=" + token;
-        web_path += "&ip=" + host_ip;
-        if (!sn.empty())
-            web_path += "&sn=" + sn;
-        web_path += "&id=elegoo_123456";
-
-        const std::string lang = GUI::wxGetApp().current_language_code_safe().utf8_string();
-        if (!lang.empty())
-            web_path += "&lang=" + lang;
-
-        if (GUI::get_app_config()->get_bool("developer_mode"))
-            web_path += "&dev=true";
-
+        // URL construction runs in sidebar/selection refresh. Identity fetches
+        // belong to bounded background availability checks, never this GUI path.
+        web_path += "?access_code=" + Http::url_encode(token);
+        web_path += "&ip=" + Http::url_encode(host_ip);
+        if (!sn.empty()) web_path += "&sn=" + Http::url_encode(sn);
+        // Distinct panel sessions must not share the vendor MQTT client identity.
+        web_path += "&id=" + Http::url_encode("porca_" + host_ip);
+        const std::string lang = wxTheApp ? GUI::wxGetApp().current_language_code_safe().ToStdString() : "en_US";
+        if (!lang.empty()) web_path += "&lang=" + Http::url_encode(lang);
         return web_path;
     }
 
@@ -421,7 +387,7 @@ namespace Slic3r {
     std::string ElegooLink::get_sn() const
     {
         // Panel IPC calls this on every load with a 10s timeout. Never block on HTTP
-        // here — URL sn= and dev_sn must be enough; HTTP is only for get_print_host_webui.
+        // here — URL sn= and dev_sn are populated by background identification.
         return lookup_cc2_serial_impl(m_printerModel, m_host, m_apikey);
     }
 
@@ -482,10 +448,11 @@ namespace Slic3r {
         auto         url   = make_cc2_info_url();
         auto         http  = Http::get(std::move(url));
 
+        http.timeout_connect(2).timeout_max(4).size_limit(65536);
         http.header("X-Token", token);
         http.header("Accept", "application/json");
         http.on_error([&](std::string body, std::string error, unsigned status) {
-                BOOST_LOG_TRIVIAL(error) << boost::format("%1%: Error getting CC2 device info: %2%, HTTP %3%, body: `%4%`") % name % error % status % body;
+                BOOST_LOG_TRIVIAL(error) << name << ": CC2 device info failed, HTTP " << status;
                 res = false;
                 if (status == 401 || status == 403)
                     msg = format_error(body, _u8L("Invalid access code"), status);
@@ -493,12 +460,17 @@ namespace Slic3r {
                     msg = format_error(body, error.empty() ? _u8L("CC2 device not detected") : error, status);
             })
             .on_complete([&](std::string body, unsigned status) {
-                BOOST_LOG_TRIVIAL(debug) << boost::format("%1%: Got CC2 device info: %2%") % name % body;
+                BOOST_LOG_TRIVIAL(debug) << name << ": CC2 device info received";
                 std::string error_message;
                 std::string serial_number;
                 if (!parse_cc2_response(body, error_message, &serial_number)) {
                     res = false;
                     msg = format_error(body, error_message.empty() ? _u8L("CC2 device not detected") : error_message, status);
+                    return;
+                }
+                if (!m_expected_serial.empty() && serial_number != m_expected_serial) {
+                    res = false;
+                    msg = _L("Printer identity changed — check the saved address");
                     return;
                 }
                 persist_sn(Http::get_host_header_value(m_host), token, serial_number);
@@ -579,11 +551,11 @@ namespace Slic3r {
         msg.Clear();
 
         http.header("Host", Http::get_host_header_value(m_host));
+        http.timeout_connect(2).timeout_max(4).size_limit(65536);
         http.header("X-Token", token);
         http.header("Accept", "application/json");
         http.on_error([&](std::string body, std::string error, unsigned status) {
-                BOOST_LOG_TRIVIAL(error) << boost::format("%1%: Error getting CC2 device info at %2% : %3%, HTTP %4%, body: `%5%`") % name % url %
-                                                error % status % body;
+                BOOST_LOG_TRIVIAL(error) << name << ": CC2 device info failed, HTTP " << status;
                 res = false;
                 if (status == 401 || status == 403)
                     msg = format_error(body, _u8L("Invalid access code"), status);
@@ -596,6 +568,11 @@ namespace Slic3r {
                 if (!parse_cc2_response(body, error_message, &serial_number)) {
                     res = false;
                     msg = format_error(body, error_message.empty() ? _u8L("CC2 device not detected") : error_message, status);
+                    return;
+                }
+                if (!m_expected_serial.empty() && serial_number != m_expected_serial) {
+                    res = false;
+                    msg = _L("Printer identity changed — check the saved address");
                     return;
                 }
                 res = true;

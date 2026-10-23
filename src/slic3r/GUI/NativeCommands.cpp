@@ -614,16 +614,12 @@ std::vector<NativeCommand> build_command_catalog()
         wxGetApp().check_new_version_sf(true, 1);
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
-    add_with_icon("help_about", L("About OrcaSlicer"), L("Help"), "OrcaSlicer_gradient_circle", [](const std::string&) {
+    add_with_icon("help_about", L("About Porca"), L("Help"), "porca_icon", [](const std::string&) {
         Slic3r::GUI::about();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
-    add_with_icon("open_wiki", L("Open Wiki"), L("Help"), "link_wiki_img", [](const std::string&) {
-        wxLaunchDefaultBrowser("https://www.orcaslicer.com/wiki/", wxBROWSER_NEW_WINDOW);
-        return AppActionRunResult{AppActionRunResult::Level::Success};
-    });
-    add("open_youtube", L("Open YouTube Channel"), L("Help"), [](const std::string&) {
-        wxLaunchDefaultBrowser("https://www.youtube.com/@OfficialOrcaSlicer/videos", wxBROWSER_NEW_WINDOW);
+    add_with_icon("open_wiki", L("Open Setup Guide"), L("Help"), "link_wiki_img", [](const std::string&) {
+        wxGetApp().ShowUserGuide();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
 

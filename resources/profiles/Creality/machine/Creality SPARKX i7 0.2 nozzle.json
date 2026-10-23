@@ -20,6 +20,7 @@
 	"cooling_tube_retraction": "0",
 	"creality_flush_time": "0",
 	"default_print_profile": "0.10mm HighDetail @Creality SPARKX i7 0.2 nozzle",
+	"default_bed_type": "Textured PEI Plate",
 	"disable_m73": "0",
 	"emit_machine_limits_to_gcode": "1",
 	"enable_filament_ramming": "0",

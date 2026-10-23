@@ -187,13 +187,7 @@ TroubleshootDialog::TroubleshootDialog()
     version->SetFont(version_font);
     version->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#363636")));
 
-    auto build = new Button(this, wxString(build_commit_label));
-    build->SetStyle(ButtonStyle::Regular, ButtonType::Window);
-    auto hash_url = "https://github.com/OrcaSlicer/OrcaSlicer/commit/" + wxString(build_commit_hash);
-    build->SetToolTip(hash_url);
-    build->Bind(wxEVT_BUTTON, [hash_url](wxCommandEvent &e) {
-         wxLaunchDefaultBrowser(hash_url);
-    });
+    auto build = new Label(this, wxString(build_commit_label));
 
     // SYSTEM INFO
     auto sys_info_lines = [this](bool show_sys) {
@@ -237,18 +231,10 @@ TroubleshootDialog::TroubleshootDialog()
     });
 
     auto wiki_btn = new Button(this, "", "toolbar_wiki", 0, 15);
-    auto wiki_url = "https://www.orcaslicer.com/wiki/troubleshoot_center";
-    wiki_btn->SetToolTip(_L("Wiki Guide") + "\n" + wiki_url);
+    wiki_btn->SetToolTip(_L("Open Setup Guide"));
     wiki_btn->SetStyle(ButtonStyle::Confirm, ButtonType::Circle);
     wiki_btn->SetCanFocus(false);
-    wiki_btn->Bind(wxEVT_LEFT_DOWN, ([wiki_url](auto& e) {wxLaunchDefaultBrowser(wiki_url);}));
-
-    auto video_btn = new Button(this, "", "toolbar_video_guide", 0, 15);
-    auto video_url = "https://www.youtube.com/watch?v=CFzt8W7OCx0";
-    video_btn->SetToolTip(_L("Video Guide") + "\n" + video_url);
-    video_btn->SetStyle(ButtonStyle::Confirm, ButtonType::Circle);
-    video_btn->SetCanFocus(false);
-    video_btn->Bind(wxEVT_LEFT_DOWN, ([video_url](auto& e) {wxLaunchDefaultBrowser(video_url);}));
+    wiki_btn->Bind(wxEVT_BUTTON, [](wxCommandEvent&) { wxGetApp().ShowUserGuide(); });
 
     // RIGHT SIZER //////////////////////
 
@@ -287,37 +273,13 @@ TroubleshootDialog::TroubleshootDialog()
         return info;
     };
 
-    auto info_desc_1 = create_info_line(_L("We need information for diagnosing source of the issue. Check wiki page for detailed guide."));
+    auto info_desc_1 = create_info_line(_L("Pack the current project and logs if you need help diagnosing a problem."));
     auto info_desc_2 = create_info_line(_L("Pack button collects project file and logs of current session onto a ZIP archive."));
     auto info_desc_3 = create_info_line(_L("Any additional visual examples like images or screen recordings might be helpful while reporting the issue."));
     wxBoxSizer *info_desc_sizer = new wxBoxSizer(wxVERTICAL);
     info_desc_sizer->Add(info_desc_1, 0, wxEXPAND | wxBOTTOM, FromDIP(8));
     info_desc_sizer->Add(info_desc_2, 0, wxEXPAND | wxBOTTOM, FromDIP(8));
     info_desc_sizer->Add(info_desc_3, 0, wxEXPAND);
-
-    auto link_report  = new HyperLink(this, _L("Report issue") + " ");
-    link_report->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &e) {
-        auto encodeStr = [](const wxString& text) {
-            wxString out;
-            const wxScopedCharBuffer utf8 = text.utf8_str();
-            for (const unsigned char* p = (const unsigned char*)utf8.data(); *p; ++p) {
-                unsigned char c = *p;
-                if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
-                    out += (wxChar)c;
-                else
-                    out += wxString::Format(wxT("%%%02X"), c);
-            }
-            return out;
-        };
-
-        wxString url = "https://github.com/OrcaSlicer/OrcaSlicer/issues/new?template=bug_report.yml";
-        wxString os = GetOStype();
-        if(!os.IsEmpty())
-            url += "&os_type=%22" + os +"%22";
-        url += "&version="     + encodeStr(wxString(SoftFever_VERSION));
-        url += "&os_version="  + encodeStr(GetOSinfo());
-        wxLaunchDefaultBrowser(url);
-    });
 
     auto pack_btn = new Button(this, _L("Pack") + "...");
     pack_btn->SetStyle(ButtonStyle::Regular, ButtonType::Parameter);
@@ -358,7 +320,7 @@ TroubleshootDialog::TroubleshootDialog()
     auto log_pack_btn = create_btn(_L("Pack") + "...", "");
     log_pack_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
         auto data_dir   = boost::filesystem::path(Slic3r::data_dir());
-        ExportAsZip({wxString((data_dir / "log").string())}, "OrcaSlicer_Logs_" + GetTimestamp());
+        ExportAsZip({wxString((data_dir / "log").string())}, "Porca_Logs_" + GetTimestamp());
     });
     log_pack_szr->Add(log_pack_btn, 0, wxALIGN_CENTER_VERTICAL);
 
@@ -381,7 +343,6 @@ TroubleshootDialog::TroubleshootDialog()
 
     wxBoxSizer *link_btn_sizer = new wxBoxSizer(wxHORIZONTAL);
     link_btn_sizer->Add(wiki_btn);
-    link_btn_sizer->Add(video_btn, 0, wxLEFT, FromDIP(10));
 
     left_sizer->Add(m_header_logo     , 0, wxEXPAND | wxALIGN_CENTER);
     left_sizer->Add(logo_line         , 0, wxEXPAND       | wxTOP, FromDIP(12));
@@ -395,7 +356,6 @@ TroubleshootDialog::TroubleshootDialog()
     wxBoxSizer *right_sizer  = new wxBoxSizer(wxVERTICAL);
 
     wxBoxSizer *pack_btn_sizer = new wxBoxSizer(wxHORIZONTAL);
-    pack_btn_sizer->Add(link_report                   , 0, wxRIGHT, FromDIP(5));
     pack_btn_sizer->AddStretchSpacer();
     pack_btn_sizer->Add(pack_btn);
 
@@ -1011,7 +971,7 @@ void TroubleshootDialog::PackAll()
         ).ShowModal();
     }
 
-    ExportAsZip(include_zip, "OrcaSlicer_PackedDebugInfo_" + GetTimestamp());
+    ExportAsZip(include_zip, "Porca_PackedDebugInfo_" + GetTimestamp());
 }
 
 void TroubleshootDialog::RebuildSystemProfiles()
@@ -1034,7 +994,7 @@ void TroubleshootDialog::RebuildSystemProfiles()
     
     MessageDialog msg(this,
         _L("Restart Required") + "\n" +
-        _L("Please make sure any instances of OrcaSlicer are not running") + "\n" +
+        _L("Please make sure any instances of Porca are not running") + "\n" +
         _L("Do you want to continue?")
         , wxString(SLIC3R_APP_FULL_NAME), wxICON_QUESTION | wxOK | wxCANCEL
     );

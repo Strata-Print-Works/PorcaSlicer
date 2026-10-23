@@ -1,4 +1,6 @@
 #include "ObjectDataViewModel.hpp"
+#include <cmath>
+#include <wx/image.h>
 #include "wxExtensions.hpp"
 #include "BitmapCache.hpp"
 #include "GUI_App.hpp"
@@ -452,6 +454,20 @@ void ObjectDataViewModelNode::UpdateExtruderAndColorIcon(wxString extruder /*= "
     }
 
     m_extruder_bmp = *bmps[extruder_idx >= bmps.size() ? 0 : extruder_idx];
+    wxImage badge = m_extruder_bmp.ConvertToImage();
+    if (!badge.HasAlpha()) badge.InitAlpha();
+    const double radius = badge.GetHeight() * 0.22;
+    for (int y = 0; y < badge.GetHeight(); ++y) {
+        for (int x = 0; x < badge.GetWidth(); ++x) {
+            const double dx = std::max({radius - x - 0.5, x + 0.5 - (badge.GetWidth() - radius), 0.0});
+            const double dy = std::max({radius - y - 0.5, y + 0.5 - (badge.GetHeight() - radius), 0.0});
+            const double coverage = std::clamp(radius + 0.5 - std::hypot(dx, dy), 0.0, 1.0);
+            badge.SetAlpha(x, y, static_cast<unsigned char>(badge.GetAlpha(x, y) * coverage));
+        }
+    }
+    const double scale = m_extruder_bmp.GetScaleFactor();
+    m_extruder_bmp = wxBitmap(badge);
+    m_extruder_bmp.SetScaleFactor(scale);
 }
 
 // *****************************************************************************

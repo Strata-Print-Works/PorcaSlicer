@@ -105,6 +105,13 @@ inline bool snapshot_modifies_project(const Snapshot &snapshot)
 	return snapshot_modifies_project(snapshot.snapshot_data.snapshot_type) && (snapshot.name.empty() || snapshot.name.back() != '!');
 }
 
+// Snapshot bookkeeping of Stack::discard_topmost_snapshot(), apart from the object histories.
+// Removes the snapshot taken at `timestamp` only while it directly precedes the active, uncaptured
+// topmost state, so nothing was snapshotted, undone or redone since. The topmost state then takes
+// that timestamp, as if the snapshot had never been taken. Returns false, changing nothing, otherwise.
+bool discard_topmost_snapshot(std::vector<Snapshot> &snapshots, size_t &active_time, size_t &current_time,
+                              size_t &saved_time, size_t timestamp);
+
 // Excerpt of Slic3r::GUI::Selection for serialization onto the Undo / Redo stack.
 struct Selection : public Slic3r::ObjectBase {
 	void clear() { mode = 0; volumes_and_instances.clear(); }
@@ -144,6 +151,10 @@ public:
     // To be called just after take_snapshot() when leaving a gizmo, inside which small edits like support point add / remove events or paiting actions were allowed.
     // Remove all but the last edit between the gizmo enter / leave snapshots.
     void reduce_noisy_snapshots(const std::string& new_name);
+
+    // Remove the snapshot taken at `timestamp` after its action was cancelled and the application state
+    // restored, provided nothing was snapshotted, undone or redone since. Otherwise returns false.
+    bool discard_topmost_snapshot(size_t timestamp);
 
 	// To be queried to enable / disable the Undo / Redo buttons at the UI.
 	bool has_undo_snapshot() const;

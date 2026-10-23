@@ -123,7 +123,7 @@ TEST_CASE("Device manager ignores stale cloud machine responses", "[DeviceManage
     CHECK(machines.at("integration-device")->get_dev_name() == "Fresh name");
 }
 
-TEST_CASE("Device manager filters and rehomes devices by printer-agent ownership", "[DeviceManager][integration]")
+TEST_CASE("Device manager filters and rehomes devices by printer-agent ownership", "[DeviceManager][DeviceOwnership][integration]")
 {
     ScopedAppConfig app_config;
     auto agent_a = std::make_shared<TestPrinterAgent>("integration-agent-a");
@@ -159,4 +159,57 @@ TEST_CASE("Device manager filters and rehomes devices by printer-agent ownership
     CHECK(object->printer_agent_id == "integration-agent-b");
     CHECK(manager.get_my_machine_list("integration-agent-a").empty());
     CHECK(manager.get_my_machine_list("integration-agent-b").count(machine.dev_id) == 1);
+}
+
+TEST_CASE("Delayed discovery does not reassign a retained printer to the visible backend", "[DeviceManager][DeviceOwnership][integration]")
+{
+    ScopedAppConfig app_config;
+    NetworkAgent network(nullptr, std::make_shared<TestPrinterAgent>("visible"));
+    BBLocalMachine saved;
+    saved.dev_id = "background";
+    saved.dev_ip = "192.0.2.10";
+    saved.dev_name = "Background printer";
+    saved.printer_type = "C11";
+    saved.printer_agent_id = "retained";
+    saved.access_code = "offline-test-code";
+    app_config.config.update_local_machine(saved);
+    DeviceManager manager(&network, false, &app_config.config);
+    manager.on_machine_alive(R"({
+        "dev_name":"Background printer", "dev_id":"background", "dev_ip":"192.0.2.10",
+        "dev_type":"C11", "dev_signal":"strong", "connect_type":"lan", "bind_state":"free",
+        "__porca_printer_agent_id":"retained"
+    })");
+    REQUIRE(manager.get_local_machine("background") != nullptr);
+    CHECK(manager.get_local_machine("background")->printer_agent_id == "retained");
+    CHECK(manager.get_my_machine_list("visible").empty());
+    CHECK(manager.get_my_machine_list("retained").count("background") == 1);
+}
+
+TEST_CASE("Saved sessions keep their own printer agent while another backend is visible", "[DeviceManager][DeviceOwnership][integration]")
+{
+    ScopedAppConfig app_config;
+    NetworkAgent network(nullptr, std::make_shared<TestPrinterAgent>("visible"));
+    DeviceManager manager(&network, false, &app_config.config);
+
+    BBLocalMachine machine;
+    machine.dev_id           = "background-session";
+    machine.dev_name         = "Background session";
+    machine.dev_ip           = "192.0.2.20";
+    machine.printer_type     = "C11";
+    machine.printer_agent_id = "retained";
+
+    MachineObject* object = manager.insert_local_device(machine, "lan", "free", "", "offline-test-code");
+    REQUIRE(object != nullptr);
+    CHECK(object->printer_agent_id == "retained");
+    CHECK(manager.get_my_machine_list("retained").count(machine.dev_id) == 1);
+    CHECK(manager.get_my_machine_list("visible").empty());
+
+    // Reusing the entry for another session start keeps the saved owner.
+    REQUIRE(manager.insert_local_device(machine, "lan", "free", "", "offline-test-code") == object);
+    CHECK(object->printer_agent_id == "retained");
+
+    // Callers without a saved owner still follow the visible backend.
+    machine.printer_agent_id.clear();
+    REQUIRE(manager.insert_local_device(machine, "lan", "free", "", "offline-test-code") == object);
+    CHECK(object->printer_agent_id == "visible");
 }

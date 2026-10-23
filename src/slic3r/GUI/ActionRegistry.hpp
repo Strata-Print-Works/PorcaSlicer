@@ -129,11 +129,11 @@ private:
     std::string m_source_name; // display name of the action's source
 };
 
-// Stable identity/display name of the built-in ("OrcaSlicer") action source. Shared by the native
+// Stable identity and Porca display name of the built-in action source. Shared by the native
 // command catalog and the dynamically materialised setting/plate/recent actions so every built-in
 // action re-keys together.
 inline constexpr const char* kOrcaSourceKey  = "orca";
-inline constexpr const char* kOrcaSourceName = "OrcaSlicer";
+inline constexpr const char* kOrcaSourceName = "Porca";
 
 // True when a setting at `setting_mode` cannot be edited in `current_mode` and the UI must switch
 // first. Developer settings are handled as a separate prompt by the Speed Dial.

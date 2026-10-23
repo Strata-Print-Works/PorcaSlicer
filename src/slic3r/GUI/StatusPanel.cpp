@@ -1,4 +1,5 @@
 #include "StatusPanel.hpp"
+#include "PrinterScanDialog.hpp"
 #include "I18N.hpp"
 #include "IPrinterAgent.hpp"
 #include "Widgets/Label.hpp"
@@ -145,13 +146,13 @@ static const wxColour STATIC_BOX_LINE_COL = wxColour(238, 238, 238);
 static const wxColour BUTTON_NORMAL1_COL = wxColour(238, 238, 238);
 static const wxColour BUTTON_NORMAL2_COL = wxColour(206, 206, 206);
 static const wxColour BUTTON_PRESS_COL   = wxColour(172, 172, 172);
-static const wxColour BUTTON_HOVER_COL   = wxColour(0, 150, 136);
+static const wxColour BUTTON_HOVER_COL = wxColour("#009688");
 
 static const wxColour DISCONNECT_TEXT_COL = wxColour(171, 172, 172);
 static const wxColour NORMAL_TEXT_COL     = wxColour(48,58,60);
 static const wxColour NORMAL_FAN_TEXT_COL = wxColour(107, 107, 107);
 static const wxColour WARNING_INFO_BG_COL = wxColour(255, 111, 0);
-static const wxColour STAGE_TEXT_COL      = wxColour(0, 150, 136);
+static wxColour STAGE_TEXT_COL() { return StateColor::darkModeColorFor(wxColour("#009688")); }
 
 static const wxColour GROUP_STATIC_LINE_COL = wxColour(206, 206, 206);
 
@@ -750,12 +751,12 @@ void PrintingTaskPanel::create_panel(wxWindow* parent)
     m_staticText_progress_percent = new wxStaticText(penel_text, wxID_ANY, "0", wxDefaultPosition, wxDefaultSize, 0);
     m_staticText_progress_percent->SetFont(::Label::Head_18);
     m_staticText_progress_percent->SetMaxSize(wxSize(-1, FromDIP(20)));
-    m_staticText_progress_percent->SetForegroundColour(wxColour(0, 150, 136));
+    m_staticText_progress_percent->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#009688")));
 
     m_staticText_progress_percent_icon = new wxStaticText(penel_text, wxID_ANY, "%", wxDefaultPosition, wxDefaultSize, 0);
     m_staticText_progress_percent_icon->SetFont(::Label::Body_11);
     m_staticText_progress_percent_icon->SetMaxSize(wxSize(-1, FromDIP(13)));
-    m_staticText_progress_percent_icon->SetForegroundColour(wxColour(0, 150, 136));
+    m_staticText_progress_percent_icon->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#009688")));
 
     sizer_percent->Add(m_staticText_progress_percent, 0, 0, 0);
 
@@ -802,7 +803,7 @@ void PrintingTaskPanel::create_panel(wxWindow* parent)
 #else
     m_printing_stage_value->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, wxT("HarmonyOS Sans SC")));
 #endif
-    m_printing_stage_value->SetForegroundColour(STAGE_TEXT_COL);
+    m_printing_stage_value->SetForegroundColour(STAGE_TEXT_COL());
 
     m_printing_stage_value->Bind(wxEVT_LEFT_UP, &PrintingTaskPanel::on_stage_clicked, this);
 
@@ -1499,6 +1500,9 @@ StatusBasePanel::StatusBasePanel(wxWindow *parent, wxWindowID id, const wxPoint 
     this->SetSizer(bSizer_status);
     add_build_step([this, bSizer_status, devices_layout] {
         if (!devices_layout) bSizer_status->SetSizeHints(this);
+        // The staged controls are created after the parent page's theme pass.
+        // Apply the current palette once they all exist, including in dark mode.
+        if (devices_layout) wxGetApp().UpdateDarkUIWin(this);
         this->Layout();
         if (devices_layout) FitInside();
     });
@@ -1760,10 +1764,12 @@ wxBoxSizer *StatusBasePanel::create_machine_control_page(wxWindow *parent)
     control_body->SetSizer(bSizer_control);
     bSizer_right->Add(control_body, 0, wxEXPAND);
     if (devices_layout) {
-        auto* toggle = new wxButton(m_panel_control_title, wxID_ANY, _L("Show controls"));
+        auto* toggle = new Button(m_panel_control_title, _L("Show controls"));
+        toggle->SetStyle(ButtonStyle::Regular, ButtonType::Window);
         bSizer_control_title->Insert(1, toggle, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(10));
         control_body->Hide();
-        toggle->Bind(wxEVT_BUTTON, [this, control_body, toggle](wxCommandEvent&) {
+        toggle->Bind(wxEVT_BUTTON, [this, control_body, toggle](wxCommandEvent& event) {
+            event.Skip();
             const bool expanded = !control_body->IsShown();
             control_body->Show(expanded);
             toggle->SetLabel(expanded ? _L("Hide controls") : _L("Show controls"));
@@ -2038,7 +2044,7 @@ wxBoxSizer *StatusBasePanel::create_misc_control(wxWindow *parent)
         StateColor(std::make_pair(DISCONNECT_TEXT_COL, (int)StateColor::Disabled), std::make_pair(NORMAL_FAN_TEXT_COL, (int)StateColor::Normal)));
 
     m_switch_fan->Bind(wxEVT_ENTER_WINDOW, [this](auto& e) {
-        m_fan_panel->SetBackgroundColor(wxColour(0, 150, 136));
+        m_fan_panel->SetBackgroundColor(wxColour("#009688"));
         });
 
     m_switch_fan->Bind(wxEVT_LEAVE_WINDOW, [this, parent](auto& e) {
@@ -2286,7 +2292,7 @@ wxBoxSizer* StatusBasePanel::create_filament_group(wxWindow* parent)
 
     auto m_title_filament_loading = new Label(m_scale_panel, _L("Filament loading..."));
     m_title_filament_loading->SetBackgroundColour(*wxWHITE);
-    m_title_filament_loading->SetForegroundColour(wxColour(0, 137, 123));
+    m_title_filament_loading->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#00897B")));
     m_title_filament_loading->SetFont(::Label::Body_14);
 
     m_img_filament_loading = new wxStaticBitmap(m_scale_panel, wxID_ANY, create_scaled_bitmap("filament_load_fold", this, 24), wxDefaultPosition, wxSize(FromDIP(24), FromDIP(24)), 0);
@@ -2978,6 +2984,10 @@ void StatusPanel::on_print_error_clean(wxCommandEvent &event)
 
 void StatusPanel::on_webrequest_state(wxWebRequestEvent &evt)
 {
+    // A canceled request can still have a completion queued for the old printer
+    // or task. Never apply it to the currently displayed job.
+    if (!obj || !web_request.IsOk() || evt.GetRequest().GetId() != web_request.GetId())
+        return;
     BOOST_LOG_TRIVIAL(trace) << "monitor: monitor_panel web request state = " << evt.GetState();
     switch (evt.GetState()) {
     case wxWebRequest::State_Completed: {
@@ -3018,7 +3028,7 @@ void StatusPanel::refresh_thumbnail_webrequest(wxMouseEvent& event)
     if (obj->slice_info) {
         m_request_url = wxString(obj->slice_info->thumbnail_url);
         if (!m_request_url.IsEmpty()) {
-            web_request = wxWebSession::GetDefault().CreateRequest(this, m_request_url);
+            web_request = wxWebSession::GetDefault().CreateRequest(this, m_request_url, wxWindow::NewControlId());
             BOOST_LOG_TRIVIAL(trace) << "monitor: create new webrequest, state = " << web_request.GetState() << ", url = " << m_request_url;
             if (web_request.GetState() == wxWebRequest::State_Idle)
                 web_request.Start();
@@ -3170,6 +3180,30 @@ void StatusPanel::update(MachineObject *obj)
     }
 
     update_camera_state(obj);
+
+    // These audited adapters translate basic G-code and job controls, but not
+    // Bambu's options, calibration, fan-channel or AMS actuation protocols.
+    // Devices exposes their printer website for those vendor-specific controls.
+    const auto& owner = obj->printer_agent_id;
+    const bool translated_controls = scanned_printer_control_config() &&
+        (owner == "moonraker" || owner == "crealityprint" || owner == "snapmaker" || owner == "qidi");
+    const bool changed = m_calibration_btn->IsShown() == translated_controls;
+    m_calibration_btn->Show(!translated_controls);
+    m_switch_speed->Show(!translated_controls);
+    m_switch_lamp->Show(!translated_controls);
+    m_switch_fan->Show(!translated_controls);
+    if (translated_controls) {
+        m_parts_btn->Hide();
+        m_options_btn->Hide();
+        m_safety_btn->Hide();
+        m_ams_control->Hide();
+        m_ams_control_box->Hide();
+    }
+    if (changed) {
+        m_machine_ctrl_panel->Layout();
+        Layout();
+        FitInside();
+    }
 
     //m_machine_ctrl_panel->Thaw();
 }
@@ -4197,7 +4231,7 @@ bool StatusPanel::load_thumbnail_from_url(const wxString &url, MachineObject *ob
         BOOST_LOG_TRIVIAL(trace) << "web_request: use cache image";
     } else {
         m_request_url = url;
-        web_request = wxWebSession::GetDefault().CreateRequest(this, m_request_url);
+        web_request = wxWebSession::GetDefault().CreateRequest(this, m_request_url, wxWindow::NewControlId());
         BOOST_LOG_TRIVIAL(trace) << "monitor: start request thumbnail, url = " << m_request_url;
         web_request.Start();
         m_start_loading_thumbnail = false;
@@ -4236,6 +4270,12 @@ void StatusPanel::update_sdcard_subtask(MachineObject *obj)
 
 void StatusPanel::reset_printing_values()
 {
+    // Invalidate before Cancel(), which may itself dispatch a request event.
+    wxWebRequest previous = web_request;
+    web_request = wxWebRequest();
+    m_request_url.clear();
+    if (previous.IsOk() && previous.GetState() == wxWebRequest::State_Active)
+        previous.Cancel();
     m_project_task_panel->enable_partskip_button(nullptr, false);
     m_project_task_panel->enable_pause_resume_button(false, "pause_disable");
     m_project_task_panel->enable_abort_button(false);
@@ -5376,6 +5416,13 @@ bool StatusPanel::is_stage_list_info_changed(MachineObject *obj)
 void StatusPanel::set_default()
 {
     BOOST_LOG_TRIVIAL(trace) << "status_panel: set_default";
+    m_media_play_ctrl->SetMachineObject(nullptr);
+    m_last_sdcard = m_last_recording = m_last_timelapse = m_last_extrusion = m_last_vcamera = -1;
+    last_profile_id.clear();
+    last_task_id.clear();
+    last_stage_list_info.clear();
+    last_ams_exist_bits = last_tray_is_bbl_bits = last_read_done_bits = last_reading_bits = last_ams_version = -1;
+    last_cali_version.reset();
     if (m_custom_camera_view->IsShown()) {
         m_custom_camera_view->Hide();
         m_media_ctrl->Show();
@@ -5516,6 +5563,7 @@ void StatusPanel::rescale_camera_icons()
 
 void StatusPanel::on_sys_color_changed()
 {
+    if (m_monitoring_temperatures) wxGetApp().UpdateDarkUIWin(this);
     m_project_task_panel->msw_rescale();
     m_bitmap_speed.msw_rescale();
     m_bitmap_speed_active.msw_rescale();

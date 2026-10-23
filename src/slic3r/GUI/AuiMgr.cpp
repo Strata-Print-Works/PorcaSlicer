@@ -1,6 +1,8 @@
 #include "AuiMgr.hpp"
 
 #include "GUI_App.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 #ifdef __WXGTK__
 #include "LinuxDisplayBackend.hpp"
 #endif
@@ -44,12 +46,20 @@ void AuiMgr::init(wxWindow* window)
 
 void AuiMgr::apply_color_mode()
 {
-    const bool     is_dark    = wxGetApp().dark_mode();
-    const wxColour sash_color = is_dark ? wxColour(38, 46, 48) : wxColour(206, 206, 206);
-    GetArtProvider()->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_COLOUR, sash_color);
-    GetArtProvider()->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_TEXT_COLOUR, *wxWHITE);
-    GetArtProvider()->SetColour(wxAUI_DOCKART_SASH_COLOUR, sash_color);
-    GetArtProvider()->SetColour(wxAUI_DOCKART_BORDER_COLOUR, is_dark ? *wxBLACK : wxColour(165, 165, 165));
+    const bool is_dark = wxGetApp().dark_mode();
+    const auto color = [is_dark](DesignSystem::ColorRole role) {
+        return wxColour(DesignSystem::color_hex(role, is_dark));
+    };
+    using DesignSystem::ColorRole;
+    auto* art = GetArtProvider();
+    art->SetColour(wxAUI_DOCKART_ACTIVE_CAPTION_COLOUR, color(ColorRole::SurfaceRaised));
+    art->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_COLOUR, color(ColorRole::SurfaceRaised));
+    art->SetColour(wxAUI_DOCKART_ACTIVE_CAPTION_TEXT_COLOUR, color(ColorRole::Ink));
+    art->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_TEXT_COLOUR, color(ColorRole::InkMuted));
+    art->SetColour(wxAUI_DOCKART_BACKGROUND_COLOUR, color(ColorRole::Bg));
+    art->SetColour(wxAUI_DOCKART_SASH_COLOUR, color(ColorRole::Bg));
+    art->SetColour(wxAUI_DOCKART_BORDER_COLOUR, color(ColorRole::Line));
+    art->SetFont(wxAUI_DOCKART_CAPTION_FONT, DesignSystem::font(DesignSystem::TypeStyle::Caption));
 }
 
 void AuiMgr::track_docked_size(wxWindow* window)

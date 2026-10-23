@@ -1,9 +1,15 @@
+#include "ElegooLinkProtocol.hpp"
+#include "SavedPrinterConnection.hpp"
 #include "PrinterDiscovery.hpp"
+#include "libslic3r/ElegooDiscovery.hpp"
+#include "PrinterConnectionStatus.hpp"
+#include <boost/asio/error.hpp>
 #include "Http.hpp"
 #include "Bonjour.hpp"
 #include "DiscoveryNetwork.hpp"
 #include "SystemBonjour.hpp"
 #include "libslic3r/DiscoveredPrinter.hpp"
+#include "libslic3r/DiscoveryPolicy.hpp"
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/udp.hpp>
@@ -18,9 +24,13 @@
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/asio/ssl/stream_base.hpp>
+#include <boost/asio/ssl/verify_context.hpp>
 #include <boost/asio/ssl/verify_mode.hpp>
 #include <boost/system/error_code.hpp>
 #include <nlohmann/json.hpp>
+#include <openssl/evp.h>
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -44,6 +54,13 @@ namespace {
 using boost::asio::ip::udp;
 using boost::asio::ip::address_v4;
 
+std::string certificate_sha256(X509* certificate)
+{
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int size = 0;
+    if (!certificate || X509_digest(certificate, EVP_sha256(), digest, &size) != 1) return {};
+    return certificate_fingerprint_hex(digest, size);
+}
 } // namespace
 
 static bool scan_multicast_printers(const std::shared_ptr<std::atomic<bool>>& cancelled, const PrinterFoundFn& found, bool snapmaker)
@@ -177,22 +194,91 @@ bool scan_snapmaker_printers(const std::shared_ptr<std::atomic<bool>>& cancelled
 #endif
 }
 
-PrinterLinkStatus check_printer_connection(const DiscoveredPrinter& p, const std::string& code, const std::atomic<bool>* cancelled)
+bool scan_elegoo_printers(const std::shared_ptr<std::atomic<bool>>& cancelled, const PrinterFoundFn& found)
 {
-    if (cancelled && cancelled->load()) return PrinterLinkStatus::unreachable;
+    if (cancelled->load()) return false; // no interface enumeration or socket when cancelled
+    class Sockets final : public ElegooDiscoveryTransport {
+        boost::asio::io_context io;
+        struct InterfaceSocket { DiscoveryInterface interface; std::unique_ptr<udp::socket> socket; };
+        std::vector<InterfaceSocket> sockets;
+        const std::atomic<bool>& stop;
+    public:
+        explicit Sockets(const std::atomic<bool>& stop) : stop(stop)
+        {
+            for (const auto& interface : discovery_interfaces()) {
+                if (stop.load()) break;
+                if (!interface.broadcast || !discovery_netmask_valid(interface.netmask)) continue;
+                boost::system::error_code error;
+                auto socket = std::make_unique<udp::socket>(io);
+                socket->open(udp::v4(), error);
+                if (error) continue;
+                socket->bind(udp::endpoint(address_v4(interface.address), 0), error);
+                if (error || !constrain_discovery_socket(*socket, interface.index)) continue;
+                socket->set_option(udp::socket::broadcast(true), error);
+                if (error) continue;
+                socket->non_blocking(true, error);
+                if (!error) sockets.push_back({interface, std::move(socket)});
+            }
+        }
+        Clock::time_point now() const override { return Clock::now(); }
+        bool cancelled() const override { return stop.load(); }
+        size_t interface_count() const override { return sockets.size(); }
+        void send_probe(size_t index, Clock::time_point deadline) override
+        {
+            auto& item = sockets[index];
+            if (!item.socket->is_open() || !wait_for_discovery_probe(&stop, deadline) || cancelled() || now() >= deadline) return;
+            boost::system::error_code error;
+            const auto broadcast = address_v4(item.interface.address | ~item.interface.netmask);
+            item.socket->send_to(boost::asio::buffer(elegoo_discovery_probe, sizeof(elegoo_discovery_probe) - 1),
+                                 udp::endpoint(broadcast, elegoo_discovery_port), 0, error);
+            if (error) item.socket->close(error);
+        }
+        std::optional<ElegooDiscoveryDatagram> receive(size_t index) override
+        {
+            std::array<char, 8193> bytes; // one extra byte detects an oversized datagram
+            udp::endpoint sender;
+            boost::system::error_code error;
+            auto& item = sockets[index];
+            const auto size = item.socket->receive_from(boost::asio::buffer(bytes), sender, 0, error);
+            if (error == boost::asio::error::message_size)
+                return ElegooDiscoveryDatagram{std::string(8193, ' '), {}, 0, false}; // count truncated packets in the receive budget
+            if (error || !sender.address().is_v4()) return std::nullopt;
+            return ElegooDiscoveryDatagram{std::string(bytes.data(), size), sender.address().to_string(), sender.port(),
+                elegoo_reply_on_interface(sender.address().to_v4().to_uint(), item.interface.address, item.interface.netmask)};
+        }
+        void idle() override { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+    } transport(*cancelled);
+    return run_elegoo_discovery(transport, found);
+}
+
+PrinterLinkResult check_printer_connection(const DiscoveredPrinter& p, const std::string& code, const std::atomic<bool>* cancelled,
+                                           std::string* serial, const std::string& certificate_pin, std::string* certificate)
+{
+    if (cancelled && cancelled->load()) return {PrinterLinkStatus::unreachable, PrinterLinkFailure::cancelled};
     // As in MultiSlicer's printer_monitor.rs, each device is checked separately.
     // Authentication proves a connection; accepting a TCP socket alone does not.
     if (p.vendor == "bambu") {
-        if (code.empty()) return PrinterLinkStatus::refused;
+        if (code.empty()) return {PrinterLinkStatus::refused, PrinterLinkFailure::missing_credentials};
+        boost::system::error_code address_error;
+        const auto address = boost::asio::ip::make_address(p.address, address_error);
+        if (address_error) return {PrinterLinkStatus::unreachable, PrinterLinkFailure::invalid_address};
         boost::asio::io_context io;
         boost::asio::ssl::context context(boost::asio::ssl::context::tls_client);
-        // Bambu's LAN endpoint uses its own self-signed certificate, as in
-        // MultiSlicer's printer_link.rs. This path only accepts a saved IP.
-        context.set_verify_mode(boost::asio::ssl::verify_none);
+        // Bambu's LAN endpoint presents a device-issued certificate that no local
+        // CA verifies. Trust comes from the saved fingerprint instead: the leaf
+        // certificate is captured here and compared before the access code is sent.
+        context.set_verify_mode(boost::asio::ssl::verify_peer);
         boost::asio::ssl::stream<boost::asio::ip::tcp::socket> stream(io, context);
+        std::string presented;
+        stream.set_verify_callback([&presented](bool, boost::asio::ssl::verify_context& verify) {
+            X509_STORE_CTX* store = verify.native_handle();
+            if (X509_STORE_CTX_get_error_depth(store) == 0)
+                presented = certificate_sha256(X509_STORE_CTX_get_current_cert(store));
+            return true;
+        });
         boost::asio::steady_timer timeout(io, std::chrono::seconds(4));
         boost::asio::steady_timer cancellation(io);
-        PrinterLinkStatus result = PrinterLinkStatus::unreachable;
+        PrinterLinkResult result;
         bool finished = false;
         std::array<unsigned char, 4> answer{};
         static std::atomic<uint64_t> client_number{0};
@@ -206,17 +292,34 @@ PrinterLinkStatus check_printer_connection(const DiscoveredPrinter& p, const std
             cancellation.cancel(ignored);
             stream.lowest_layer().close(ignored);
         };
-        timeout.async_wait([&](const boost::system::error_code& ec) { if (!ec && !finished) finish(); });
-        stream.lowest_layer().async_connect({boost::asio::ip::make_address(p.address), static_cast<unsigned short>(p.port ? p.port : 8883)},
+        timeout.async_wait([&](const boost::system::error_code& ec) { if (!ec && !finished) { result.failure = PrinterLinkFailure::timeout; finish(); } });
+        stream.lowest_layer().async_connect({address, static_cast<unsigned short>(p.port ? p.port : 8883)},
             [&](const boost::system::error_code& ec) {
-                if (ec) { finish(); return; }
+                if (finished) return;
+                if (ec) {
+                    result.failure = ec == boost::asio::error::connection_refused ? PrinterLinkFailure::connection_refused : PrinterLinkFailure::unreachable;
+                    finish(); return;
+                }
                 stream.async_handshake(boost::asio::ssl::stream_base::client, [&](const boost::system::error_code& ec) {
-                    if (ec) { finish(); return; }
+                    if (finished) return;
+                    if (ec) { result.failure = PrinterLinkFailure::handshake; finish(); return; }
+                    if (certificate) *certificate = presented;
+                    switch (compare_certificate_pin(certificate_pin, presented)) {
+                    case CertificatePin::missing: result.failure = PrinterLinkFailure::handshake; finish(); return;
+                    // Another device, or a reset printer, answered at the saved address.
+                    // Never send it the access code; the user re-trusts it explicitly.
+                    case CertificatePin::changed:
+                        result = {PrinterLinkStatus::refused, PrinterLinkFailure::certificate_changed};
+                        finish(); return;
+                    case CertificatePin::first_use:
+                    case CertificatePin::matched: break;
+                    }
                     boost::asio::async_write(stream, boost::asio::buffer(packet), [&](const boost::system::error_code& ec, size_t) {
-                        if (ec) { finish(); return; }
+                        if (finished) return;
+                        if (ec) { result.failure = PrinterLinkFailure::send; finish(); return; }
                         boost::asio::async_read(stream, boost::asio::buffer(answer), [&](const boost::system::error_code& ec, size_t) {
-                            if (!ec && answer[0] == 0x20 && answer[1] == 0x02 && (answer[2] & 0xfe) == 0)
-                                result = answer[3] == 0 ? PrinterLinkStatus::connected : PrinterLinkStatus::refused;
+                            if (finished) return;
+                            result = ec ? PrinterLinkResult{PrinterLinkStatus::unreachable, PrinterLinkFailure::receive} : printer_mqtt_response(answer);
                             finish();
                         });
                     });
@@ -225,7 +328,7 @@ PrinterLinkStatus check_printer_connection(const DiscoveredPrinter& p, const std
         std::function<void()> check_cancel;
         check_cancel = [&] {
             if (!cancelled || finished) return;
-            if (cancelled->load()) { finish(); return; }
+            if (cancelled->load()) { result.failure = PrinterLinkFailure::cancelled; finish(); return; }
             cancellation.expires_after(std::chrono::milliseconds(100));
             cancellation.async_wait([&](const boost::system::error_code& ec) { if (!ec) check_cancel(); });
         };
@@ -233,7 +336,35 @@ PrinterLinkStatus check_printer_connection(const DiscoveredPrinter& p, const std
         io.run();
         return result;
     }
-    PrinterLinkStatus result = PrinterLinkStatus::unreachable;
+    PrinterLinkResult result;
+    if (p.vendor == "elegoo") {
+        if (!p.local_control) return {PrinterLinkStatus::unreachable, PrinterLinkFailure::printer_not_ready};
+        if (discovered_printer_requires_code(p) && code.empty()) return {PrinterLinkStatus::refused, PrinterLinkFailure::missing_credentials};
+        const auto endpoint = saved_printer_device_id(p);
+        // The token travels only in the header, which the CC2's authenticated
+        // upload endpoint already accepts, so it never lands in URL logs.
+        auto request = Http::get("http://" + endpoint +
+            (elegoo_printer_type(p.model) == ElegooPrinterType::CC2 ? "/system/info" : "/"));
+        request.header("X-Token", elegoo_cc2_token(code));
+        request.timeout_connect(2).timeout_max(4).size_limit(65536)
+            .on_progress([cancelled](Http::Progress, bool& abort) { abort = cancelled && cancelled->load(); })
+            .on_complete([&](std::string body, unsigned status) {
+                if (elegoo_printer_type(p.model) == ElegooPrinterType::CC2) {
+                    const auto info = parse_elegoo_cc2_info(body, status, p.serial);
+                    result = info.connection;
+                    if (serial && result.status == PrinterLinkStatus::connected) *serial = info.serial;
+                } else if (status >= 200 && status < 300 &&
+                           (body.find("ELEGOO") != std::string::npos || body.find("Elegoo") != std::string::npos))
+                    // No CC identity reply is specified yet. As in ElegooLink's own
+                    // test, this shows only that its upload service answered.
+                    result = {PrinterLinkStatus::connected, PrinterLinkFailure::none};
+                else result = printer_http_response("elegoo", {}, status);
+            }).on_error([&](std::string, std::string, unsigned status) {
+                result = printer_http_response("elegoo", {}, status);
+            }).perform_sync();
+        if (cancelled && cancelled->load()) return {PrinterLinkStatus::unreachable, PrinterLinkFailure::cancelled};
+        return result;
+    }
     const std::string host = "http://" + p.address;
     auto http = p.vendor == "flashforge" ? Http::post(host + ":8898/detail") :
                 Http::get((p.vendor == "snapmaker" || p.vendor == "moonraker") ?
@@ -246,19 +377,15 @@ PrinterLinkStatus check_printer_connection(const DiscoveredPrinter& p, const std
         http.header("X-Api-Key", code);
     http.on_progress([cancelled](Http::Progress, bool& abort) { if (cancelled && cancelled->load()) abort = true; });
     http.timeout_connect(2).timeout_max(4).size_limit(65536)
-        .on_complete([&](std::string body, unsigned) {
-            try {
-                const auto j = nlohmann::json::parse(body);
-                const bool verified = p.vendor == "flashforge" ? j.value("code", -1) == 0 && j.contains("detail") && j["detail"].is_object() :
-                                      p.vendor == "creality" ? j.contains("model") && j["model"].is_string() :
-                                      p.vendor == "octoprint" ? j.contains("server") && j.contains("api") :
-                                      j.contains("result") && j["result"].is_object() && j["result"].value("klippy_connected", false);
-                if (verified) result = PrinterLinkStatus::connected;
-                else if (p.vendor == "flashforge" && j.value("code", 0) != 0) result = PrinterLinkStatus::refused;
-            } catch (const nlohmann::json::exception&) {}
+        .on_complete([&](std::string body, unsigned status) {
+            result = printer_http_response(p.vendor, body, status);
         }).on_error([&](std::string, std::string, unsigned status) {
-            if (status == 401 || status == 403) result = PrinterLinkStatus::refused;
+            // Do not retain the raw error or response body: either may contain
+            // addresses, access codes or other server-supplied private data.
+            result = printer_http_response(p.vendor, {}, status);
         }).perform_sync();
+    if (cancelled && cancelled->load())
+        return {PrinterLinkStatus::unreachable, PrinterLinkFailure::cancelled};
     return result;
 }
 } // namespace Slic3r

@@ -2,6 +2,8 @@
 #include "GUI_App.hpp"
 #include "I18N.hpp"
 #include "Field.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 #include "libslic3r/GCode/Thumbnails.hpp"
 #include "wxExtensions.hpp"
 #include "Plater.hpp"
@@ -76,6 +78,7 @@
 #include "Widgets/CheckBox.hpp"
 #include "Widgets/TextInput.hpp"
 #include "Widgets/SpinInput.hpp"
+#include "Widgets/StaticBox.hpp"
 #include "Widgets/ComboBox.hpp"
 #include "Widgets/TextCtrl.h"
 
@@ -829,6 +832,71 @@ void Field::sys_color_changed()
 	if (wxWindow* win = this->getWindow())
 		wxGetApp().UpdateDarkUI(win);
 #endif
+}
+
+void Field::apply_compact_sidebar()
+{
+    // Descriptions, custom editors and multiline values keep their native sizing.
+    if (m_opt.multiline || m_opt.full_width || m_opt.is_code)
+        return;
+    wxWindow* win = getWindow();
+    auto* input = dynamic_cast<::TextInput*>(win);
+    auto* spin = dynamic_cast<::SpinInput*>(win);
+    if (!input && !spin)
+        return;
+    if (input)
+        input->SetSidebarStyle();
+
+    using namespace DesignSystem;
+    const bool dark = wxGetApp().dark_mode();
+    const auto color = [dark](ColorRole role) { return wxColour(color_hex(role, dark)); };
+    const auto state = [&color](ColorRole role, int flags) { return std::make_pair(color(role), flags); };
+    // Keep the existing locale's CJK face while adopting the token's size and weight.
+    wxFont body = Label::Body_14;
+    body.SetFractionalPointSize(font_points(type_token(TypeStyle::Body).size));
+    body.SetNumericWeight(type_token(TypeStyle::Body).weight);
+    wxFont caption = body;
+    caption.SetFractionalPointSize(font_points(type_token(TypeStyle::Caption).size));
+    const bool readonly_choice = dynamic_cast<::ComboBox*>(input) && (win->GetWindowStyleFlag() & wxCB_READONLY);
+    wxTextCtrl* text = input ? input->GetTextCtrl() : spin->GetTextCtrl();
+    win->SetFont(body);
+    win->wxWindow::SetFont(readonly_choice ? body : caption);
+    text->SetFont(body);
+    const int text_height = text->GetTextExtent("Ag").y + win->FromDIP(2);
+    text->SetSize(-1, text_height);
+    const wxSize size(win->FromDIP(126), std::max(win->FromDIP(28), text_height + win->FromDIP(8)));
+    auto* box = input ? static_cast<::StaticBox*>(input) : static_cast<::StaticBox*>(spin);
+    box->SetCornerRadius(win->FromDIP(6));
+    box->SetBackgroundColor(StateColor::resolved(StateColor(state(ColorRole::Surface, StateColor::Disabled),
+                                                           state(ColorRole::Field, StateColor::Normal))));
+    box->SetBorderColor(StateColor::resolved(StateColor(state(ColorRole::Line, StateColor::Disabled),
+                                                       state(ColorRole::Focus, StateColor::Focused),
+                                                       state(ColorRole::LineControl, StateColor::Normal))));
+    const StateColor ink = StateColor::resolved(StateColor(state(ColorRole::InkDisabled, StateColor::Disabled),
+                                                          state(ColorRole::Ink, StateColor::Normal)));
+    const StateColor muted = StateColor::resolved(StateColor(state(ColorRole::InkDisabled, StateColor::Disabled),
+                                                            state(ColorRole::InkMuted, StateColor::Normal)));
+    if (input) {
+        input->SetTextColor(ink);
+        input->SetLabelColor(readonly_choice ? ink : muted);
+        input->SetMinSize(size);
+        input->SetSize(size);
+        // ComboBox::SetLabel changes its value; refresh the unit label through
+        // the base widget without emitting a settings edit.
+        input->TextInput::SetLabel(input->wxWindow::GetLabel());
+    } else {
+        spin->SetTextColor(ink);
+        spin->SetLabelColor(muted);
+        spin->SetMinSize(size);
+        spin->SetSize(size);
+        spin->SetLabel(spin->GetLabel());
+    }
+    // The native editor paints its own rectangle independently of the wrapper.
+    // Apply the same resolved palette immediately on creation and theme changes.
+    text->SetBackgroundColour(color(win->IsEnabled() ? ColorRole::Field : ColorRole::Surface));
+    text->SetForegroundColour(color(win->IsEnabled() ? ColorRole::Ink : ColorRole::InkDisabled));
+    text->Refresh();
+    win->Refresh();
 }
 
 std::vector<std::deque<wxWindow *>**> spools;

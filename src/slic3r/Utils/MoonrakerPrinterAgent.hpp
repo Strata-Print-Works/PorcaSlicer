@@ -7,8 +7,10 @@
 #include <functional>
 #include <cstdint>
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -16,7 +18,7 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 
-namespace Slic3r { class ICloudServiceAgent; }
+namespace Slic3r { class ICloudServiceAgent; class Http; }
 
 namespace Slic3r {
 
@@ -102,6 +104,17 @@ protected:
     // Methods that derived classes may need to override or access
     virtual bool init_device_info(const std::string& dev_id, const std::string& dev_ip, const std::string& username, const std::string& password, bool use_ssl, const std::string& port);
     virtual bool fetch_device_info(const std::string& base_url, const std::string& api_key, MoonrakerDeviceInfo& info, std::string& error) const;
+    virtual bool query_printer_status(const std::string& base_url, const std::string& api_key, nlohmann::json& status, std::string& error) const;
+    virtual bool fetch_json(const std::string& base_url, const std::string& path, const std::string& api_key,
+                            nlohmann::json& response, std::string& error) const;
+    virtual void run_status_stream(std::string dev_id, std::string base_url, std::string api_key, uint64_t generation);
+    virtual bool wait_status_poll(uint64_t generation);
+    // Starts one G-code request on its own thread. `done` may run after this
+    // agent is gone; send_gcode_async() gives it its own lifetime guard.
+    virtual std::shared_ptr<Http> post_gcode_async(const std::string& base_url, const std::string& api_key,
+                                                   const std::string& gcode, std::function<void(bool)> done) const;
+    // Derived transports must stop workers before destroying their own state.
+    void shutdown_connection();
 
     // State access for derived classes
     mutable std::recursive_mutex       state_mutex;
@@ -119,23 +132,26 @@ protected:
     static std::string map_filament_type_to_generic_id(const std::string& filament_type);
 
 private:
+    struct AsyncRequests;
+    std::shared_ptr<AsyncRequests> async_requests;
+
     int handle_request(const std::string& dev_id, const std::string& json_str);
     int send_version_info(const std::string& dev_id);
     int send_access_code(const std::string& dev_id);
 
     bool fetch_object_list(const std::string& base_url, const std::string& api_key, std::set<std::string>& objects, std::string& error) const;
-    bool query_printer_status(const std::string& base_url, const std::string& api_key, nlohmann::json& status, std::string& error) const;
     bool send_gcode_sync(const std::string& dev_id, const std::string& gcode) const;
     void send_gcode_async(const std::string& dev_id, const std::string& gcode,
                           std::function<void(bool)> on_result = {}) const;
 
     void announce_printhost_device();
-    void dispatch_local_connect(int state, const std::string& dev_id, const std::string& msg);
-    void dispatch_printer_connected(const std::string& dev_id);
-    void dispatch_message(const std::string& dev_id, const std::string& payload);
-    void start_status_stream(const std::string& dev_id, const std::string& base_url, const std::string& api_key);
+    void dispatch_local_connect(int state, const std::string& dev_id, const std::string& msg, uint64_t generation);
+    void dispatch_printer_connected(const std::string& dev_id, uint64_t generation);
+    void dispatch_message(const std::string& dev_id, const std::string& payload,
+                          std::optional<uint64_t> generation = std::nullopt);
+    void run_status_polling(const std::string& dev_id, const std::string& base_url, const std::string& api_key, uint64_t generation);
+    void start_status_stream(const std::string& dev_id, const std::string& base_url, const std::string& api_key, uint64_t generation);
     void stop_status_stream();
-    void run_status_stream(std::string dev_id, std::string base_url, std::string api_key);
     void handle_ws_message(const std::string& dev_id, const std::string& payload);
     void update_status_cache(const nlohmann::json& updates);
     nlohmann::json build_print_payload_locked() const;
@@ -155,6 +171,7 @@ private:
                               const nlohmann::json& request, std::string& response) const;
 
     // Connection thread management
+    void run_connection_worker();
     void perform_connection_async(const std::string& dev_id,
                                    const std::string& base_url,
                                    const std::string& api_key,
@@ -204,9 +221,25 @@ private:
     std::string last_print_state;  // Track state for immediate dispatch on change
 
     // Connection thread management
-    std::atomic<uint64_t>  connect_generation{0};
+    std::shared_ptr<std::atomic<uint64_t>> connect_generation = std::make_shared<std::atomic<uint64_t>>(0);
     std::thread            connect_thread;
-    std::recursive_mutex   connect_mutex;
+    // Lock order: connect_mutex -> state_mutex -> payload_mutex.
+    // connect_mutex guards the connection lifecycle (pending request, stop flags,
+    // generation-checked commits) and is the only mutex connect_cv waits on, so a
+    // wait always releases it completely. It is never recursive: never lock it or
+    // wait on connect_cv while holding state_mutex or payload_mutex. device_info is
+    // written with connect_mutex and state_mutex both held, so command snapshots
+    // read it under state_mutex alone. Transport I/O stays outside all three.
+    std::mutex             connect_mutex;
+    std::condition_variable connect_cv;
+    struct ConnectionRequest {
+        std::string dev_id;
+        std::string base_url;
+        std::string api_key;
+        uint64_t generation;
+    };
+    std::optional<ConnectionRequest> pending_connection;
+    bool connection_stopping = false;
 };
 
 } // namespace Slic3r

@@ -1,6 +1,7 @@
 #ifndef slic3r_GUI_SIDETOOLS_hpp_
 #define slic3r_GUI_SIDETOOLS_hpp_
 
+#include "StateColor.hpp"
 #include <string>
 #include <wx/dc.h>
 #include <wx/dcgraph.h>
@@ -20,7 +21,7 @@
 #define SIDE_TOOLS_GREY900 wxColour(38, 46, 48)
 #define SIDE_TOOLS_GREY600 wxColour(144, 144, 144)
 #define SIDE_TOOLS_GREY400 wxColour(206, 206, 206)
-#define SIDE_TOOLS_BRAND wxColour(0, 150, 136)
+#define SIDE_TOOLS_BRAND StateColor::darkModeColorFor(wxColour("#009688"))
 #define SIDE_TOOLS_LIGHT_GREEN wxColour(219, 253, 231)
 
 enum WifiSignal {

@@ -152,6 +152,22 @@ TEST_CASE("A saved printer follows its serial to a new address and retains its p
     CHECK(printers[0].key() == first.key());
 }
 
+TEST_CASE("A generic Flashforge rescan retains the explicitly selected model and nozzle", "[DiscoveredPrinter]")
+{
+    DiscoveredPrinter saved{"flashforge", "Workshop", "Flashforge Adventurer 5M", "SERIAL-TEST",
+                            "192.0.2.10", 8899, true, "Flashforge Adventurer 5M 0.4 nozzle"};
+    std::vector<DiscoveredPrinter> printers{saved};
+    DiscoveredPrinter scanned = saved;
+    scanned.model = "Flashforge";
+    scanned.preset.clear();
+    scanned.address = "192.0.2.11";
+    CHECK_FALSE(merge_discovered_printer(printers, scanned));
+    REQUIRE(printers.size() == 1);
+    CHECK(printers[0].model == saved.model);
+    CHECK(printers[0].preset == saved.preset);
+    CHECK(printers[0].address == scanned.address);
+}
+
 TEST_CASE("Two vendors or serials remain separate devices at the same address", "[DiscoveredPrinter]")
 {
     auto first = *parse_bambu_printer_notice(notice, "192.168.1.20");

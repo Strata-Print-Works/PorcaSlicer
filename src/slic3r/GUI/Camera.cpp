@@ -289,12 +289,31 @@ void Camera::apply_viewport() const
     glsafe(::glViewport(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3]));
 }
 
-void Camera::apply_projection(const BoundingBoxf3& box, double near_z, double far_z)
+void Camera::apply_projection(const BoundingBoxf3& box, double near_z, double far_z, bool fixed_fov)
 {
     double w = 0.0;
     double h = 0.0;
 
-    m_frustrum_zs = calc_tight_frustrum_zs_around(box);
+    // Keep zoom expressed as pixels per world unit at the target plane, so
+    // fitting, panning and cursor-anchored zoom use the same scale in both modes.
+    const bool move_camera = fixed_fov && m_type == EType::Perspective;
+    const double lens_scale = 0.5 * double(m_viewport[3]) / std::tan(Geometry::deg2rad(45.0) * 0.5);
+    if (move_camera) {
+        // A zero-height viewport (collapsed or not yet laid out) has no lens scale.
+        // Keep the current distance and zoom for the next real frame.
+        if (lens_scale > 0.0 && m_zoom > 0.0) {
+            set_distance(std::clamp(lens_scale / m_zoom, 1.0, 1.0e6));
+            m_zoom = lens_scale / m_distance;
+        }
+        // Camera movement may enter the workspace bounds when inspecting a small
+        // object. Clip geometry behind the eye instead of pushing the camera
+        // back outside the entire multi-plate scene.
+        const BoundingBoxf3 eye_box = box.transformed(m_view_matrix);
+        const double near_plane = std::max(0.1, std::min(FrustrumMinNearZ, m_distance * 0.05));
+        m_frustrum_zs = {near_plane, std::max(near_plane + FrustrumMinZRange, -eye_box.min.z() + FrustrumZMargin)};
+    } else {
+        m_frustrum_zs = calc_tight_frustrum_zs_around(box);
+    }
 
     if (near_z > 0.0)
         m_frustrum_zs.first = std::max(std::min(m_frustrum_zs.first, near_z), FrustrumMinNearZ);
@@ -358,6 +377,42 @@ void Camera::apply_projection(double left, double right, double bottom, double t
         break;
     }
     }
+}
+
+void Camera::apply_screen_insets(double left, double right, double bottom)
+{
+    const double width = m_viewport[2], height = m_viewport[3];
+    if (width <= 0. || height <= 0.) return;
+    const double scale = std::clamp(std::min((width - left - right) / width, (height - bottom) / height), 0.1, 1.);
+    Matrix4d inset = Matrix4d::Identity();
+    inset(0, 0) = scale;
+    inset(1, 1) = scale;
+    inset(0, 3) = (left - right) / width;
+    inset(1, 3) = bottom / height;
+    // The camera stores a projective matrix in Transform3d. Multiplying it as
+    // an affine transform discards its W row and clips the perspective scene.
+    m_projection_matrix.matrix() = inset * m_projection_matrix.matrix();
+}
+
+bool Camera::is_box_visible(const BoundingBoxf3& box) const
+{
+    if (!box.defined) return false;
+    const Matrix4d view_projection = m_projection_matrix.matrix() * m_view_matrix.matrix();
+    unsigned int outside_planes = 0x3f;
+    for (int corner = 0; corner < 8; ++corner) {
+        const Vec4d clip = view_projection * Vec4d(
+            corner & 1 ? box.max.x() : box.min.x(),
+            corner & 2 ? box.max.y() : box.min.y(),
+            corner & 4 ? box.max.z() : box.min.z(), 1.);
+        unsigned int outside = 0;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (clip[axis] < -clip.w()) outside |= 1u << (2 * axis);
+            if (clip[axis] > clip.w()) outside |= 1u << (2 * axis + 1);
+        }
+        outside_planes &= outside;
+        if (outside_planes == 0) return true;
+    }
+    return false;
 }
 
 void Camera::zoom_to_box(const BoundingBoxf3& box, double margin_factor)

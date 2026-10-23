@@ -1,23 +1,44 @@
+# Directory-only target paths in worker copy commands must not create a reverse
+# dependency on the executable that consumes the copy.
+if (POLICY CMP0112)
+    cmake_policy(SET CMP0112 NEW)
+endif ()
+
 get_filename_component(_TEST_NAME ${CMAKE_CURRENT_LIST_DIR} NAME)
 add_executable(${_TEST_NAME}_tests
     ${_TEST_NAME}_tests_main.cpp
     test_bambu_filament_ids.cpp
+    test_bambu_device_sessions.cpp
+    test_bambu_process_sessions.cpp
+    test_plugin_agent_owner.cpp
+    test_printer_sessions.cpp
+    test_network_device_sessions.cpp
+    test_printer_connection_status.cpp
     test_config_value_formatter.cpp
     test_creality_cfs_match.cpp
     test_dev_mapping.cpp
     test_filament_bitmap_utils.cpp
     test_device_progress.cpp
+    test_job_progress.cpp
     test_device_manager_integration.cpp
     test_web_media_controller.cpp
     test_scene_raycaster.cpp
+    test_workspace_scene.cpp
+    test_imgui_input.cpp
+    test_camera.cpp
+    test_undo_redo.cpp
+    test_preview_layout.cpp
+    test_preview_estimate.cpp
     test_scene_benchmark.cpp
     test_viewport_lighting.cpp
+    test_workspace_style.cpp
     test_lazy.cpp
     test_prebuild_queue.cpp
     test_staged_build.cpp
     test_network_versions.cpp
     test_orca_cloud_agent.cpp
     test_action_source.cpp
+    test_plugin_workspace.cpp
     test_plugin_host_api.cpp
     # Exercise seam enums and predicates through the embedded Python host API.
     test_precise_seam_plugin.cpp
@@ -26,12 +47,15 @@ add_executable(${_TEST_NAME}_tests
     test_plugin_capabilities_in_use.cpp
     test_plugin_status.cpp
     test_printer_agent.cpp
+    test_moonraker_printer_agent.cpp
     test_plugin_install.cpp
     test_plugin_lifecycle.cpp
     test_python_shutdown.cpp
     test_branding.cpp
+    test_live_toolbar_style.cpp
     test_plugin_printer_agent.cpp
     test_printhost.cpp
+    test_elegoo_link.cpp
     test_slicing_pipeline_bindings.cpp
     test_slicing_pipeline_config.cpp
     test_plugin_sort.cpp
@@ -39,6 +63,7 @@ add_executable(${_TEST_NAME}_tests
     test_plugin_audit.cpp
     test_plugin_json_depth.cpp
     test_shortcuts.cpp
+    test_settings_scope.cpp
     test_texture_color_palette.cpp
     test_texture_island_view.cpp
     test_file_url.cpp
@@ -56,6 +81,29 @@ endif ()
 
 target_link_libraries(${_TEST_NAME}_tests test_common libslic3r_gui libslic3r pybind11::embed Catch2::Catch2WithMain)
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
+
+add_library(porca_fake_bbl_plugin SHARED fake_bbl_plugin.cpp)
+target_include_directories(porca_fake_bbl_plugin PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/deps_src)
+target_link_libraries(porca_fake_bbl_plugin PRIVATE boost_headeronly libslic3r)
+add_library(porca_fake_bbl_missing SHARED fake_bbl_missing.cpp)
+add_library(porca_fake_bbl_badabi SHARED fake_bbl_missing.cpp)
+target_compile_definitions(porca_fake_bbl_badabi PRIVATE PORCA_FAKE_VERSION="02.08.01.00")
+add_dependencies(${_TEST_NAME}_tests porca_fake_bbl_plugin porca_fake_bbl_missing porca_fake_bbl_badabi porca_bambu_worker)
+# CMP0112 is set NEW at the top of this file when available.
+if (POLICY CMP0112)
+    add_custom_target(porca_bambu_worker_test_copy
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${_TEST_NAME}_tests>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:porca_bambu_worker>" "$<TARGET_FILE_DIR:${_TEST_NAME}_tests>/$<TARGET_FILE_NAME:porca_bambu_worker>"
+        DEPENDS porca_bambu_worker VERBATIM)
+    add_dependencies(${_TEST_NAME}_tests porca_bambu_worker_test_copy)
+else ()
+    set_property(TARGET ${_TEST_NAME}_tests APPEND PROPERTY LINK_DEPENDS "$<TARGET_FILE:porca_bambu_worker>")
+    add_custom_command(TARGET ${_TEST_NAME}_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:porca_bambu_worker>" "$<TARGET_FILE_DIR:${_TEST_NAME}_tests>/$<TARGET_FILE_NAME:porca_bambu_worker>"
+        VERBATIM)
+endif ()
+target_compile_definitions(${_TEST_NAME}_tests PRIVATE PORCA_BAMBU_WORKER="$<TARGET_FILE_NAME:porca_bambu_worker>")
+target_compile_definitions(${_TEST_NAME}_tests PRIVATE PORCA_FAKE_BBL_PLUGIN="$<TARGET_FILE_NAME:porca_fake_bbl_plugin>")
 
 orcaslicer_copy_test_dlls(${_TEST_NAME}_tests)
 

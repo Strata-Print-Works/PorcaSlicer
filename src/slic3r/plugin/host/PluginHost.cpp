@@ -44,6 +44,7 @@ void PluginHost::RegisterBindings(pybind11::module_& module)
 
     // Measurement of the live plate, marshaled to the UI thread.
     host_bindings::register_measure(host);
+    host_bindings::register_workspace(host);
 
     // UI: native dialogs and interactive HTML windows for plugins.
     PluginHostUi::RegisterBindings(host);

@@ -1,5 +1,9 @@
 #include "wxMediaCtrl3.h"
 #include "AVVideoDecoder.hpp"
+#include "I18N.hpp"
+#include "Widgets/Label.hpp"
+#include "DesignTokens.hpp"
+#include <wx/brush.h>
 #include <algorithm>
 #include <boost/log/trivial.hpp>
 #include "slic3r/GUI/Printer/BambuTunnel.h"
@@ -58,7 +62,7 @@ wxMediaCtrl3::~wxMediaCtrl3()
     {
         std::unique_lock<std::mutex> lk(m_mutex);
         m_url.reset(new wxURI);
-        m_frame = wxImage(m_idle_image);
+        m_frame = m_idle_image.empty() ? wxImage() : wxImage(m_idle_image);
         m_cond.notify_all();
     }
     m_thread.join();
@@ -95,7 +99,7 @@ void wxMediaCtrl3::Stop()
 {
     std::unique_lock<std::mutex> lk(m_mutex);
     m_url.reset();
-    m_frame = wxImage(m_idle_image);
+    m_frame = m_idle_image.empty() ? wxImage() : wxImage(m_idle_image);
     NotifyStopped();
     m_cond.notify_all();
     Refresh();
@@ -140,7 +144,7 @@ void wxMediaCtrl3::BeginExternalStream()
     m_url.reset();
     m_active_url.reset();
     m_video_size = wxDefaultSize;
-    m_frame = wxImage(m_idle_image);
+    m_frame = m_idle_image.empty() ? wxImage() : wxImage(m_idle_image);
     m_cond.notify_all();
     Refresh();
 }
@@ -152,20 +156,19 @@ void wxMediaCtrl3::EndExternalStream()
     m_url.reset();
     m_active_url.reset();
     m_video_size = wxDefaultSize;
-    m_frame = wxImage(m_idle_image);
+    m_frame = m_idle_image.empty() ? wxImage() : wxImage(m_idle_image);
     m_cond.notify_all();
     Refresh();
 }
 
 void wxMediaCtrl3::SetIdleImage(wxString const &image)
 {
+    std::unique_lock<std::mutex> lk(m_mutex);
     if (m_idle_image == image)
         return;
     m_idle_image = image;
     if (m_url == nullptr) {
-        std::unique_lock<std::mutex> lk(m_mutex);
-        m_frame = wxImage(m_idle_image);
-        assert(m_frame.IsOk());
+        m_frame = m_idle_image.empty() ? wxImage() : wxImage(m_idle_image);
         Refresh();
     }
 }
@@ -207,9 +210,17 @@ void wxMediaCtrl3::paintEvent(wxPaintEvent &evt)
     auto      size = GetSize();
     if (size.x <= 0 || size.y <= 0)
         return;
+    dc.SetBackground(wxBrush(GetBackgroundColour()));
+    dc.Clear();
     std::unique_lock<std::mutex> lk(m_mutex);
-    if (!m_frame.IsOk())
+    if (!m_frame.IsOk()) {
+        dc.SetFont(Label::Body_14);
+        dc.SetTextForeground(wxColour(Slic3r::GUI::DesignSystem::color_hex(Slic3r::GUI::DesignSystem::ColorRole::InkMuted, true)));
+        const wxString text = _L("No camera image");
+        const wxSize extent = dc.GetTextExtent(text);
+        dc.DrawText(text, (size.x - extent.x) / 2, (size.y - extent.y) / 2);
         return;
+    }
     auto size2 = m_frame.GetSize();
     if (size2.x != m_frame_size.x && size2.y == m_frame_size.y)
         size2.x = m_frame_size.x;
@@ -493,7 +504,7 @@ void wxMediaCtrl3::PlayThread()
         } else {
             lk.unlock();
             Bambu_Tunnel tunnel = nullptr;
-            error = Bambu_Create(&tunnel, m_url->BuildURI().ToUTF8());
+            error = Bambu_Create(&tunnel, url->BuildURI().ToUTF8());
             if (error == 0) {
                 Bambu_SetLogger(tunnel, &wxMediaCtrl3::bambu_log, this);
                 error = Bambu_Open(tunnel);

@@ -38,10 +38,24 @@ set(lisbslic3r_sources
     AnyPtr.hpp
     AppConfig.cpp
     AppConfig.hpp
+    PlateMaterialTransfer.cpp
+    PlateMaterialTransfer.hpp
     PlatePrintSetup.cpp
     PlatePrintSetup.hpp
+    PlateCapacity.hpp
+    ProjectPlateImport.cpp
+    ProjectPlateImport.hpp
+    PlateSliceBatch.cpp
+    PlateSliceBatch.hpp
+    ProductionLedger.cpp
+    ProductionLedger.hpp
+    FilamentUsage.cpp
+    FilamentUsage.hpp
     DiscoveredPrinter.cpp
+    PrintDeliveryValidation.cpp
+    PrintDeliveryValidation.hpp
     DiscoveredPrinter.hpp
+    ElegooDiscovery.hpp
     Arachne/BeadingStrategy/BeadingStrategy.cpp
     Arachne/BeadingStrategy/BeadingStrategyFactory.cpp
     Arachne/BeadingStrategy/BeadingStrategyFactory.hpp
@@ -83,6 +97,9 @@ set(lisbslic3r_sources
     ArcFitter.hpp
     Arrange.cpp
     Arrange.hpp
+    PlateLayout.cpp
+    PlateLayout.hpp
+    SelectionAlignment.hpp
     BlacklistedLibraryCheck.cpp
     BlacklistedLibraryCheck.hpp
     BoundingBox.cpp

@@ -110,17 +110,20 @@ public:
     /**
      * Create a printer agent by registry/config key
      *
-     * Returns a cached instance if one exists for the given key, otherwise
-     * creates a new agent via the registered factory and caches it.
+     * Returns a cached instance for the backend and optional device key.
+     * Audited instance-owned built-ins use separate instances per device key;
+     * Bambu and plugin capabilities retain their singleton contract.
      *
      * @param id Agent registry/config key to create
      * @param cloud_agent Cloud agent for token access
      * @param log_dir Directory for log files
+     * @param device_key Stable host/port identity for instance-owned built-ins
      * @return Shared pointer to IPrinterAgent, or nullptr if ID not found
      */
     static std::shared_ptr<IPrinterAgent> create_printer_agent_by_id(const std::string&                  id,
                                                                      std::shared_ptr<ICloudServiceAgent> cloud_agent,
-                                                                     const std::string&                  log_dir);
+                                                                     const std::string&                  log_dir,
+                                                                     const std::string&                  device_key = {});
 
     /**
      * Clear the printer agent cache.
@@ -128,6 +131,7 @@ public:
      * Should be called during application shutdown before destroying the NetworkAgent.
      */
     static void clear_printer_agent_cache();
+    static void release_printer_agent(const std::shared_ptr<IPrinterAgent>& agent);
 
     // ========================================================================
     // Cloud Agent Factory

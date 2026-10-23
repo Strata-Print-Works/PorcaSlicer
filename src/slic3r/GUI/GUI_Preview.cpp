@@ -263,6 +263,8 @@ Preview::Preview(
 
 void Preview::update_gcode_result(GCodeProcessorResult* gcode_result)
 {
+    if (m_gcode_result != gcode_result)
+        m_loaded_print = nullptr;
     m_gcode_result = gcode_result;
 
     return;
@@ -648,6 +650,18 @@ void Preview::load_print_as_fff(bool keep_z_range, bool only_gcode)
 
     //BBS: add m_loaded_print logic
     const Print *print = m_process->fff_print();
+    const auto* plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
+    const bool result_valid = m_gcode_result != nullptr && !m_gcode_result->moves.empty() &&
+        (only_gcode || (plate != nullptr && plate->is_slice_result_valid() && !plate->is_apply_result_invalid()));
+    // A plate switch or settings edit can leave the previous toolpaths loaded even
+    // when this print has no layers. Clear them before either early return below;
+    // retaining shells is useful, retaining another plate's totals and code is not.
+    if (!result_valid) {
+        m_loaded_print = nullptr;
+        if (m_canvas->get_gcode_viewer().has_data())
+            m_canvas->reset_gcode_toolpaths();
+        show_sliders(false);
+    }
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(" %1%: previous print %2%, new print %3%")%__LINE__ %m_loaded_print %print;
     if ((m_loaded_print&&(m_loaded_print == print)) || m_process->current_printer_technology() != ptFFF) {
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(" %1%: already loaded before, return directly")%__LINE__;
@@ -660,6 +674,10 @@ void Preview::load_print_as_fff(bool keep_z_range, bool only_gcode)
     bool has_layers = false;
     //BBS: always load shell at preview
     load_shells(*print, true);
+    if (m_gcode_result == nullptr) {
+        m_canvas_widget->Refresh();
+        return;
+    }
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(" %1%: print: %2%, gcode_result %3%, check started")%__LINE__ %print %m_gcode_result;
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" %1%: print is step done, posSlice %2%, posSupportMaterial %3%, psGCodeExport %4%") % __LINE__ % print->is_step_done(posSlice) %print->is_step_done(posSupportMaterial) % print->is_step_done(psGCodeExport);
     if (print->is_step_done(posSlice)) {
@@ -678,7 +696,7 @@ void Preview::load_print_as_fff(bool keep_z_range, bool only_gcode)
     }
 
     //BBS: support preview gcode directly even if no slicing
-    bool directly_preview = print->is_step_done(psGCodeExport) && !m_gcode_result->moves.empty();
+    bool directly_preview = print->is_step_done(psGCodeExport) && result_valid;
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": directly_preview: %1%, gcode_result moves %2%, has_layers %3%") % directly_preview % m_gcode_result->moves.size() %has_layers;
     if (wxGetApp().is_editor() && !has_layers && !directly_preview) {
         show_sliders(false);
@@ -706,8 +724,7 @@ void Preview::load_print_as_fff(bool keep_z_range, bool only_gcode)
 
     if (IsShown()) {
         m_canvas->set_selected_extruder(0);
-        bool is_slice_result_valid = wxGetApp().plater()->get_partplate_list().get_curr_plate()->is_slice_result_valid();
-        if (gcode_preview_data_valid && (is_slice_result_valid || only_gcode)) {
+        if (gcode_preview_data_valid && result_valid) {
             // Load the real G-code preview.
             //BBS: add more log
             BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": will load gcode_preview from result, moves count %1%") % m_gcode_result->moves.size();

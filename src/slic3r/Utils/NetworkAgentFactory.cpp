@@ -3,6 +3,8 @@
 #include "IPrinterAgent.hpp"
 #include "ICloudServiceAgent.hpp"
 #include "BBLPrinterAgent.hpp"
+#include "BambuLanProcess.hpp"
+#include <boost/dll/runtime_symbol_info.hpp>
 #include "OrcaPrinterAgent.hpp"
 #include "QidiPrinterAgent.hpp"
 #include "SnapmakerPrinterAgent.hpp"
@@ -27,6 +29,7 @@
 #include <wx/msgdlg.h>
 #include <wx/string.h>
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/Utils.hpp"
 
 namespace Slic3r {
 namespace {
@@ -132,13 +135,18 @@ std::vector<PrinterAgentInfo> NetworkAgentFactory::get_registered_printer_agents
 
 std::shared_ptr<IPrinterAgent> NetworkAgentFactory::create_printer_agent_by_id(const std::string& id,
                                                                                std::shared_ptr<ICloudServiceAgent> cloud_agent,
-                                                                               const std::string& log_dir)
+                                                                               const std::string& log_dir,
+                                                                               const std::string& device_key)
 {
     std::lock_guard<std::mutex> lock(s_registry_mutex);
 
+    // Bambu LAN devices own separate SDK processes. Python capabilities still
+    // return their single live capability object and cannot be cloned here.
+    const bool independent = id == "bbl" || id == "moonraker" || id == "crealityprint" || id == "snapmaker" || id == "qidi";
+    const std::string cache_key = independent && !device_key.empty() ? id + "\n" + device_key : id;
     // Check cache first
     auto& cache   = get_printer_agent_cache();
-    auto cache_it = cache.find(id);
+    auto cache_it = cache.find(cache_key);
     if (cache_it != cache.end()) {
         BOOST_LOG_TRIVIAL(info) << "Reusing cached printer agent: " << id;
         if (cloud_agent)
@@ -155,10 +163,25 @@ std::shared_ptr<IPrinterAgent> NetworkAgentFactory::create_printer_agent_by_id(c
         return nullptr;
     }
 
-    auto agent = it->second.factory(cloud_agent, log_dir);
+    std::shared_ptr<IPrinterAgent> agent;
+    if (id == "bbl" && !device_key.empty()) {
+        const auto library = BBLNetworkPlugin::instance().library_path();
+        if (library.empty()) return {};
+        auto executable = boost::dll::program_location().parent_path() /
+#ifdef _WIN32
+            "porca_bambu_worker.exe";
+#else
+            "porca_bambu_worker";
+#endif
+        const auto country = wxTheApp && GUI::wxGetApp().app_config ? GUI::wxGetApp().app_config->get_country_code() : std::string();
+        agent = std::make_shared<BambuLanProcess>(BambuLanProcessConfig{
+            executable.string(), library, log_dir, resources_dir(), country});
+    } else {
+        agent = it->second.factory(cloud_agent, log_dir);
+    }
     if (agent) {
         BOOST_LOG_TRIVIAL(info) << "Created and cached printer agent: " << id;
-        cache[id] = agent;
+        cache[cache_key] = agent;
     }
     return agent;
 }
@@ -173,6 +196,15 @@ void NetworkAgentFactory::clear_printer_agent_cache()
     }
     cache.clear();
     BOOST_LOG_TRIVIAL(info) << "Printer agent cache cleared";
+}
+
+void NetworkAgentFactory::release_printer_agent(const std::shared_ptr<IPrinterAgent>& agent)
+{
+    std::lock_guard<std::mutex> lock(s_registry_mutex);
+    auto& cache = get_printer_agent_cache();
+    for (auto it = cache.begin(); it != cache.end();)
+        if (it->second == agent) it = cache.erase(it);
+        else ++it;
 }
 
 void NetworkAgentFactory::register_all_agents()
@@ -490,6 +522,7 @@ void NetworkAgentFactory::deregister_python_printer_agent(const std::string& plu
     if (!agent_id.empty() && wxTheApp) {
         NetworkAgent* network_agent = GUI::wxGetApp().getAgent();
         if (network_agent) {
+            network_agent->forget_printer_sessions_for_agent(agent_id);
             const auto active_agent = network_agent->get_printer_agent();
             if (active_agent && active_agent->get_agent_info().id == agent_id)
                 network_agent->set_printer_agent(nullptr);

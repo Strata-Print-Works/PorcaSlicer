@@ -1,9 +1,12 @@
+#include "../WorkspaceStyle.hpp"
 #include "GLGizmoMeasure.hpp"
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Shortcuts.hpp"
 #include "slic3r/GUI/Plater.hpp"
+#include "slic3r/GUI/PlateTransfer.hpp"
+#include "slic3r/GUI/Selection.hpp"
 #include "slic3r/GUI/Gizmos/GizmoObjectManipulation.hpp"
 #include "slic3r/Utils/UndoRedo.hpp"
 #include "GLGizmoUtils.hpp"
@@ -68,6 +71,28 @@
 
 namespace Slic3r {
 namespace GUI {
+
+namespace {
+// Applies a measure move that the selection's volumes already show. A move onto
+// another plate waits for its filaments to be matched and records snapshot_name
+// as its own undo step; the volumes then keep their current placement. Returns
+// true in that case. Otherwise records snapshot_name (when given) and applies
+// the move. An empty name means the caller already recorded the undo step.
+bool apply_measure_move(Selection& selection, Selection::EMode previous_mode, const std::string& snapshot_name)
+{
+    GLCanvas3D& canvas = *wxGetApp().plater()->canvas3D();
+    if (defer_plate_transfer(canvas, snapshot_name)) return true;
+    if (!snapshot_name.empty()) {
+        // The step records the selection as it was before the move.
+        const Selection::EMode mode = selection.get_mode();
+        selection.set_mode(previous_mode);
+        wxGetApp().plater()->take_snapshot(snapshot_name, UndoRedo::SnapshotType::GizmoAction);
+        selection.set_mode(mode);
+    }
+    canvas.do_move("");
+    return false;
+}
+} // namespace
 std::string GLGizmoMeasure::format_double(double value)
 {
     char buf[1024];
@@ -2137,7 +2162,7 @@ void GLGizmoMeasure::show_face_face_assembly_common() {
         m_imgui->disabled_begin(!(action.can_set_to_center_coincidence));
         {
             ImGui::PushItemWidth(set_to_center_coincidence_size);
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0 / 255.0, 150 / 255.0, 136 / 255.0, 1.0));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::AccentSoft, wxGetApp().dark_mode())));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(38 / 255.0f, 166 / 255.0f, 154 / 255.0f, 1.00f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0 / 255.0f, 137 / 255.0f, 123 / 255.0f, 1.00f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(254 / 255.0f, 254 / 255.0f, 254 / 255.0f, 1.00f));
@@ -2532,9 +2557,7 @@ void GLGizmoMeasure::set_distance(bool same_model_object, const Vec3d &displacem
         auto v         = m_hit_different_volumes[1];
         auto selection = const_cast<Selection *>(&m_parent.get_selection());
         selection->setup_cache();
-        if (take_shot) {
-            wxGetApp().plater()->take_snapshot("MoveInMeasure", UndoRedo::SnapshotType::GizmoAction); // avoid storing another snapshot
-        }
+        const Selection::EMode previous_mode = selection->get_mode();
         selection->set_mode(same_model_object ? Selection::Volume : Selection::Instance);
         m_pending_scale ++;
         if (same_model_object == false) {
@@ -2545,7 +2568,14 @@ void GLGizmoMeasure::set_distance(bool same_model_object, const Vec3d &displacem
             Vec3d                     local_displacement = tran.get_matrix_no_offset().inverse() * displacement;
             v->set_volume_transformation(v->get_volume_transformation().get_matrix() * Geometry::translation_transform(local_displacement));
         }
-        wxGetApp().plater()->canvas3D()->do_move("");
+        // Without take_shot, set_to_center_coincidence already recorded the undo step.
+        if (apply_measure_move(*selection, previous_mode, take_shot ? "MoveInMeasure" : "")) {
+            // Nothing changed yet. Applying the transfer later rebuilds the scene,
+            // and the following data_changed() then clears the picked features,
+            // whose volumes no longer exist.
+            --m_pending_scale;
+        }
+        // Re-read the placement the volumes now show.
         register_single_mesh_pick();
         if (same_model_object ) {
             update_feature_by_tran(*m_selected_features.first.feature);
@@ -2705,9 +2735,7 @@ void GLGizmoMeasure::set_parallel_distance(bool same_model_object, float dist)
         auto v         = m_hit_different_volumes[1];
         auto selection = const_cast<Selection *>(&m_parent.get_selection());
         selection->setup_cache();
-
-        wxGetApp().plater()->take_snapshot("SetParallelDistanceInMeasure", UndoRedo::SnapshotType::GizmoAction); // avoid storing another snapshot
-
+        const Selection::EMode previous_mode = selection->get_mode();
         selection->set_mode(same_model_object ? Selection::Volume : Selection::Instance);
         m_pending_scale = 1;
 
@@ -2724,7 +2752,8 @@ void GLGizmoMeasure::set_parallel_distance(bool same_model_object, float dist)
         } else {
             selection->translate(v->object_idx(), v->instance_idx(), v->volume_idx(), displacement);
         }
-        wxGetApp().plater()->canvas3D()->do_move("");
+        // A deferred cross-plate move changes nothing yet; see set_distance().
+        if (apply_measure_move(*selection, previous_mode, "SetParallelDistanceInMeasure")) m_pending_scale = 0;
         register_single_mesh_pick();
         if (same_model_object) {
             update_feature_by_tran(*m_selected_features.first.feature);

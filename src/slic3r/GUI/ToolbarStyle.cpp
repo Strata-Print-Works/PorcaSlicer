@@ -1,4 +1,5 @@
 #include "ToolbarStyle.hpp"
+#include "LiveToolbarStyle.hpp"
 #include "GLCanvas3D.hpp"
 #include "libslic3r/Utils.hpp"
 #include <algorithm>
@@ -8,11 +9,13 @@
 namespace Slic3r::GUI::DesignSystem {
 std::vector<SpriteColors> toolbar_palette(bool dark, bool gizmo)
 {
-    const auto color = [dark](ColorRole role) { return wxColour(color_hex(role, dark)); };
-    const SpriteColors normal{color(ColorRole::InkMuted), wxColour(0,0,0,0)};
-    const SpriteColors hover{color(ColorRole::Ink), color(ColorRole::SurfaceHover)};
-    const SpriteColors selected{color(ColorRole::AccentInk), color(ColorRole::AccentSoft)};
-    const SpriteColors disabled{color(ColorRole::InkDisabled), wxColour(0,0,0,0)};
+    const auto& style = live_toolbar_style().snapshot();
+    const auto& theme = dark ? style.dark : style.light;
+    const auto color = [](const ToolbarColor& rgba) { return wxColour(rgba[0], rgba[1], rgba[2], rgba[3]); };
+    const SpriteColors normal{color(theme.ink_muted), wxColour(0,0,0,0)};
+    const SpriteColors hover{color(theme.ink), color(theme.surface_hover)};
+    const SpriteColors selected{color(theme.accent_ink), color(theme.accent_soft)};
+    const SpriteColors disabled{color(theme.ink_disabled), wxColour(0,0,0,0)};
     if (gizmo) return {normal, hover, selected, disabled, selected, normal};
     return {normal, selected, disabled, hover, selected, disabled, selected, normal};
 }
@@ -39,7 +42,8 @@ std::string toolbar_icon_path(const std::string& original)
 
 float toolbar_top_inset(const GLCanvas3D& canvas)
 {
-    return canvas.get_canvas_type() == GLCanvas3D::CanvasView3D && !canvas.is_design_canvas() ? space_12 * canvas.get_scale() : 0.0f;
+    return canvas.get_canvas_type() == GLCanvas3D::CanvasView3D && !canvas.is_design_canvas() ?
+        live_toolbar_style().snapshot().top_inset * canvas.get_scale() : 0.0f;
 }
 
 void color_toolbar_sprite(std::vector<unsigned char>& output, const std::vector<unsigned char>& glyph,
@@ -49,13 +53,16 @@ void color_toolbar_sprite(std::vector<unsigned char>& output, const std::vector<
     if (glyph.size() != bytes || output.size() != bytes || size == 0) return;
     std::fill(output.begin(), output.end(), 0);
     const float half = float(size) * 0.5f;
-    const float radius = radius_md * float(size) / control_md;
+    const auto& style = live_toolbar_style().snapshot();
+    const float radius = style.control_radius * float(size) / style.control_size;
     for (std::size_t y = 1; y < size; ++y) {
         for (std::size_t x = 1; x < size; ++x) {
             const auto offset = (y * (size + 1) + x) * 4;
-            const float dx = std::max(std::abs(float(x) - 0.5f - half) - (half - radius), 0.0f);
-            const float dy = std::max(std::abs(float(y) - 0.5f - half) - (half - radius), 0.0f);
-            const float coverage = std::clamp(radius + 0.5f - std::sqrt(dx * dx + dy * dy), 0.0f, 1.0f);
+            const float dx = std::abs(float(x) - 0.5f - half) - (half - radius);
+            const float dy = std::abs(float(y) - 0.5f - half) - (half - radius);
+            const float distance = std::hypot(std::max(dx, 0.0f), std::max(dy, 0.0f)) +
+                std::min(std::max(dx, dy), 0.0f) - radius;
+            const float coverage = std::clamp(0.5f - distance, 0.0f, 1.0f);
             const float ink = glyph[offset + 3] / 255.0f;
             const float ground = colors.second.Alpha() / 255.0f * coverage * (1.0f - ink);
             const float alpha = ink + ground;

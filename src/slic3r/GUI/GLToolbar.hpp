@@ -2,7 +2,9 @@
 #define slic3r_GLToolbar_hpp_
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include <wx/event.h>
@@ -333,6 +335,11 @@ private:
     bool m_design_tokens{false};
     mutable GLTexture m_images_texture;
     BackgroundTexture m_background_texture;
+    // Uploaded only from render_surface(), under the canvas GL context.
+    mutable std::unique_ptr<GLTexture> m_live_background_texture;
+    mutable std::uint64_t m_live_background_revision{0};
+    mutable bool m_live_background_dark{false};
+    mutable float m_live_background_edge{90.0f};
     GLTexture m_arrow_texture;
     Layout m_layout;
 
@@ -423,6 +430,10 @@ public:
     void render_arrow(const GLCanvas3D& parent, GLToolbarItem* highlighted_item);
 
     bool on_mouse(wxMouseEvent& evt, GLCanvas3D& parent);
+    // True over an item or the gap between items (-2): the bar is one continuous surface,
+    // matching on_mouse(), so nothing beneath it takes a press made between two icons.
+    bool contains_point(const Vec2d& point, const GLCanvas3D& parent) const
+    { return m_enabled && contains_mouse(point, parent) != -1; }
     // get item pointer for highlighter timer
     GLToolbarItem* get_item(const std::string& item_name);
 

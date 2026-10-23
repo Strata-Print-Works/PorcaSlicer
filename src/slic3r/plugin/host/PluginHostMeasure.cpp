@@ -9,6 +9,7 @@
 #include <libslic3r/BoundingBox.hpp>
 #include <libslic3r/ClipperUtils.hpp>
 #include <libslic3r/ExPolygon.hpp>
+#include <libslic3r/GCode/GCodeProcessor.hpp>
 #include <libslic3r/Geometry.hpp>
 #include <libslic3r/Layer.hpp>
 #include <libslic3r/Model.hpp>
@@ -20,6 +21,9 @@
 #include <libslic3r/libslic3r.h>
 #include <slic3r/GUI/GUI_App.hpp>
 #include <slic3r/GUI/Plater.hpp>
+#include <slic3r/GUI/PartPlate.hpp>
+#include <slic3r/GUI/Selection.hpp>
+#include <slic3r/GUI/BackgroundSlicingProcess.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -73,6 +77,9 @@ struct OverhangMeasurement
 struct ObjectMeasurement
 {
     std::string         name;
+    int plate = 0;
+    size_t instance_index = 0;
+    bool selected = false;
     size_t              instance_count = 0;
     size_t              triangle_count = 0;
     size_t              vertex_count   = 0;
@@ -135,7 +142,7 @@ void accumulate_overhangs(const indexed_triangle_set& its,
 }
 
 // Runs on the UI thread with the GIL released — pure C++ only, no py:: here.
-std::vector<ObjectMeasurement> collect_measurements(double threshold_deg)
+std::vector<ObjectMeasurement> collect_measurements(double threshold_deg, int requested_plate)
 {
     if (wxTheApp == nullptr)
         throw std::runtime_error("OrcaSlicer application is not initialized");
@@ -149,22 +156,27 @@ std::vector<ObjectMeasurement> collect_measurements(double threshold_deg)
     std::vector<ObjectMeasurement> measured;
     measured.reserve(model.objects.size());
 
-    for (const ModelObject* object : model.objects) {
-        // An object with no instances is not on the plate (it exists only
-        // transiently, mid-import), and has no world placement to report.
-        if (object == nullptr || object->instances.empty())
-            continue;
-
+    auto& plates = plater->get_partplate_list();
+    const int target = requested_plate == -1 ? plates.get_curr_plate_index() : requested_plate - 1;
+    if (requested_plate != 0 && (target < 0 || target >= plates.get_plate_count()))
+        throw std::invalid_argument("Unknown plate.");
+    const auto& picked = plater->get_selection().get_content();
+    for (size_t oi = 0; oi < model.objects.size(); ++oi) {
+        const ModelObject* object = model.objects[oi];
+        if (!object) continue;
+        for (size_t ii = 0; ii < object->instances.size(); ++ii) {
+        const int pi = plates.find_instance_belongs(int(oi), int(ii));
+        if (requested_plate != 0 && pi != target) continue;
         ObjectMeasurement out;
-        out.name                    = object->name;
-        out.instance_count          = object->instances.size();
+        out.name = object->name;
+        out.instance_count = 1;
+        out.instance_index = ii;
+        out.plate = pi + 1;
+        const auto found = picked.find(unsigned(oi));
+        out.selected = found != picked.end() && found->second.count(unsigned(ii)) != 0;
         out.overhangs.threshold_deg = threshold_deg;
-
-        // Placement-dependent numbers are measured on the first instance.
-        // Copies share the object's geometry and, as OrcaSlicer arranges them,
-        // its orientation — only their XY offset differs.
-        const ModelInstance& instance    = *object->instances.front();
-        const Transform3d    inst_matrix = instance.get_transformation().get_matrix();
+        const ModelInstance& instance = *object->instances[ii];
+        const Transform3d inst_matrix = instance.get_matrix();
 
         for (const ModelVolume* volume : object->volumes) {
             // Modifiers, support blockers and negative volumes are not printed
@@ -202,12 +214,13 @@ std::vector<ObjectMeasurement> collect_measurements(double threshold_deg)
         }
 
         measured.push_back(std::move(out));
+        }
     }
 
     return measured;
 }
 
-py::list measure_objects(double threshold_deg)
+py::list measure_objects(double threshold_deg, int requested_plate)
 {
     if (!(threshold_deg >= 0.0) || threshold_deg > 90.0)
         throw std::invalid_argument("overhang_threshold_deg must be between 0 and 90 "
@@ -217,7 +230,7 @@ py::list measure_objects(double threshold_deg)
     // The model walk happens entirely on the UI thread and hands back plain C++
     // values. No py:: object is built inside it: the GIL is released there.
     const std::vector<ObjectMeasurement> measured =
-        run_on_ui_blocking([threshold_deg]() { return collect_measurements(threshold_deg); });
+        run_on_ui_blocking([threshold_deg, requested_plate]() { return collect_measurements(threshold_deg, requested_plate); });
 
     // GIL reacquired — Python objects from here on.
     py::list objects;
@@ -230,6 +243,9 @@ py::list measure_objects(double threshold_deg)
 
         py::dict object;
         object["name"]        = measurement.name;
+        object["plate"] = measurement.plate;
+        object["instance"] = measurement.instance_index;
+        object["selected"] = measurement.selected;
         object["instances"]   = measurement.instance_count;
         object["triangles"]   = measurement.triangle_count;
         object["vertices"]    = measurement.vertex_count;
@@ -358,6 +374,7 @@ PlateSignature collect_plate_signature()
 
     SignatureHasher hasher;
     PlateSignature  out;
+    hasher.feed_word(plater->get_partplate_list().get_curr_plate_index());
 
     // Every list is length-prefixed, and a missing node feeds the zero that no
     // valid id can be. Without that, "two volumes and no instances" and "one
@@ -431,9 +448,8 @@ py::dict plate_signature()
 // it; a footprint is only too small once it has been cut into islands. Reading
 // the mesh can only ever approximate both.
 //
-// Meaningful only after a slice: before one this reports sliced = false and
-// stops. That is not an error, it is the normal state of a plate someone is
-// still arranging.
+// Slice existence comes from the plate's valid G-code result. The detailed
+// layer graph may not be available when that cached result still is.
 //
 // Same threading rule as the model walk, for a sharper reason: the background
 // slicer replaces these layers wholesale when it re-runs, so a plugin thread
@@ -444,6 +460,8 @@ py::dict plate_signature()
 struct SliceMeasurement
 {
     bool   sliced                        = false;
+    bool   layers_available              = false;
+    int plate = 0;
     int    object_count                  = 0;
     int    layer_count                   = 0;
     double max_z_mm                      = 0.0;
@@ -467,6 +485,18 @@ SliceMeasurement collect_slice_measurement()
     if (plater == nullptr)
         return out;
 
+    out.plate = plater->get_partplate_list().get_curr_plate_index() + 1;
+    auto* plate = plater->get_partplate_list().get_curr_plate();
+    // The plate's valid G-code result is authoritative even if its in-memory
+    // Print graph is not currently available (for example after a plate switch).
+    // Never walk a graph while a worker may replace its layers.
+    const bool slicing_this_plate = plater->background_process().running() &&
+        plater->background_process().get_current_plate() == plate;
+    const auto* result = plate->get_slice_result();
+    out.sliced = !slicing_this_plate && plate->is_slice_result_valid() && result && !result->moves.empty();
+    if (!out.sliced || plater->background_process().running() ||
+        plater->background_process().get_current_plate() != plate ||
+        plater->is_background_process_update_scheduled()) return out;
     const Print& print = plater->fff_print();
     // Scaled area -> mm^2, the conversion the slicer's own statistics use.
     const double sf2 = SCALING_FACTOR * SCALING_FACTOR;
@@ -476,7 +506,7 @@ SliceMeasurement collect_slice_measurement()
         const auto& layers = po->layers();
         if (layers.empty())
             continue;                    // this object is not sliced yet
-        out.sliced = true;
+        out.layers_available = true;
         ++out.object_count;
         out.layer_count = std::max(out.layer_count, (int) layers.size());
 
@@ -563,8 +593,12 @@ py::dict measure_slice()
     // GIL reacquired — Python objects from here on.
     py::dict result;
     result["sliced"] = m.sliced;
+    result["plate"] = m.plate;
     if (!m.sliced)
         return result;                   // nothing else is meaningful yet
+    result["layers_available"] = m.layers_available;
+    if (!m.layers_available)
+        return result;
 
     result["objects"]                         = m.object_count;
     result["layers"]                          = m.layer_count;
@@ -589,9 +623,10 @@ py::dict measure_slice()
 void host_bindings::register_measure(py::module_& host)
 {
     host.def("measure_slice", &measure_slice,
-             "Measure the CURRENT SLICE and return a plain dict. Always has `sliced`; when "
-             "that is False nothing else is present and there is nothing to read yet — the "
-             "plate has not been sliced since it last changed. When True it also has:\n"
+             "Measure the CURRENT SLICE and return a plain dict. Always has `sliced` and "
+             "`plate`. When sliced is true, `layers_available` says whether detailed layer "
+             "measurements can be read now. A valid cached G-code result can remain available "
+             "when its in-memory layer graph is not. When layers_available is true it also has:\n"
              "  objects, layers, max_z_mm,\n"
              "  first_layer_area_mm2, first_layer_islands, smallest_first_layer_island_mm2,\n"
              "  overhang_area_mm2, max_layer_overhang_mm2, max_overhang_layer_z_mm,\n"
@@ -616,12 +651,13 @@ void host_bindings::register_measure(py::module_& host)
 
     host.def("measure_objects", &measure_objects,
              py::arg("overhang_threshold_deg") = DEFAULT_OVERHANG_THRESHOLD_DEG,
-             "Measure every object on the live plate and return a list of plain dicts:\n"
+             py::arg("plate") = -1,
+             "Measure each instance on the requested plate (-1 current, 0 all, otherwise one-based) as plain dicts:\n"
              "  name, instances, triangles, vertices, volume_mm3, is_manifold,\n"
              "  size_mm (x, y, z), min_z_mm, overhangs\n"
              "where overhangs is {threshold_deg, area_mm2, downward_area_mm2, steepest_deg}.\n"
              "\n"
-             "Sizes, min_z and overhangs are world-space, measured on the object's first "
+             "Sizes, min_z and overhangs are world-space, measured on each "
              "instance with its transform applied — rotating a part is the usual fix for an "
              "overhang, so an object-local answer would mislead. volume_mm3 is the mesh "
              "volume scaled by the instance transform. Only model parts count; modifiers, "

@@ -12,6 +12,8 @@ add_executable(${_TEST_NAME}_tests
     test_appconfig.cpp
     test_arachne_walls.cpp
     test_arrange.cpp
+    test_plate_layout.cpp
+    test_selection_alignment.cpp
     test_assemble_list.cpp
     test_bambu_networking.cpp
     test_belt_brim.cpp
@@ -27,8 +29,16 @@ add_executable(${_TEST_NAME}_tests
     test_toolordering_nozzle_group.cpp
     test_parallel_resolve.cpp
     test_preset_bundle_loading.cpp
+    test_plate_material_transfer.cpp
     test_plate_print_setup.cpp
+    test_project_plate_import.cpp
+    test_plate_slice_batch.cpp
+    test_production_ledger.cpp
+    test_filament_usage.cpp
+    test_workspace_stages.cpp
     test_discovered_printer.cpp
+    test_elegoo_discovery.cpp
+    test_print_delivery_validation.cpp
     test_discovery_policy.cpp
     test_preset_setting_id.cpp
     test_preset_diff.cpp

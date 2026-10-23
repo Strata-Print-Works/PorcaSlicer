@@ -15,12 +15,14 @@
 #include "libslic3r/Point.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/ProductionLedger.hpp"
 #include "libslic3r/MultiNozzleUtils.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/ObjectID.hpp"
 #include "libslic3r/Slicing.hpp"
 #include "libslic3r/BrimEarsPoint.hpp"
 #include "libslic3r/Config.hpp"
+#include "libslic3r/PlatePrintSetup.hpp"
 #include "libslic3r/CustomGCode.hpp"
 #include "libslic3r/TextureDisplacement.hpp"
 #include "libslic3r_version.h"
@@ -350,6 +352,7 @@ static constexpr const char* TRANSFORM_ATTR = "transform";
 static constexpr const char* OFFSET_ATTR = "offset";
 static constexpr const char* PRINTABLE_ATTR = "printable";
 static constexpr const char* AUTO_DROP_ATTR = "auto_drop";
+static constexpr const char* PORCA_PRODUCTION_ID_ATTR = "porca_production_id";
 static constexpr const char* INSTANCESCOUNT_ATTR = "instances_count";
 static constexpr const char* CUSTOM_SUPPORTS_ATTR = "paint_supports";
 static constexpr const char* CUSTOM_FUZZY_SKIN_ATTR  = "paint_fuzzy_skin";
@@ -1165,6 +1168,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool m_load_model = false;
         bool m_load_aux = false;
         bool m_load_config = false;
+        bool m_has_porca_stage_metadata = false;
+        bool m_has_porca_layout_metadata = false;
+        bool m_has_porca_setup_metadata = false;
         // backup & restore
         bool m_load_restore = false;
         std::string m_backup_path;
@@ -1488,6 +1494,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         m_load_aux = strategy & LoadStrategy::LoadAuxiliary;
         m_load_restore = strategy & LoadStrategy::Restore;
         m_load_config = strategy & LoadStrategy::LoadConfig;
+        m_has_porca_stage_metadata = false;
+        m_has_porca_layout_metadata = false;
+        m_has_porca_setup_metadata = false;
         m_model = &model;
         m_unit_factor = 1.0f;
         m_curr_object = nullptr;
@@ -1658,6 +1667,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
         m_model->model_info = std::make_shared<ModelInfo>();
         m_model->model_info->load(model_info);
+        if (!m_load_config) m_model->model_info->metadata_items.erase(ProductionLedger::metadata_key);
 
         if (m_thumbnail_middle.empty()) m_thumbnail_middle = m_thumbnail_path;
         if (m_thumbnail_small.empty()) m_thumbnail_small = m_thumbnail_path;
@@ -1753,6 +1763,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate->print_setup = it->second->print_setup;
             plate->has_workspace_position = it->second->has_workspace_position;
             plate->workspace_position = it->second->workspace_position;
+            plate->has_model_origin = it->second->has_model_origin;
+            plate->model_origin = it->second->model_origin;
+            plate->stage_id = it->second->stage_id;
+            plate->has_workspace_stages = it->second->has_workspace_stages;
+            plate->workspace_stages = it->second->workspace_stages;
 
             if (!plate->thumbnail_file.empty())
                 _extract_from_archive(archive, plate->thumbnail_file, [&pixels = plate_data_list[it->first - 1]->plate_thumbnail.pixels](auto &archive, auto const &stat) -> bool {
@@ -1964,6 +1979,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
         m_model->model_info = std::make_shared<ModelInfo>();
         m_model->model_info->load(model_info);
+        if (!m_load_config) m_model->model_info->metadata_items.erase(ProductionLedger::metadata_key);
         if (!m_thumbnail_small.empty()) m_model->model_info->metadata_items.emplace("Thumbnail_Small", m_thumbnail_small);
         if (!m_thumbnail_middle.empty()) m_model->model_info->metadata_items.emplace("Thumbnail_Middle", m_thumbnail_middle);
 
@@ -2085,7 +2101,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 else if (boost::algorithm::iequals(name, BBS_MODEL_CONFIG_FILE)) {
                     // extract slic3r model config file
                     if (!_extract_xml_from_archive(archive, stat, _handle_start_config_xml_element, _handle_end_config_xml_element)) {
-                        if (m_is_bbl_3mf) {
+                        // Porca plate data makes the config required whichever application tag is present.
+                        if (m_is_bbl_3mf || m_has_porca_stage_metadata || m_has_porca_layout_metadata || m_has_porca_setup_metadata) {
                             add_error("Archive does not contain a valid model config");
                             return false;
                         }
@@ -2211,7 +2228,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 return false;
             }
             if (current_plate_data) {
-                std::map<int, std::pair<int, int>>::iterator it = current_plate_data->obj_inst_map.find(object.first.second);
+                auto it = current_plate_data->obj_inst_map.find(object.first.second);
                 if (it == current_plate_data->obj_inst_map.end()) {
                     //not in current plate, skip
                     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", could not find object %1% in plate %2%, skip it\n")%object.first.second %plate_id;
@@ -2451,6 +2468,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate_data_list[it->first-1]->print_setup = it->second->print_setup;
             plate_data_list[it->first-1]->has_workspace_position = it->second->has_workspace_position;
             plate_data_list[it->first-1]->workspace_position = it->second->workspace_position;
+            plate_data_list[it->first-1]->has_model_origin = it->second->has_model_origin;
+            plate_data_list[it->first-1]->model_origin = it->second->model_origin;
+            plate_data_list[it->first-1]->stage_id = it->second->stage_id;
+            plate_data_list[it->first-1]->has_workspace_stages = it->second->has_workspace_stages;
+            plate_data_list[it->first-1]->workspace_stages = it->second->workspace_stages;
 
             current_plate_data = plate_data_list[it->first - 1];
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", plate %1%, thumbnail_file=%2%, no_light_thumbnail_file=%3%")%it->first %plate_data_list[it->first-1]->thumbnail_file %plate_data_list[it->first-1]->no_light_thumbnail_file;
@@ -2458,7 +2480,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             it++;
 
             //update the arrange order
-            std::map<int, std::pair<int, int>>::iterator map_it = current_plate_data->obj_inst_map.begin();
+            auto map_it = current_plate_data->obj_inst_map.begin();
             while (map_it != current_plate_data->obj_inst_map.end()) {
                 int obj_index, obj_id = map_it->first, inst_index = map_it->second.first;
                 IndexToPathMap::iterator index_iter = m_index_paths.find(obj_id);
@@ -2484,13 +2506,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     continue;
                 }
                 ModelObject* obj =  m_model->objects[obj_index];
-                if (inst_index >= obj->instances.size()) {
+                if (inst_index < 0 || inst_index >= int(obj->instances.size())) {
                     BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ":" << __LINE__ << boost::format("invalid instance id %1%\n")%inst_index;
                     map_it++;
                     continue;
                 }
                 ModelInstance* inst =  obj->instances[inst_index];
                 inst->loaded_id = map_it->second.second;
+                current_plate_data->objects_and_instances.emplace_back(obj_index, inst_index);
                 map_it++;
             }
         }
@@ -2508,6 +2531,19 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
             for (int index = delete_ids.size() - 1; index >= 0; index--)
                 m_model->delete_object(delete_ids[index]);
+            // Single-plate imports discard other objects. Keep the imported
+            // ownership indices aligned with the compacted model as well.
+            for (auto* plate : plate_data_list) {
+                auto& instances = plate->objects_and_instances;
+                size_t kept = 0;
+                for (auto item : instances) {
+                    const auto removed = std::lower_bound(delete_ids.begin(), delete_ids.end(), size_t(item.first));
+                    if (removed != delete_ids.end() && *removed == size_t(item.first)) continue;
+                    item.first -= int(removed - delete_ids.begin());
+                    instances[kept++] = item;
+                }
+                instances.resize(kept);
+            }
         }
 
         //BBS progress point
@@ -4124,8 +4160,17 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         Transform3d transform = bbs_get_transform_from_3mf_specs_string(bbs_get_attribute_value_string(attributes, num_attributes, TRANSFORM_ATTR));
         int printable = bbs_get_attribute_value_bool(attributes, num_attributes, PRINTABLE_ATTR);
         int auto_drop = bbs_get_attribute_value_bool(attributes, num_attributes, AUTO_DROP_ATTR);
-
-        return !m_load_model || _create_object_instance(path, object_id, transform, printable, auto_drop, 1);
+        if (!m_load_model) return true;
+        const size_t previous = m_instances.size();
+        if (!_create_object_instance(path, object_id, transform, printable, auto_drop, 1)) return false;
+        if (m_load_config && m_instances.size() == previous + 1) {
+            const std::string id = bbs_get_attribute_value_string(attributes, num_attributes, PORCA_PRODUCTION_ID_ATTR);
+            if (id.size() <= 64 && std::all_of(id.begin(), id.end(), [](unsigned char ch) {
+                    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || ch == '-';
+                }))
+                m_instances.back().instance->production_id = id;
+        }
+        return true;
     }
 
     bool _BBS_3MF_Importer::_handle_end_item()
@@ -4476,7 +4521,28 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
     bool _BBS_3MF_Importer::_handle_end_config()
     {
-        // do nothing
+        if (!m_load_config || m_parsing_slice_info) return true;
+        const PlateData* catalog = nullptr;
+        for (const auto& entry : m_plater_data) {
+            if (!entry.second->has_workspace_stages) continue;
+            if (catalog) {
+                BOOST_LOG_TRIVIAL(error) << "3MF has more than one porca_workspace_stages catalog";
+                throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+            }
+            catalog = entry.second;
+        }
+        for (const auto& entry : m_plater_data) {
+            const auto& plate = *entry.second;
+            // Stages organize the workspace only. A plate saved without its own
+            // setup (as Porca writes for shared-setup plates) keeps its stage and
+            // uses the project's shared settings, like an ordinary Orca plate.
+            if (plate.stage_id.empty()) continue;
+            if (!catalog || std::none_of(catalog->workspace_stages.begin(), catalog->workspace_stages.end(),
+                [&](const WorkspaceStage& stage) { return stage.id == plate.stage_id; })) {
+                BOOST_LOG_TRIVIAL(error) << "3MF plate references unknown workspace stage " << plate.stage_id;
+                throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+            }
+        }
         return true;
     }
 
@@ -4625,22 +4691,79 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             {
                 m_curr_plater->plate_index = atoi(value.c_str());
             }
-            else if (key == "orca_plate_workspace_position") {
+            else if (key == "orca_plate_workspace_position" || key == "porca_plate_layout") {
+                // Geometry import still needs the file's physical origin. Unknown
+                // optional layout data must not prevent geometry recovery.
+                try {
+                    const auto read_position = [](const nlohmann::json& value) {
+                        if (!value.is_array() || value.size() != 2)
+                            throw RuntimeError("Cannot restore this plate's layout.");
+                        const Vec2d p(value.at(0).get<double>(), value.at(1).get<double>());
+                        if (!p.allFinite() || p.cwiseAbs().maxCoeff() > 100000.)
+                            throw RuntimeError("Cannot restore this plate's layout.");
+                        return p;
+                    };
+                    const auto layout = nlohmann::json::parse(value);
+                    if (key == "orca_plate_workspace_position") {
+                        m_curr_plater->workspace_position = read_position(layout);
+                        m_curr_plater->has_workspace_position = true;
+                    } else {
+                        if (!layout.is_object() || !layout.at("version").is_number_integer() || layout.at("version") != 1)
+                            throw RuntimeError("This plate's layout requires a newer version of Porca.");
+                        if (m_curr_plater->has_model_origin) {
+                            BOOST_LOG_TRIVIAL(error) << "3MF plate has more than one porca_plate_layout";
+                            throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+                        }
+                        const Vec2d source = read_position(layout.at("model_origin"));
+                        const bool has_position = layout.contains("workspace_position");
+                        const Vec2d position = has_position ? read_position(layout.at("workspace_position")) : Vec2d(0., 0.);
+                        m_curr_plater->model_origin = source;
+                        m_curr_plater->has_model_origin = true;
+                        if (has_position) {
+                            m_curr_plater->workspace_position = position;
+                            m_curr_plater->has_workspace_position = true;
+                        }
+                        if (m_load_config) m_has_porca_layout_metadata = true;
+                    }
+                } catch (const std::exception&) {
+                    if (m_load_config) throw;
+                }
+            }
+            else if (key == "porca_workspace_stages") {
                 if (!m_load_config) return true;
-                const auto position = nlohmann::json::parse(value);
-                if (!position.is_array() || position.size() != 2)
-                    throw RuntimeError("Cannot restore this plate's workspace position.");
-                m_curr_plater->workspace_position = Vec2d(position.at(0).get<double>(), position.at(1).get<double>());
-                if (!m_curr_plater->workspace_position.allFinite())
-                    throw RuntimeError("Cannot restore this plate's workspace position.");
-                m_curr_plater->has_workspace_position = true;
+                m_has_porca_stage_metadata = true;
+                if (m_curr_plater->has_workspace_stages) {
+                    BOOST_LOG_TRIVIAL(error) << "3MF plate has more than one porca_workspace_stages catalog";
+                    throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+                }
+                m_curr_plater->workspace_stages = deserialize_workspace_stages(value);
+                m_curr_plater->has_workspace_stages = true;
+            }
+            else if (key == "porca_plate_stage") {
+                if (!m_load_config) return true;
+                m_has_porca_stage_metadata = true;
+                if (!m_curr_plater->stage_id.empty()) {
+                    BOOST_LOG_TRIVIAL(error) << "3MF plate has more than one porca_plate_stage";
+                    throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+                }
+                const auto membership = nlohmann::json::parse(value);
+                if (!membership.is_object() || !membership.at("version").is_number_integer() || membership.at("version") != 1)
+                    throw RuntimeError(_u8L("This project's plate arrangement requires a newer version of Porca."));
+                m_curr_plater->stage_id = membership.at("id").get<std::string>();
+                if (m_curr_plater->stage_id.empty()) {
+                    BOOST_LOG_TRIVIAL(error) << "3MF porca_plate_stage has an empty stage id";
+                    throw RuntimeError(_u8L("This project's plate arrangement is damaged and can't be opened."));
+                }
             }
             else if (key == "orca_plate_print_setup") {
                 if (!m_load_config) return true;
+                m_has_porca_setup_metadata = true;
                 m_curr_plater->print_setup = PlatePrintSetup::deserialize(value);
             }
             else if (key == PLATER_NAME_ATTR) {
-                // Expat has already decoded character references once.
+                // Expat has already decoded character references once. Orca and Bambu
+                // writers escape the name once, so a second unescape only altered
+                // names containing literal entity text such as "&amp;".
                 m_curr_plater->plate_name = value;
             }
             else if (key == LOCK_ATTR)
@@ -6186,13 +6309,16 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             Transform3d transform;
             bool printable;
             bool auto_drop;
+            std::string production_id;
 
-            BuildItem(std::string const & path, unsigned int id, const Transform3d& transform, const bool printable, const bool auto_drop)
+            BuildItem(std::string const & path, unsigned int id, const Transform3d& transform, const bool printable, const bool auto_drop,
+                      std::string production_id)
                 : path(path)
                 , id(id)
                 , transform(transform)
                 , printable(printable)
                 , auto_drop(auto_drop)
+                , production_id(std::move(production_id))
             {
             }
         };
@@ -6244,6 +6370,8 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         std::string m_thumbnail_small  = PRINTER_THUMBNAIL_SMALL_FILE;
         std::map<void const *, std::pair<ObjectData*, ModelVolume const *>> m_shared_meshes;
         std::map<ModelVolume const *, std::pair<std::string, int>> m_volume_paths;
+        std::map<const ModelInstance*, Vec2d> m_plate_instance_offsets;
+        std::map<int, Vec2d> m_file_plate_origins;
     public:
         //BBS: add plate data related logic
 
@@ -6341,6 +6469,39 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         m_minimal_published = store_params.strategy & SaveStrategy::MinimalPublished;
 
         m_use_loaded_id = store_params.strategy & SaveStrategy::UseLoadedId;
+
+        // Normalize only instance placements written to the archive. Never mutate
+        // the live model, mesh data, assembly transforms or slice results on save.
+        // Every plate uses one conventional Orca grid sized from the shared bed in
+        // store_params.config, which is what other slicers expect. Plates with a
+        // larger independent bed can overlap their neighbours in that grid; Porca
+        // restores each plate from its porca_plate_layout model_origin instead.
+        if (!m_skip_model && store_params.config) {
+            const auto* area = store_params.config->option<ConfigOptionPoints>("printable_area");
+            if (area && !area->values.empty()) {
+                const Vec2d bed = BoundingBoxf(area->values).size();
+                for (const auto* plate : store_params.plate_data_list) {
+                    if (!plate || !plate->has_model_origin) continue;
+                    if (!plate->model_origin.allFinite() || plate->plate_index < 0 ||
+                        plate->plate_index >= int(store_params.plate_data_list.size())) {
+                        add_error("Cannot save this plate's position.");
+                        return false;
+                    }
+                    const Vec2d origin = orca_plate_origin(plate->plate_index, int(store_params.plate_data_list.size()),
+                        int(bed.x()), int(bed.y()));
+                    m_file_plate_origins.emplace(plate->plate_index, origin);
+                    for (const auto& [object, instance] : plate->objects_and_instances) {
+                        if (object < 0 || object >= int(store_params.model->objects.size()) || instance < 0 ||
+                            instance >= int(store_params.model->objects[object]->instances.size()) ||
+                            !m_plate_instance_offsets.emplace(store_params.model->objects[object]->instances[instance],
+                                origin - plate->model_origin).second) {
+                            add_error("Cannot save a model assigned to more than one plate.");
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
 
         if (auto info = store_params.model->model_info) {
             if (auto iter = info->metadata_items.find("Thumbnail_Small"); iter != info->metadata_items.end())
@@ -7287,6 +7448,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 }
             }
 
+            // Production history belongs to a saved project, not to printer uploads or
+            // geometry published for sharing.
+            if (m_skip_model || m_minimal_published)
+                metadata_item_map.erase(ProductionLedger::metadata_key);
+
             // store metadata info
             for (auto item : metadata_item_map) {
                 BOOST_LOG_TRIVIAL(info) << "bbs_3mf: save key= " << item.first << ", value = " << item.second;
@@ -7408,10 +7574,13 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 unsigned int count = 0;
                 for (const ModelInstance* instance : obj->instances) {
                     Transform3d t = instance->get_matrix();
+                    if (const auto offset = m_plate_instance_offsets.find(instance); offset != m_plate_instance_offsets.end())
+                        t.translation() += Vec3d(offset->second.x(), offset->second.y(), 0.);
                     // instance_id is just a 1 indexed index in build_items.
                     //assert(m_skip_static || curr_id == build_items.size() + 1);
 
-                    build_items.emplace_back("", object_it->second.object_id, t, instance->printable, instance->auto_drop);
+                    build_items.emplace_back("", object_it->second.object_id, t, instance->printable, instance->auto_drop,
+                                             m_minimal_published ? std::string{} : instance->production_id);
                     count++;
                 }
 
@@ -7862,7 +8031,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             stream << "\" " << TRANSFORM_ATTR << "=\"";
             add_transformation(stream, item.transform);
             stream << "\" " << PRINTABLE_ATTR << "=\"" << item.printable;
-            stream << "\" " << AUTO_DROP_ATTR << "=\"" << item.auto_drop << "\"/>\n";
+            stream << "\" " << AUTO_DROP_ATTR << "=\"" << item.auto_drop;
+            if (!item.production_id.empty())
+                stream << "\" " << PORCA_PRODUCTION_ID_ATTR << "=\"" << item.production_id;
+            stream << "\"/>\n";
         }
 
         stream << " </" << BUILD_TAG << ">\n";
@@ -8439,9 +8611,21 @@ bool _BBS_3MF_Exporter::_add_model_config_file_to_archive(mz_zip_archive& archiv
                 if (!plate_data->print_setup.empty())
                     stream << "    <metadata key=\"orca_plate_print_setup\" value=\""
                            << xml_escape_double_quotes_attribute_value(plate_data->print_setup.serialize()) << "\"/>\n";
-                if (plate_data->has_workspace_position)
+                if (const auto frame = m_file_plate_origins.find(plate_data->plate_index); frame != m_file_plate_origins.end()) {
+                    nlohmann::json layout{{"version", 1}, {"model_origin", {frame->second.x(), frame->second.y()}}};
+                    if (plate_data->has_workspace_position)
+                        layout["workspace_position"] = {plate_data->workspace_position.x(), plate_data->workspace_position.y()};
+                    stream << "    <metadata key=\"porca_plate_layout\" value=\""
+                           << xml_escape_double_quotes_attribute_value(layout.dump()) << "\"/>\n";
+                } else if (plate_data->has_workspace_position)
                     stream << "    <metadata key=\"orca_plate_workspace_position\" value=\""
                            << nlohmann::json::array({plate_data->workspace_position.x(), plate_data->workspace_position.y()}).dump() << "\"/>\n";
+                if (plate_data->has_workspace_stages)
+                    stream << "    <metadata key=\"porca_workspace_stages\" value=\""
+                           << xml_escape_double_quotes_attribute_value(serialize_workspace_stages(plate_data->workspace_stages)) << "\"/>\n";
+                if (!plate_data->stage_id.empty())
+                    stream << "    <metadata key=\"porca_plate_stage\" value=\""
+                           << xml_escape_double_quotes_attribute_value(nlohmann::json{{"version", 1}, {"id", plate_data->stage_id}}.dump()) << "\"/>\n";
                 ConfigOption* bed_type_opt = plate_data->config.option("curr_bed_type");
                 t_config_enum_names bed_type_names = ConfigOptionEnum<BedType>::get_enum_names();
                 if (bed_type_opt != nullptr && bed_type_names.size() > bed_type_opt->getInt())

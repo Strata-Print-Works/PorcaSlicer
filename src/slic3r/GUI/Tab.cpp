@@ -1,5 +1,8 @@
 //#include "slic3r/Utils/Serial.hpp"
 #include "Tab.hpp"
+#include "libslic3r/PlatePrintSetup.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 #include "PresetHints.hpp"
 #include "libslic3r/IMEXHelpers.hpp"
 #include "libslic3r/PresetBundle.hpp"
@@ -31,6 +34,8 @@
 #include "libslic3r/Preset.hpp"
 #include <boost/log/trivial.hpp>
 #include <wx/anybutton.h>
+#include <wx/bitmap.h>
+#include <wx/image.h>
 #include <cstdint>
 #include <iterator>
 #include <functional>
@@ -56,6 +61,7 @@
 #include <wx/event.h>
 #include <wx/gdicmn.h>
 #include <wx/panel.h>
+#include <wx/window.h>
 #include <wx/colour.h>
 #include <wx/dataview.h>
 #include <wx/dynarray.h>
@@ -72,6 +78,8 @@
 #include <wx/imaglist.h>
 #include <wx/settings.h>
 #include <wx/filedlg.h>
+#include <wx/menu.h>
+#include <wx/stattext.h>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
@@ -133,6 +141,129 @@ int mode_to_selection(ConfigOptionMode mode)
     return mode == comExpert ? 2 :
            mode == comAdvanced ? 1 :
            0;
+}
+
+wxColour modified_label_colour(bool prepare_sidebar)
+{
+    if (prepare_sidebar)
+        return wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::AccentInk, wxGetApp().dark_mode()));
+    return wxGetApp().get_label_clr_modified();
+}
+}
+
+namespace {
+// Keeps visibility and preset changes beside the settings they affect. Each tab
+// owns its row so switching to object overrides never reparents live controls.
+class SidebarProcessSummary final : public wxPanel
+{
+public:
+    SidebarProcessSummary(wxWindow* parent, ScalableButton* reset)
+        : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL), m_reset(reset)
+    {
+        SetBackgroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Surface, wxGetApp().dark_mode())));
+        m_changes = new Label(this, wxEmptyString, wxST_ELLIPSIZE_END);
+        m_modes = new Button(this, wxEmptyString);
+        m_modes->SetToolTip(_L("Choose which settings to show"));
+        m_modes->SetCenter(false);
+        m_modes->SetIconRight();
+        m_modes->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event) {
+            event.Skip();
+            if (wxGetApp().get_mode() == comDevelop) return;
+            wxMenu menu;
+            const wxString labels[] = {_L("Simple"), _L("Advanced"), _L("Expert")};
+            const ConfigOptionMode modes[] = {comSimple, comAdvanced, comExpert};
+            for (int i = 0; i < 3; ++i) {
+                const int id = wxWindow::NewControlId();
+                menu.AppendRadioItem(id, labels[i]);
+                menu.Check(id, wxGetApp().get_mode() == modes[i]);
+                menu.Bind(wxEVT_MENU, [this, mode = modes[i]](wxCommandEvent&) {
+                    CallAfter([mode]() { wxGetApp().save_mode(mode); });
+                }, id);
+            }
+            m_modes->PopupMenu(&menu, wxPoint(0, m_modes->GetSize().y));
+        });
+        auto* row = new wxBoxSizer(wxHORIZONTAL);
+        row->Add(m_changes, 1, wxALIGN_CENTER_VERTICAL);
+        if (m_reset) {
+            m_reset->Reparent(this);
+            row->Add(m_reset, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(4));
+        }
+        row->Add(m_modes, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(8));
+        SetSizer(row);
+        apply_style();
+        set_change_count(0);
+    }
+
+    // An independent plate counts the settings that differ from what it inherits.
+    void set_change_count(std::size_t count, bool inherited = false)
+    {
+        if (m_reset) {
+            const wxString text = inherited ? (count == 0 ? _L("Uses inherited settings") : format_wxstr(
+                _L_PLURAL("%1% setting overridden on this plate", "%1% settings overridden on this plate", count), count)) :
+                count == 0 ? _L("Matches preset") : format_wxstr(
+                _L_PLURAL("%1% change from preset", "%1% changes from preset", count), count);
+            m_changes->SetLabel(text);
+            m_changes->SetToolTip(text);
+            m_reset->Show(count != 0);
+        }
+        Layout();
+    }
+
+    void sync_mode()
+    {
+        const auto mode = wxGetApp().get_mode();
+        m_modes->SetLabel(mode == comDevelop ? _L("Developer") : mode == comExpert ? _L("Expert") :
+                          mode == comAdvanced ? _L("Advanced") : _L("Simple"));
+        m_modes->Enable(mode != comDevelop);
+        Layout();
+    }
+
+    void apply_style()
+    {
+        using namespace DesignSystem;
+        const bool dark = wxGetApp().dark_mode();
+        const wxColour surface(color_hex(ColorRole::Surface, dark));
+        const wxColour muted(color_hex(ColorRole::InkMuted, dark));
+        SetBackgroundColour(surface);
+        m_changes->SetFont(font(TypeStyle::Caption));
+        m_changes->SetForegroundColour(muted);
+        m_changes->SetMinSize(wxSize(FromDIP(40), -1));
+        m_modes->SetFont(font(TypeStyle::Label));
+        m_modes->SetBackgroundColour(surface);
+        m_modes->SetBackgroundColor(StateColor::resolved(StateColor(
+            std::make_pair(wxColour(color_hex(ColorRole::SurfaceHover, dark)), int(StateColor::Hovered)),
+            std::make_pair(wxColour(color_hex(ColorRole::Field, dark)), int(StateColor::Normal)))));
+        m_modes->SetBorderColor(StateColor::resolved(StateColor(
+            std::make_pair(wxColour(color_hex(ColorRole::Focus, dark)), int(StateColor::Focused)),
+            std::make_pair(wxColour(color_hex(ColorRole::LineControl, dark)), int(StateColor::Normal)))));
+        m_modes->SetTextColor(StateColor::resolved(StateColor(
+            std::make_pair(wxColour(color_hex(ColorRole::InkDisabled, dark)), int(StateColor::Disabled)),
+            std::make_pair(wxColour(color_hex(ColorRole::Ink, dark)), int(StateColor::Normal)))));
+        m_modes->SetCornerRadius(FromDIP(radius_sm));
+        m_modes->SetPaddingSize(FromDIP(wxSize(10, 4)));
+        m_modes->SetMinSize(wxSize(-1, FromDIP(control_md)));
+        wxBitmap chevron = create_scaled_bitmap(resources_dir() + "/design-system/icons/chevron-down", this, 12);
+        wxImage image = chevron.ConvertToImage();
+        image.SetRGB(wxRect(0, 0, image.GetWidth(), image.GetHeight()), muted.Red(), muted.Green(), muted.Blue());
+        wxBitmap tinted(image);
+        tinted.SetScaleFactor(chevron.GetScaleFactor());
+        m_modes->SetIcon(tinted);
+        m_modes->SetMinSize(FromDIP(wxSize(112, control_md)));
+        if (m_reset) m_reset->SetMinSize(FromDIP(wxSize(20, 24)));
+        sync_mode();
+    }
+
+private:
+    wxStaticText* m_changes;
+    ScalableButton* m_reset;
+    Button* m_modes;
+};
+
+SidebarProcessSummary* process_summary(Tab* tab)
+{
+    for (auto* child : tab->GetChildren())
+        if (auto* summary = dynamic_cast<SidebarProcessSummary*>(child)) return summary;
+    return nullptr;
 }
 }
 
@@ -400,8 +531,9 @@ void Tab::create_preset_tab()
         if (m_presets_choice) m_presets_choice->Show();
 
         m_btn_save_preset->Show();
-        m_btn_delete_preset->Show(); // ORCA: fixes delete preset button visible while search box focused
-        m_undo_btn->Show();          // ORCA: fixes revert preset button visible while search box focused
+        if (is_prepare_sidebar()) update_btns_enabling();
+        else m_btn_delete_preset->Show();
+        if (!is_prepare_sidebar()) m_undo_btn->Show();
         m_btn_search->Show();
         m_search_item->Hide();
 
@@ -431,7 +563,7 @@ void Tab::create_preset_tab()
 
          m_btn_save_preset->Hide();
          m_btn_delete_preset->Hide(); // ORCA: fixes delete preset button visible while search box focused
-         m_undo_btn->Hide();          // ORCA: fixes revert preset button visible while search box focused
+         if (!is_prepare_sidebar()) m_undo_btn->Hide();
          m_btn_search->Hide();
          m_search_item->Show();
 
@@ -450,17 +582,18 @@ void Tab::create_preset_tab()
 
     // Colors for ui "decoration"
     m_sys_label_clr			= wxGetApp().get_label_clr_sys();
-    m_modified_label_clr	= wxGetApp().get_label_clr_modified();
+    m_modified_label_clr	= modified_label_colour(is_prepare_sidebar());
     m_default_text_clr      = wxGetApp().get_label_clr_default();
 
     m_main_sizer = new wxBoxSizer( wxVERTICAL );
     m_top_sizer = new wxBoxSizer( wxHORIZONTAL );
 
-    m_top_sizer->Add(m_undo_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(SidebarProps::ContentMargin()));
+    if (!is_prepare_sidebar())
+        m_top_sizer->Add(m_undo_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(SidebarProps::ContentMargin()));
     // BBS: model config
     if (m_presets_choice) {
         m_presets_choice->Reparent(m_top_panel);
-        m_top_sizer->Add(m_presets_choice, 1, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(SidebarProps::ElementSpacing()));
+        m_top_sizer->Add(m_presets_choice, 1, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(is_prepare_sidebar() ? 12 : SidebarProps::ElementSpacing()));
     } else {
         m_top_sizer->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
         m_top_sizer->AddStretchSpacer(1);
@@ -506,6 +639,11 @@ void Tab::create_preset_tab()
         m_main_sizer->Add(m_top_panel, 0, wxEXPAND | wxUP | wxDOWN, FromDIP(SidebarProps::ContentMarginV()));
     else
         m_top_panel->Hide();
+
+    if (is_prepare_sidebar()) {
+        auto* summary = new SidebarProcessSummary(this, m_presets_choice ? m_undo_btn : nullptr);
+        m_main_sizer->Add(summary, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
+    }
 
     // tree
     m_tabctrl = new TabCtrl(panel, wxID_ANY, wxDefaultPosition, wxSize(20 * m_em_unit, -1),
@@ -556,7 +694,7 @@ void Tab::create_preset_tab()
     if (dynamic_cast<TabPrinter *>(this) || dynamic_cast<TabPrint *>(this)) {
         m_extruder_switch = new MultiSwitchButton(panel);
         m_extruder_switch->SetFont(Label::Body_11);
-        m_extruder_switch->SetFitToOptions();
+        m_extruder_switch->SetFitToOptions(!is_prepare_sidebar());
         m_extruder_switch->Bind(wxCUSTOMEVT_MULTISWITCH_SELECTION, [this](auto &evt) {
             evt.Skip();
             int selection = evt.GetInt();
@@ -595,12 +733,20 @@ void Tab::create_preset_tab()
         auto left_sizer  = new wxBoxSizer(wxHORIZONTAL);
 
         m_variant_sizer->Add(left_sizer, 0, wxALIGN_CENTER);
-        m_variant_sizer->AddStretchSpacer(1);
-        // Orca: proportion 1 lets a narrow row squeeze the switch, which then scrolls its buttons.
-        m_variant_sizer->Add(m_extruder_switch, 1, wxALIGN_CENTER, 0);
-        m_variant_sizer->AddStretchSpacer(1);
+        if (!is_prepare_sidebar()) m_variant_sizer->AddStretchSpacer(1);
+        // A sidebar gives the segmented control the available width. Larger nozzle
+        // palettes still scroll through the existing switch instead of clipping.
+        m_variant_sizer->Add(m_extruder_switch, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL, 0);
+        if (!is_prepare_sidebar()) m_variant_sizer->AddStretchSpacer(1);
         m_variant_sizer->Add(right_sizer, 0, wxALIGN_CENTER);
-        left_sizer->Add(icon               , 0, wxALIGN_CENTER | wxLEFT , m_em_unit);
+        if (is_prepare_sidebar()) {
+            icon->Hide();
+            auto* label = new Label(panel, _L("Toolhead"));
+            label->SetFont(DesignSystem::font(DesignSystem::TypeStyle::Caption));
+            left_sizer->Add(label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(8));
+        } else {
+            left_sizer->Add(icon, 0, wxALIGN_CENTER | wxLEFT, m_em_unit);
+        }
         right_sizer->Add(m_extruder_sync_box, 0, wxALIGN_CENTER | wxRIGHT, m_em_unit);
 
         m_main_sizer->Add(m_variant_sizer, 0, wxEXPAND | wxTOP, m_em_unit);
@@ -674,6 +820,168 @@ void Tab::create_preset_tab()
     rebuild_page_tree();
 
     m_completed = true;
+    apply_sidebar_style();
+}
+
+bool Tab::is_prepare_sidebar() const
+{
+    return m_parent->is_prepare_sidebar();
+}
+
+void Tab::apply_sidebar_style()
+{
+    if (!is_prepare_sidebar() || !m_tabctrl) return;
+    using namespace DesignSystem;
+    const bool dark = wxGetApp().dark_mode();
+    const wxColour surface(color_hex(ColorRole::Surface, dark));
+    SetBackgroundColour(surface);
+    m_top_panel->SetBackgroundColour(surface);
+    update_label_colours();
+    // Tinting converts the icon to an image; reuse it until the theme or scale changes.
+    if (!m_sidebar_undo_bitmap.IsOk() || m_sidebar_undo_dark != dark || m_sidebar_undo_em != m_em_unit) {
+        const wxBitmap undo_source = create_scaled_bitmap("undo", this, m_bmp_value_revert.px_cnt());
+        wxImage undo_image = undo_source.ConvertToImage();
+        const wxColour undo_tint(color_hex(ColorRole::AccentInk, dark));
+        undo_image.SetRGB(wxRect(0, 0, undo_image.GetWidth(), undo_image.GetHeight()),
+                          undo_tint.Red(), undo_tint.Green(), undo_tint.Blue());
+        m_sidebar_undo_bitmap = wxBitmap(undo_image);
+        m_sidebar_undo_bitmap.SetScaleFactor(undo_source.GetScaleFactor());
+        m_sidebar_undo_dark = dark;
+        m_sidebar_undo_em = m_em_unit;
+    }
+    // Rescaling reloads the untinted icon, so assign the tinted one every time.
+    m_bmp_value_revert.bmp() = m_sidebar_undo_bitmap;
+    const wxBitmap& undo_icon = has_changes_to_reset() ? m_bmp_value_revert.bmp() : m_bmp_white_bullet.bmp();
+    m_undo_btn->SetBitmap(undo_icon);
+    m_undo_btn->SetBitmapCurrent(undo_icon);
+    m_undo_btn->SetBitmapPressed(undo_icon);
+    m_undo_btn->SetBitmapFocus(undo_icon);
+    m_top_sizer->SetMinSize(-1, FromDIP(control_md));
+    if (auto* row = m_main_sizer->GetItem(m_top_panel)) row->SetBorder(FromDIP(4));
+    if (m_variant_sizer)
+        if (auto* row = m_main_sizer->GetItem(m_variant_sizer)) row->SetBorder(FromDIP(4));
+    if (m_presets_choice) m_presets_choice->set_sidebar_style();
+    if (auto* summary = process_summary(this)) summary->apply_style();
+    for (auto* button : {m_btn_save_preset, m_btn_delete_preset, m_btn_search}) {
+        button->SetMinSize(FromDIP(wxSize(24, control_md)));
+        button->SetMaxSize(FromDIP(wxSize(24, control_md)));
+        button->SetBitmapMargins(0, 0);
+    }
+    m_search_input->SetFont(font(TypeStyle::Body));
+    m_search_input->SetMinSize(wxSize(-1, FromDIP(control_md)));
+    apply_sidebar_tree_style();
+    apply_sidebar_variant_style();
+    m_parent->apply_sidebar_style();
+    Layout();
+}
+
+void Tab::apply_sidebar_tree_style()
+{
+    if (!is_prepare_sidebar() || !m_tabctrl) return;
+    using namespace DesignSystem;
+    const bool dark = wxGetApp().dark_mode();
+    const wxColour surface(color_hex(ColorRole::Surface, dark));
+    const wxColour ink(color_hex(ColorRole::Ink, dark));
+    const wxColour muted(color_hex(ColorRole::InkMuted, dark));
+    m_tabctrl->SetFont(font(TypeStyle::Label));
+    m_tabctrl->SetBackgroundColour(surface);
+    m_tabctrl->SetBackgroundColor(StateColor::resolved(surface));
+    m_tabctrl->SetBorderColor(StateColor::resolved(wxColour(color_hex(ColorRole::Line, dark))));
+    m_tabctrl->SetSidebarStyle(ColorRole::AccentInk);
+    m_tabctrl->SetMinSize(wxSize(-1, FromDIP(row_height)));
+    for (wxWindow* child : m_tabctrl->GetChildren()) {
+        if (auto* button = dynamic_cast<Button*>(child)) {
+            button->SetPaddingSize(FromDIP(wxSize(2, 6)));
+            button->SetBackgroundColour(surface);
+            button->SetBackgroundColor(StateColor());
+            button->SetBorderColor(StateColor());
+        }
+    }
+    unsigned int item = 0;
+    for (const auto& page : m_pages) {
+        if (!page->get_show()) continue;
+        // Preserve the modified-category indicator and reset semantics.
+        m_tabctrl->SetItemTextColour(item++, page->get_item_colour() == m_modified_label_clr ?
+            StateColor(std::make_pair(page->get_item_colour(), static_cast<int>(StateColor::Normal))) :
+            StateColor::resolved(StateColor(std::make_pair(muted, static_cast<int>(StateColor::NotChecked)), std::make_pair(ink, static_cast<int>(StateColor::Normal)))));
+    }
+    if (m_tabctrl->GetCount() > 0) m_tabctrl->Rescale();
+}
+
+void Tab::apply_sidebar_variant_style()
+{
+    if (!is_prepare_sidebar() || !m_extruder_switch) return;
+    using namespace DesignSystem;
+    const bool dark = wxGetApp().dark_mode();
+    const wxColour surface(color_hex(ColorRole::Surface, dark));
+    const wxColour ink(color_hex(ColorRole::Ink, dark));
+    const wxColour muted(color_hex(ColorRole::InkMuted, dark));
+    if (auto* left = m_variant_sizer->GetItem(std::size_t(0))->GetSizer())
+        for (auto* item : left->GetChildren())
+            if (auto* label = dynamic_cast<wxStaticText*>(item->GetWindow())) {
+                label->SetFont(font(TypeStyle::Caption));
+                label->SetForegroundColour(muted);
+            }
+    const wxColour field(color_hex(ColorRole::Field, dark));
+    const wxColour hover(color_hex(ColorRole::SurfaceHover, dark));
+    const StateColor segment_background = StateColor::resolved(StateColor(
+        std::make_pair(hover, static_cast<int>(StateColor::Checked)),
+        std::make_pair(surface, static_cast<int>(StateColor::Hovered)),
+        std::make_pair(field, static_cast<int>(StateColor::Normal))));
+    m_extruder_switch->SetFont(font(TypeStyle::Label));
+    m_extruder_switch->SetButtonCornerRadius(FromDIP(radius_sm));
+    m_extruder_switch->SetButtonPadding(wxSize(6, 4));
+    m_extruder_switch->SetBackgroundColour(field);
+    m_extruder_switch->StaticBox::SetBackgroundColor(StateColor::resolved(field));
+    m_extruder_switch->SetBackgroundColor(segment_background);
+    m_extruder_switch->SetTextColor(StateColor::resolved(StateColor(
+        std::make_pair(wxColour(color_hex(ColorRole::InkDisabled, dark)), static_cast<int>(StateColor::Disabled)),
+        std::make_pair(ink, static_cast<int>(StateColor::Checked)),
+        std::make_pair(muted, static_cast<int>(StateColor::Hovered)),
+        std::make_pair(muted, static_cast<int>(StateColor::Normal)))));
+    for (wxWindow* child : m_extruder_switch->GetChildren())
+        child->SetBackgroundColour(field);
+    for (unsigned int i = 0; i < m_extruder_switch->GetCount(); ++i) {
+        auto* button = m_extruder_switch->GetButton(i);
+        button->SetFont(font(TypeStyle::Label));
+        button->SetBackgroundColour(field);
+        button->SetBackgroundColor(segment_background);
+        button->SetMinSize(FromDIP(wxSize(60, control_md)));
+        int toolhead;
+        NozzleVolumeType volume;
+        parse_extruder_selection(int(i), toolhead, volume);
+        button->SetToolTip(format_wxstr(_L("Settings for %1% (%2%)"),
+            m_extruder_switch->GetOptionText(i), _L(get_nozzle_volume_type_string(volume))));
+    }
+    m_extruder_switch->Rescale();
+    update_extruder_switch_colors();
+    if (m_extruder_sync_box) m_extruder_sync_box->SetBackgroundColour(surface);
+}
+
+DynamicPrintConfig Tab::inherited_process_values() const
+{
+    auto* plater = wxGetApp().plater();
+    if (m_type != Preset::TYPE_PRINT || !is_prepare_sidebar() || !plater || !plater->get_partplate_list().independent_setups())
+        return {};
+    auto& plates = plater->get_partplate_list();
+    const auto* plate = plates.get_curr_plate();
+    if (!plate) return {};
+    // A plate without a cascade yet derives one from its preset, as editing does.
+    if (plate->print_setup().process_base.empty())
+        return inherited_process_settings(plates.process_setup(plates.get_curr_plate_index()), plates.process_scopes(), plate->stage_id());
+    return inherited_process_settings(plate->print_setup(), plates.process_scopes(), plate->stage_id());
+}
+
+bool Tab::has_changes_to_reset() const
+{
+    if (!m_inherited_baseline) return m_presets->get_edited_preset().is_dirty;
+    return std::any_of(m_options_list.begin(), m_options_list.end(),
+                       [](const auto& option) { return (option.second & osInitValue) == 0; });
+}
+
+Tab* Tab::scope_editor() const
+{
+    return m_type == Preset::TYPE_PRINT && m_parent ? m_parent->scope_tab() : nullptr;
 }
 
 void Tab::parse_extruder_selection(int selection, int &extruder_id, NozzleVolumeType &nozzle_type)
@@ -913,11 +1221,13 @@ void Tab::OnActivate()
 
 void Tab::update_label_colours()
 {
+    if (auto* scope = scope_editor()) scope->update_label_colours();
     m_default_text_clr = wxGetApp().get_label_clr_default();
-    if (m_sys_label_clr == wxGetApp().get_label_clr_sys() && m_modified_label_clr == wxGetApp().get_label_clr_modified())
+    const wxColour modified = modified_label_colour(is_prepare_sidebar());
+    if (m_sys_label_clr == wxGetApp().get_label_clr_sys() && m_modified_label_clr == modified)
         return;
     m_sys_label_clr = wxGetApp().get_label_clr_sys();
-    m_modified_label_clr = wxGetApp().get_label_clr_modified();
+    m_modified_label_clr = modified;
 
     //update options "decoration"
     for (const auto& opt : m_options_list)
@@ -1123,6 +1433,23 @@ void Tab::update_changed_ui()
     filter_diff_option(dirty_options);
     filter_diff_option(nonsys_options);
 
+    // On an independent plate, a process value is a change only where it differs
+    // from what the plate inherits. Row reset returns to the same values.
+    const auto inherited = inherited_process_values();
+    m_inherited_baseline = !inherited.empty();
+    if (m_inherited_baseline) {
+        dirty_options.erase(std::remove_if(dirty_options.begin(), dirty_options.end(),
+            [&inherited](const std::string& key) { return inherited.has(key); }), dirty_options.end());
+        for (const auto& key : inherited.keys())
+            if (const auto* value = m_config->option(key); value && *value != *inherited.option(key))
+                dirty_options.push_back(key);
+    }
+
+    if (auto* summary = process_summary(this)) {
+        const std::set<std::string> changes(dirty_options.begin(), dirty_options.end());
+        summary->set_change_count(changes.size(), m_inherited_baseline);
+    }
+
     for (auto& it : m_options_list)
         it.second = m_opt_status_value;
 
@@ -1295,6 +1622,7 @@ void Tab::update_extruder_switch_colors()
         }
     }
 
+    std::vector<unsigned int> modified_segments;
     for (size_t switch_index = 0; switch_index < options.size(); ++switch_index) {
         bool sys_extruder = true;
         bool modified_extruder = false;
@@ -1302,9 +1630,18 @@ void Tab::update_extruder_switch_colors()
             check_extruder_options_status((int) switch_index, sys_extruder, modified_extruder, pages_to_check);
         // no matching page: clear the flag so the tag doesn't keep a stale color
 
-        if (m_extruder_switch) m_extruder_switch->SetModified(switch_index, modified_extruder);
+        if (m_extruder_switch) {
+            m_extruder_switch->SetModified(switch_index, modified_extruder);
+            if (is_prepare_sidebar() && modified_extruder)
+                modified_segments.push_back(static_cast<unsigned int>(switch_index));
+        }
         if (m_variant_combo)   m_variant_combo->SetModified(switch_index, modified_extruder);
     }
+    // SetModified restyles the whole switch, so apply the compact palette after
+    // every flag has been updated rather than losing earlier labels in the loop.
+    for (unsigned int index : modified_segments)
+        m_extruder_switch->SetButtonTextColor(index, StateColor::resolved(
+            wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::AccentInk, wxGetApp().dark_mode()))));
 }
 
 void Tab::check_extruder_options_status(int index, bool &sys_extruder, bool &modified_extruder, const std::vector<PageShp>& pages_to_check)
@@ -1519,10 +1856,19 @@ void Tab::update_changed_tree_ui()
 void Tab::update_undo_buttons()
 {
     // BBS: restore all pages in preset
-    m_undo_btn->        SetBitmap_(m_presets->get_edited_preset().is_dirty ? m_bmp_value_revert: m_bmp_white_bullet);
+    const bool resettable = has_changes_to_reset();
+    const ScalableBitmap& undo_bitmap = resettable ? m_bmp_value_revert : m_bmp_white_bullet;
+    m_undo_btn->SetBitmap_(undo_bitmap);
+    if (is_prepare_sidebar()) {
+        m_undo_btn->SetBitmapCurrent(undo_bitmap.bmp());
+        m_undo_btn->SetBitmapPressed(undo_bitmap.bmp());
+        m_undo_btn->SetBitmapFocus(undo_bitmap.bmp());
+    }
     //m_undo_to_sys_btn-> SetBitmap_(m_is_nonsys_values   ? *m_bmp_non_system : m_bmp_value_lock);
 
-    m_undo_btn->SetToolTip(m_presets->get_edited_preset().is_dirty ? _L("Click to reset all settings to the last saved preset.") : m_ttg_white_bullet);
+    m_undo_btn->SetToolTip(!resettable ? m_ttg_white_bullet : m_inherited_baseline ?
+        _L("Click to return this plate's settings to their inherited values.") :
+        _L("Click to reset all settings to the last saved preset."));
     //m_undo_to_sys_btn->SetToolTip(m_is_nonsys_values ? *m_ttg_non_system : m_ttg_value_lock);
 }
 
@@ -1538,7 +1884,7 @@ void Tab::on_roll_back_value(const bool to_sys /*= true*/)
     }
     else {
         // BBS: restore all pages in preset
-        if (!m_presets->get_edited_preset().is_dirty) return;
+        if (!has_changes_to_reset()) return;
         os = osInitValue;
     }
 
@@ -1576,7 +1922,12 @@ void Tab::on_roll_back_value(const bool to_sys /*= true*/)
     }
 
     // BBS: restore all pages in preset
-    m_presets->discard_current_changes();
+    // An independent plate keeps the values it inherits from its project and stage.
+    if (const auto inherited = to_sys ? DynamicPrintConfig{} : inherited_process_values(); !inherited.empty()) {
+        m_config->apply(m_presets->get_selected_preset().config);
+        m_config->apply(inherited);
+    } else
+        m_presets->discard_current_changes();
 
     m_postpone_update_ui = false;
 
@@ -1615,7 +1966,9 @@ void Tab::update_dirty()
 
     if (m_presets_choice) {
         m_presets_choice->update_dirty();
-        on_presets_changed();
+        // A print value edit only changes the preset's dirty label, updated above.
+        // Rebuilding the selectors also restyles the unrelated printer controls.
+        on_presets_changed(m_type != Preset::TYPE_PRINT);
     } else {
         m_presets->update_dirty();
     }
@@ -1659,7 +2012,9 @@ void Tab::reload_config()
 
 void Tab::update_mode()
 {
+    if (auto* scope = scope_editor()) scope->update_mode();
     m_mode = wxGetApp().get_mode();
+    if (auto* summary = process_summary(this)) summary->sync_mode();
 
     // toggle_options reads m_mode to gate Lines whose contents are mode-mixed
     // (e.g., a multi-option row where some options are Advanced and some Expert):
@@ -1738,11 +2093,13 @@ void Tab::msw_rescale()
 
     //BBS: GUI refactor
     //Layout();
+    apply_sidebar_style();
     m_parent->Layout();
 }
 
 void Tab::sys_color_changed()
 {
+    if (auto* scope = scope_editor()) scope->sys_color_changed();
     if (m_presets_choice)
         m_presets_choice->sys_color_changed();
 
@@ -1786,6 +2143,7 @@ void Tab::sys_color_changed()
 
     //BBS: GUI refactor
     //Layout();
+    apply_sidebar_style();
     m_parent->Layout();
 }
 
@@ -2592,13 +2950,16 @@ void Tab::apply_config_from_cache()
 // to update the filament colors of the selection boxes,
 // to update the "dirty" flags of the selection boxes,
 // to update number of "filament" selection boxes when the number of extruders change.
-void Tab::on_presets_changed()
+void Tab::on_presets_changed(bool refresh_sidebar)
 {
     if (wxGetApp().plater() == nullptr)
         return;
 
     // Instead of PostEvent (EVT_TAB_PRESETS_CHANGED) just call update_presets
-    wxGetApp().plater()->sidebar().update_presets(m_type);
+    if (refresh_sidebar)
+        wxGetApp().plater()->sidebar().update_presets(m_type);
+    else
+        wxGetApp().plater()->sidebar().update_settings_scope();
 
     // Check if printer agent needs switching
     if (m_type == Preset::TYPE_PRINTER) {
@@ -3879,6 +4240,91 @@ void TabPrintModel::update_custom_dirty(std::vector<std::string> &dirty_options,
     nonsys_options = concat(nonsys_options, m_all_keys);
 }
 
+TabPrintScope::TabPrintScope(ParamsPanel* parent)
+    : TabPrintModel(parent, plate_process_edit_keys())
+{
+    m_parent_tab = wxGetApp().get_tab(Preset::TYPE_PRINT);
+}
+
+void TabPrintScope::build()
+{
+    // create_preset_tab can activate a page while it builds the navigation.
+    // Give those fields complete defaults before any scope is selected.
+    m_inherited = *m_parent_tab->get_config();
+    m_prints.get_selected_preset().config = m_inherited;
+    m_prints.get_edited_preset().config = m_inherited;
+    TabPrintModel::build();
+    for (auto& page : m_pages) for (auto& group : page->m_optgroups) {
+        group->m_get_sys_config = [this] { return m_inherited; };
+        group->m_get_initial_config = [this] { return m_inherited; };
+    }
+}
+
+void TabPrintScope::load_scope(const DynamicPrintConfig& values, const DynamicPrintConfig& inherited,
+                              const DynamicPrintConfig& overrides, const std::vector<std::string>& mixed,
+                              const std::vector<std::string>& mixed_inherited)
+{
+    m_inherited = inherited;
+    m_prints.get_selected_preset().config = inherited;
+    *m_config = values;
+    m_all_keys = overrides.keys();
+    m_null_keys = mixed;
+    m_mixed_inherited = mixed_inherited;
+    update();
+    reload_config();
+}
+
+void TabPrintScope::update_custom_dirty(std::vector<std::string>& dirty_options, std::vector<std::string>& nonsys_options)
+{
+    TabPrintModel::update_custom_dirty(dirty_options, nonsys_options);
+    // The baseline shown is the first plate's. When plates inherit different
+    // values, a value set here changes at least one of them.
+    dirty_options = concat(dirty_options, m_mixed_inherited);
+}
+
+void TabPrintScope::update()
+{
+    toggle_options();
+    update_dirty();
+}
+
+void TabPrintScope::reload_config()
+{
+    TabPrint::reload_config();
+    if (m_active_page) for (const auto& key : m_null_keys)
+        if (auto* field = m_active_page->get_field(key)) field->set_value(boost::any{}, false);
+}
+
+void TabPrintScope::activate_selected_page(std::function<void()> throw_if_canceled)
+{
+    Tab::activate_selected_page(throw_if_canceled);
+    reload_config();
+}
+
+void TabPrintScope::on_value_change(const std::string& key, const boost::any&)
+{
+    const bool inherit = m_back_to_sys;
+    m_back_to_sys = false;
+    const auto* option = m_config->option(key);
+    std::shared_ptr<const ConfigOption> value(option ? option->clone() : nullptr);
+    // Applying can report an error, take a snapshot and reload the print settings,
+    // and rebinding the scope can rebuild this page. Finish the field event first.
+    CallAfter([this, key, value, inherit] {
+        if (IsBeingDeleted() || wxGetApp().is_closing()) return;
+        wxGetApp().sidebar().apply_scope_setting(key, value.get(), inherit);
+        wxGetApp().sidebar().update_settings_scope(true);
+    });
+}
+
+void TabPrintScope::reset_model_config()
+{
+    CallAfter([this] {
+        if (IsBeingDeleted() || wxGetApp().is_closing()) return;
+        wxGetApp().sidebar().apply_scope_setting({}, nullptr, true);
+        wxGetApp().sidebar().update_settings_scope(true);
+    });
+}
+
 //BBS: GUI refactor
 TabPrintPlate::TabPrintPlate(ParamsPanel* parent) :
     TabPrintModel(parent, plate_keys)
@@ -4041,6 +4487,17 @@ void TabPrintPlate::on_value_change(const std::string& opt_key, const boost::any
         m_all_keys = concat(m_all_keys, { k });
     }
     if (m_back_to_sys || set) update_changed_ui();
+    // The skirt start angle is both a native plate option and a cascaded process
+    // setting. Keep the plate's explicit value in step, or the next cascade refresh
+    // would replace the native value. The snapshot above covers this change.
+    if (std::find(plate_process_edit_keys().begin(), plate_process_edit_keys().end(), k) != plate_process_edit_keys().end())
+        for (auto plate_item : m_object_configs) {
+            auto* plate = dynamic_cast<PartPlate*>(plate_item.first);
+            if (!plate || plate->print_setup().process_base.empty()) continue;
+            if (m_back_to_sys) plate->print_setup().process_overrides.erase(k);
+            else if (const auto* option = plate_item.second->option(k))
+                plate->print_setup().process_overrides.set_key_value(k, option->clone());
+        }
     m_back_to_sys = false;
     for (auto plate_item : m_object_configs) {
         plate_item.second->touch();
@@ -7202,6 +7659,7 @@ void Tab::rebuild_page_tree()
          if (m_parent->is_active_and_shown_tab(this)) // FIX: modify state not update
             m_tabctrl->SelectItem(item);
     }
+    apply_sidebar_tree_style();
 }
 
 void Tab::update_btns_enabling()
@@ -8748,7 +9206,9 @@ void Tab::update_extruder_variants(int extruder_id, bool reload)
         update_pages_with_multi_variant();
     }
     update_extruder_switch_colors();
+    apply_sidebar_variant_style();
     update_variant_sizer_visibility();
+    if (is_prepare_sidebar()) Layout();
 }
 
 // The variant switch tags are the narrowest place a volume type is named, so they abbreviate it;
@@ -8846,6 +9306,8 @@ std::vector<wxString> Tab::generate_extruder_options()
         if (volume_type == NozzleVolumeType::nvtHybrid) {
             options.push_back(wxString::Format(_L("%s %s"), extruder_name, short_nozzle_volume_name(get_nozzle_volume_type_string(NozzleVolumeType::nvtStandard))));
             options.push_back(wxString::Format(_L("%s %s"), extruder_name, short_nozzle_volume_name(get_nozzle_volume_type_string(NozzleVolumeType::nvtHighFlow))));
+        } else if (is_prepare_sidebar() && volume_type == NozzleVolumeType::nvtStandard) {
+            options.push_back(extruder_name);
         } else {
             options.push_back(wxString::Format(_L("%s %s"), extruder_name,
                                                short_nozzle_volume_name(get_nozzle_volume_type_string(volume_type))));
@@ -9335,7 +9797,8 @@ bool Page::activate_group(size_t i, ConfigOptionMode mode, std::function<void()>
     if (!group->activate(throw_if_canceled))
         return false;
     m_visibility_applied = false;
-    m_vsizer->Add(group->sizer, 0, wxEXPAND | (group->is_legend_line() ? (wxLEFT|wxTOP) : wxALL), m_parent->FromDIP(5)); // ORCA use less margin on parameters section
+    m_vsizer->Add(group->sizer, 0, wxEXPAND | (group->is_legend_line() ? (wxLEFT|wxTOP) : wxALL),
+        m_parent->FromDIP(group->compact_sidebar() ? 12 : 5));
     group->update_visibility(mode);
 #if HIDE_FIRST_SPLIT_LINE
     // BBS: no line spliter for first group
@@ -9374,8 +9837,13 @@ void Page::clear()
 
 void Page::msw_rescale()
 {
-    for (auto group : m_optgroups)
+    for (auto group : m_optgroups) {
         group->msw_rescale();
+        if (group->sizer && group->compact_sidebar()) {
+            if (auto* item = m_vsizer->GetItem(group->sizer))
+                item->SetBorder(m_parent->FromDIP(12));
+        }
+    }
 }
 
 void Page::sys_color_changed()
@@ -9453,6 +9921,7 @@ ConfigOptionsGroupShp Page::new_optgroup(const wxString &title, const wxString &
     auto tab = parent()->GetParent();// GetParent();
 #endif*/
     auto tab = m_tab_owner;
+    optgroup->set_compact_sidebar(static_cast<Tab*>(tab)->is_prepare_sidebar());
     optgroup->set_config_category_and_type(m_title, static_cast<Tab*>(tab)->type());
     optgroup->m_on_change = [tab](t_config_option_key opt_key, boost::any value) {
         //! This function will be called from OptionGroup.
@@ -9465,7 +9934,11 @@ ConfigOptionsGroupShp Page::new_optgroup(const wxString &title, const wxString &
     };
 
     optgroup->m_get_initial_config = [tab]() {
-        DynamicPrintConfig config = static_cast<Tab*>(tab)->m_presets->get_selected_preset().config;
+        auto* owner = static_cast<Tab*>(tab);
+        DynamicPrintConfig config = owner->m_presets->get_selected_preset().config;
+        // A process field on an independent plate resets to its inherited value.
+        // Printer/material fields and the reusable preset editor retain Orca's reset behavior.
+        config.apply(owner->inherited_process_values());
         return config;
     };
 

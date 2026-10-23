@@ -4027,7 +4027,7 @@ void GLGizmoTextureDisplacement::render_texture_library_popup(const ImVec2 &pane
         if (ImGui::IsItemHovered())
             m_imgui->tooltip(_u8L("Import your own image as a height map. It is converted to the format the slicer "
                                   "bakes from and saved to your personal texture folder, kept separate from the "
-                                  "textures shipped with OrcaSlicer."),
+                                  "textures shipped with Porca."),
                              m_imgui->scaled(20.f));
         end_grid(origin, count + 1);
     }

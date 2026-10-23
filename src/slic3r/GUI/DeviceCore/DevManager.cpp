@@ -270,6 +270,7 @@ namespace Slic3r
         try {
             json j = json::parse(json_str);
             std::string dev_name        = j["dev_name"].get<std::string>();
+            const std::string source_agent_id = j.value("__porca_printer_agent_id", get_current_printer_agent_id());
             std::string dev_id          = j["dev_id"].get<std::string>();
             std::string dev_ip          = j["dev_ip"].get<std::string>();
             std::string printer_type_str= j["dev_type"].get<std::string>();
@@ -301,9 +302,9 @@ namespace Slic3r
             auto it = userMachineList.find(dev_id);
             if (it != userMachineList.end()) {
                 // A reused entry may have been created while another printer agent was active.
-                // The response was obtained through the current agent, so move ownership with
-                // the entry; otherwise agent-scoped lists hide it after a preset switch.
-                it->second->printer_agent_id = get_current_printer_agent_id();
+                // Preserve the callback's origin across delayed GUI dispatch; the
+                // selected agent may already belong to another printer.
+                it->second->printer_agent_id = source_agent_id;
                 if (it->second->get_dev_ip() != dev_ip ||
                     it->second->bind_state != bind_state ||
                     it->second->bind_sec_link != sec_link ||
@@ -337,8 +338,8 @@ namespace Slic3r
                 /* ip changed */
                 obj = it->second;
                 // A reused LAN entry may have been discovered while another printer agent was
-                // active. The current discovery message establishes ownership for this agent.
-                obj->printer_agent_id = get_current_printer_agent_id();
+                // active. The stamped source establishes ownership for this message.
+                obj->printer_agent_id = source_agent_id;
 
                 if (obj->get_dev_ip().compare(dev_ip) != 0) {
                     if ( connection_name.empty() ) {
@@ -414,7 +415,7 @@ namespace Slic3r
                 /* insert a new machine */
                 obj = new MachineObject(this, m_agent, dev_name, dev_id, dev_ip);
                 obj->printer_type = _parse_printer_type(printer_type_str);
-                obj->printer_agent_id = get_current_printer_agent_id();
+                obj->printer_agent_id = source_agent_id;
                 obj->wifi_signal = printer_signal;
                 obj->dev_connection_type = connect_type;
                 obj->bind_state     = bind_state;
@@ -461,18 +462,20 @@ namespace Slic3r
         std::string connection_type, std::string bind_state,
         std::string version, std::string access_code)
     {
+        // A saved session names the agent that owns it; a background session can start while a
+        // different backend is visible. Only callers without an owner follow the active agent,
+        // which is also what keeps a reused entry visible in that agent's printer list.
+        const std::string agent_id = machine.printer_agent_id.empty() ? get_current_printer_agent_id()
+                                                                      : machine.printer_agent_id;
         MachineObject* obj;
         auto           it = localMachineList.find(machine.dev_id);
         if (it != localMachineList.end()) {
             obj = it->second;
-            // insert_local_device is called by the active agent, so a reused entry must follow
-            // that agent as well; otherwise the agent-scoped printer list hides it.
-            obj->printer_agent_id = get_current_printer_agent_id();
         } else {
             obj = new MachineObject(this, m_agent, machine.dev_name, machine.dev_id, machine.dev_ip);
-            obj->printer_agent_id = get_current_printer_agent_id();
             localMachineList.insert(std::make_pair(machine.dev_id, obj));
         }
+        obj->printer_agent_id = agent_id;
         if (machine.printer_type.empty())
             obj->printer_type = _parse_printer_type("C11");
         else
@@ -649,7 +652,7 @@ namespace Slic3r
         {
             if (last_selected->second->connection_type() == "lan")
             {
-                m_agent->disconnect_printer();
+                if (!m_agent->has_printer_session(last_selected->first)) m_agent->disconnect_printer();
             }
             else if (last_selected->second->connection_type() == "cloud") {
                 const int result = m_agent->set_user_selected_machine("");
@@ -661,59 +664,27 @@ namespace Slic3r
         // connect curr
         if (it != my_machine_list.end())
         {
-            if (selected_machine == dev_id)
-            {
-                // same dev_id, cloud => reset update time
-                if (it->second->connection_type() != "lan")
-                {
+            if (selected_machine == dev_id) {
+                if (it->second->connection_type() != "lan") {
+                    // Reselecting a cloud printer refreshes its status and subscription.
                     BOOST_LOG_TRIVIAL(info) << "set_selected_machine: same cloud machine, dev_id =" << dev_id
                         << ", just reset update time";
-
-                    // only reset update time
                     it->second->reset_update_time();
-
-                    // check subscribe state
                     Slic3r::GUI::wxGetApp().on_start_subscribe_again(dev_id);
-
-                    return true;
+                } else if (m_agent) {
+                    it->second->connect(); // Equal connection parameters reuse a live attempt.
                 }
-                // same dev_id, lan => disconnect and reconnect
-                else
-                {
-                    BOOST_LOG_TRIVIAL(info) << "set_selected_machine: same lan machine, dev_id =" << dev_id
-                        << ", disconnect and reconnect";
-
-                    // lan mode printer reconnect printer
-                    if (m_agent)
-                    {
-                        m_agent->disconnect_printer();
-                        it->second->reset();
-
-                        it->second->connect();
-                        it->second->set_lan_mode_connection_state(true);
-                    }
-                }
+                return true;
             }
-            else
-            {
-                if (m_agent)
-                {
-                    if (it->second->connection_type() != "lan" || it->second->connection_type().empty())
-                    {
-                        // diff dev_id, cloud => set_user_selected_machine(new)
-                        BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new cloud machine, dev_id =" << dev_id;
-                        const int result = m_agent->set_user_selected_machine(dev_id);
-                        BOOST_LOG_TRIVIAL(trace) << "Orca diagnostic: set new cloud selection dev_id="
-                                                << dev_id << " result=" << result;
-                        it->second->reset();
-                    }
-                    else
-                    {
-                        BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new lan machine, dev_id =" << dev_id;
-                        it->second->reset();
-                        it->second->connect();
-                        it->second->set_lan_mode_connection_state(true);
-                    }
+            if (m_agent) {
+                if (it->second->connection_type() != "lan") {
+                    m_agent->set_user_selected_machine(dev_id);
+                    it->second->reset();
+                } else {
+                    const bool retained = m_agent->has_printer_session(dev_id);
+                    if (!retained) it->second->reset();
+                    it->second->connect(); // Equal connection parameters reuse the attempt.
+                    if (!retained) it->second->set_lan_mode_connection_state(true);
                 }
             }
             for (auto& data : it->second->m_nozzle_filament_data)

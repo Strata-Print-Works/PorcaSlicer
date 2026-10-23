@@ -87,6 +87,16 @@ key keeps its chord and shadows that one step. A move or rotation of the selecti
 started from the keyboard runs until the key that started it is released, or the
 canvas loses focus, so a held key is one undo step.
 
+In Prepare, Select All first selects model instances belonging to the active plate. A second
+press within 500 ms selects models across the entire project through the existing all-plates command.
+Command can stay held between the two A taps. On macOS and Windows, native repeat flags
+distinguish a fresh tap from auto-repeat even when a key-up event is absent.
+Native input timestamps keep the gesture reliable when a large selection delays the second event.
+The canvas, object list, project overview and native Edit menu share this behavior, including customized bindings. Other
+canvas input or a change of focus, plate or selection starts a fresh sequence.
+The separate Select All Plates shortcut remains available. Text entries and web content
+retain their own selection behavior.
+
 ## Labels
 
 Menu labels, toolbar tooltips, gizmo names, the context menu and the shortcuts dialog

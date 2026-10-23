@@ -38,6 +38,7 @@ public:
 
     void SetTextLayout(EHorizontalOrientation orient, int margin = 15);
 
+    // 0: original split sides; 1: standalone text; 2: action left, dropdown right.
     void SetLayoutStyle(int style);
 
     void SetLabel(const wxString& label) override;

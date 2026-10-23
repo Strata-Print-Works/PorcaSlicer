@@ -36,11 +36,12 @@
 #include "Lazy.hpp"
 
 class ModeSwitchButton;
-class SwitchButton;
+class TabCtrl;
 class StaticBox;
 
 namespace Slic3r {
 namespace GUI {
+class TabPrintScope;
 
 ///////////////////////////////////////////////////////////////////////////
 
@@ -81,15 +82,18 @@ class ParamsPanel : public wxPanel
         wxBoxSizer* m_top_sizer { nullptr };
         wxBoxSizer* m_left_sizer { nullptr };
         wxBoxSizer* m_mode_sizer { nullptr };
+        wxBoxSizer* m_scope_sizer { nullptr };
+        wxBoxSizer* m_tools_sizer { nullptr };
         // // BBS: new layout
         StaticBox* m_top_panel{ nullptr };
         ScalableButton* m_process_icon{ nullptr };
         wxStaticText* m_title_label { nullptr };
-        SwitchButton* m_mode_region { nullptr };
+        TabCtrl* m_mode_region { nullptr };
         ScalableButton *m_tips_arrow{nullptr};
         bool m_tips_arror_blink{false};
         ScalableButton* m_mode_icon { nullptr }; // ORCA
         ModeSwitchButton* m_mode_view { nullptr };
+        Button* m_visibility_choice { nullptr };
         //wxBitmapButton* m_search_button { nullptr };
         wxStaticLine* m_staticline_print { nullptr };
         //wxBoxSizer* m_print_sizer { nullptr };
@@ -124,6 +128,7 @@ class ParamsPanel : public wxPanel
         wxBitmap m_toggle_off_icon;
 
         wxPanel* m_current_tab { nullptr };
+        TabPrintScope* m_tab_scope { nullptr };
 
         // Builds the selected page's option groups at idle and then shows them for the mode;
         // while no tab is selected yet, its first unit selects the default one.
@@ -177,7 +182,12 @@ class ParamsPanel : public wxPanel
         bool is_active_and_shown_tab(wxPanel*tab);
         void update_mode();
         void msw_rescale();
+        bool is_prepare_sidebar() const { return m_top_panel != nullptr; }
+        void apply_sidebar_style();
         void switch_to_global();
+        void show_cascade_scope();
+        // The Project and Stage editor, once Prepare has created it.
+        TabPrintScope* scope_tab() const { return m_tab_scope; }
         void switch_to_object(bool with_tips = false);
 
         void notify_object_config_changed();

@@ -108,10 +108,10 @@ static void apply_accent_button_colours(Button* btn)
         std::pair<wxColour, int>(wxColour("#CECECE"), StateColor::Disabled),
         std::pair<wxColour, int>(wxColour(0, 137, 123), StateColor::Pressed),
         std::pair<wxColour, int>(wxColour(38, 166, 154), StateColor::Hovered),
-        std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal)));
+        std::pair<wxColour, int>(wxColour("#009688"), StateColor::Normal)));
     btn->SetBorderColor(StateColor(
         std::pair<wxColour, int>(wxColour("#CECECE"), StateColor::Disabled),
-        std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal)));
+        std::pair<wxColour, int>(wxColour("#009688"), StateColor::Normal)));
     btn->SetTextColor(StateColor(
         std::pair<wxColour, int>(wxColour("#6B6B6A"), StateColor::Disabled),
         std::pair<wxColour, int>(wxColour("#FFFFFE"), StateColor::Normal)));
@@ -2111,12 +2111,12 @@ void TextureImportDialog::build_params_panel(wxWindow* parent, wxSizer* sizer)
         StateColor preset_bg(
             std::pair<wxColour, int>(wxColour(0, 137, 123), StateColor::Pressed | StateColor::Checked),
             std::pair<wxColour, int>(wxColour(38, 166, 154), StateColor::Hovered | StateColor::Checked),
-            std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Checked),
+            std::pair<wxColour, int>(wxColour("#009688"), StateColor::Checked),
             std::pair<wxColour, int>(wxColour("#CECECE"), StateColor::Pressed),
             std::pair<wxColour, int>(wxColour("#EEEEEE"), StateColor::Hovered),
             std::pair<wxColour, int>(*wxWHITE, StateColor::Normal));
         StateColor preset_bd(
-            std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Checked),
+            std::pair<wxColour, int>(wxColour("#009688"), StateColor::Checked),
             std::pair<wxColour, int>(wxColour("#CECECE"), StateColor::Normal));
         StateColor preset_text(
             std::pair<wxColour, int>(wxColour("#FFFFFE"), StateColor::Checked),
@@ -2181,8 +2181,8 @@ void TextureImportDialog::build_params_panel(wxWindow* parent, wxSizer* sizer)
             std::pair<wxColour, int>(wxColour("#CECECE"), StateColor::Pressed),
             std::pair<wxColour, int>(wxColour("#EEEEEE"), StateColor::Hovered),
             std::pair<wxColour, int>(*wxWHITE, StateColor::Normal));
-        const wxColour btn_bd_accent = wxColour(0, 150, 136);
-        const wxColour btn_text_accent = wxColour(0, 150, 136);
+        const wxColour btn_bd_accent = StateColor::darkModeColorFor(wxColour("#009688"));
+        const wxColour btn_text_accent = StateColor::darkModeColorFor(wxColour("#009688"));
 
         m_btn_color_auto->SetCornerRadius(FromDIP(12));
         m_btn_color_auto->SetMinSize(wxSize(FromDIP(60), FromDIP(28)));

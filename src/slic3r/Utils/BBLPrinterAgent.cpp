@@ -12,6 +12,7 @@
 #include <boost/nowide/fstream.hpp>
 #include <exception>
 #include <functional>
+#include <optional>
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <slic3r/GUI/DeviceManager.hpp>
@@ -23,6 +24,8 @@ using json = nlohmann::json;
 #include <type_traits>
 #include <unordered_map>
 #include <memory>
+#include <mutex>
+#include <wx/app.h>
 
 namespace Slic3r { class ICloudServiceAgent; }
 
@@ -106,6 +109,13 @@ OnMessageFn to_orca_messages(OnMessageFn fn)
     return [fn = std::move(fn)](std::string dev_id, std::string msg) { fn(std::move(dev_id), BBLPrinterAgent::to_orca_payload(std::move(msg))); };
 }
 
+// Destroy the SDK work's callable while its module is still held. Keeping these
+// in an explicit struct gives defined member destruction order, unlike captures.
+struct QueuedPluginWork {
+    std::shared_ptr<BBLNetworkPlugin> owner;
+    std::function<void()> work;
+};
+
 // Retypes a plug-in entry point for an older plug-in generation. The detour through the
 // generic function pointer marks the signature change as deliberate, which a direct cast
 // between two signatures does not.
@@ -144,7 +154,28 @@ std::string BBLPrinterAgent::from_orca_payload(std::string json_text)
 
 BBLPrinterAgent::BBLPrinterAgent() = default;
 
+BBLPrinterAgent::BBLPrinterAgent(std::shared_ptr<BBLNetworkPlugin> plugin, std::optional<bool> mqtt_ssl)
+    : m_plugin(std::move(plugin)), m_mqtt_ssl(mqtt_ssl) {}
+
+BBLNetworkPlugin& BBLPrinterAgent::plugin() const
+{
+    return m_plugin ? *m_plugin : BBLNetworkPlugin::instance();
+}
+
 BBLPrinterAgent::~BBLPrinterAgent() = default;
+
+bool BBLPrinterAgent::can_connect_to(const std::string& id) const
+{
+    std::lock_guard<std::mutex> lock(m_target_mutex);
+    return !m_plugin || m_device_id.empty() || m_device_id == id;
+}
+
+bool BBLPrinterAgent::owns_target(const std::string& id) const
+{
+    if (!m_plugin) return true;
+    std::lock_guard<std::mutex> lock(m_target_mutex);
+    return !m_device_id.empty() && m_device_id == id;
+}
 
 void BBLPrinterAgent::set_cloud_agent(std::shared_ptr<ICloudServiceAgent> cloud)
 {
@@ -268,22 +299,39 @@ int BBLPrinterAgent::send_message(std::string dev_id, std::string json_str, int 
     return -1;
 }
 
-int BBLPrinterAgent::connect_printer(const PrinterConnectionParams& params)
+bool BBLPrinterAgent::uses_ssl_for_mqtt(const std::string& id)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
-    auto agent = plugin.get_agent();
-    auto func = plugin.get_connect_printer();
 #if !BBL_RELEASE_TO_PUBLIC
-    const bool use_ssl_for_mqtt = GUI::wxGetApp().app_config &&
-                                  GUI::wxGetApp().app_config->get_bool("enable_ssl_for_mqtt");
+    const bool use_ssl_for_mqtt = !wxTheApp || (GUI::wxGetApp().app_config &&
+                                  GUI::wxGetApp().app_config->get_bool("enable_ssl_for_mqtt"));
 #else
     bool use_ssl_for_mqtt = true;
-    if (auto* dev_manager = GUI::wxGetApp().getDeviceManager()) {
-        if (auto* machine = dev_manager->get_my_machine(params.dev_id))
+    if (auto* dev_manager = wxTheApp ? GUI::wxGetApp().getDeviceManager() : nullptr) {
+        if (auto* machine = dev_manager->get_my_machine(id))
             use_ssl_for_mqtt = machine->local_use_ssl;
     }
 #endif
+    return use_ssl_for_mqtt;
+}
+
+int BBLPrinterAgent::connect_printer(const PrinterConnectionParams& params)
+{
+    if (m_plugin) {
+        std::lock_guard<std::mutex> lock(m_target_mutex);
+        if (!m_device_id.empty() && m_device_id != params.dev_id) return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
+        m_device_id = params.dev_id;
+    }
+    auto& plugin = this->plugin();
+    auto agent = plugin.get_agent();
+    auto func = plugin.get_connect_printer();
+    const bool use_ssl_for_mqtt = m_mqtt_ssl ? *m_mqtt_ssl : uses_ssl_for_mqtt(params.dev_id);
+
     if (func && agent) {
+        if (m_plugin && !m_started) {
+            const auto start = plugin.get_start();
+            if (!start || start(agent) != 0) return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+            m_started = true;
+        }
         return func(agent, params.dev_id, params.host, params.username, params.password, use_ssl_for_mqtt);
     }
     return -1;
@@ -291,7 +339,7 @@ int BBLPrinterAgent::connect_printer(const PrinterConnectionParams& params)
 
 int BBLPrinterAgent::disconnect_printer()
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_disconnect_printer();
     if (func && agent) {
@@ -302,8 +350,9 @@ int BBLPrinterAgent::disconnect_printer()
 
 int BBLPrinterAgent::send_message_to_printer(std::string dev_id, std::string json_str, int qos, int flag)
 {
+    if (!owns_target(dev_id)) return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
     json_str = from_orca_payload(std::move(json_str));
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_send_message_to_printer();
     if (func && agent) {
@@ -328,7 +377,7 @@ int BBLPrinterAgent::send_message_to_printer(std::string dev_id, std::string jso
 
 int BBLPrinterAgent::check_cert()
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_check_cert();
     if (func && agent) {
@@ -339,7 +388,8 @@ int BBLPrinterAgent::check_cert()
 
 void BBLPrinterAgent::install_device_cert(std::string dev_id, bool lan_only)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    if (!owns_target(dev_id)) return;
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_install_device_cert();
     if (func && agent) {
@@ -448,7 +498,7 @@ int BBLPrinterAgent::get_hms_snapshot(std::string dev_id, std::string file_name,
 
 int BBLPrinterAgent::set_server_callback(OnServerErrFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_server_callback();
     if (func && agent) {
@@ -551,9 +601,8 @@ namespace {
 // in one step: as_legacy()/as_0203() move out of `params` and their prvalue result lands in
 // the by-value ABI argument without another copy; the Current arm moves `params` outright.
 template <typename LegacyFn, typename Fn0203, typename CurrentFn, typename... CallbackFns>
-int dispatch_start(CurrentFn func, PrintParams& params, const CallbackFns&... callbacks)
+int dispatch_start(BBLNetworkPlugin& plugin, CurrentFn func, PrintParams& params, const CallbackFns&... callbacks)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
     auto agent = plugin.get_agent();
     if (!func || !agent)
         return -1;
@@ -574,32 +623,42 @@ int dispatch_start(CurrentFn func, PrintParams& params, const CallbackFns&... ca
 
 int BBLPrinterAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
+    if (params.connection_type == "lan" && !owns_target(params.dev_id)) return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
+    auto& context = params.connection_type == "lan" ? plugin() : BBLNetworkPlugin::instance();
     return dispatch_start<func_start_print_legacy, func_start_print_0203>(
-        BBLNetworkPlugin::instance().get_start_print(), params, update_fn, cancel_fn, wait_fn);
+        context, context.get_start_print(), params, update_fn, cancel_fn, wait_fn);
 }
 
 int BBLPrinterAgent::start_local_print_with_record(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
+    if (params.connection_type == "lan" && !owns_target(params.dev_id)) return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
+    auto& context = params.connection_type == "lan" ? plugin() : BBLNetworkPlugin::instance();
     return dispatch_start<func_start_local_print_with_record_legacy, func_start_local_print_with_record_0203>(
-        BBLNetworkPlugin::instance().get_start_local_print_with_record(), params, update_fn, cancel_fn, wait_fn);
+        context, context.get_start_local_print_with_record(), params, update_fn, cancel_fn, wait_fn);
 }
 
 int BBLPrinterAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
+    if (params.connection_type == "lan" && !owns_target(params.dev_id)) return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
+    auto& context = params.connection_type == "lan" ? plugin() : BBLNetworkPlugin::instance();
     return dispatch_start<func_start_send_gcode_to_sdcard_legacy, func_start_send_gcode_to_sdcard_0203>(
-        BBLNetworkPlugin::instance().get_start_send_gcode_to_sdcard(), params, update_fn, cancel_fn, wait_fn);
+        context, context.get_start_send_gcode_to_sdcard(), params, update_fn, cancel_fn, wait_fn);
 }
 
 int BBLPrinterAgent::start_local_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn)
 {
+    if (params.connection_type == "lan" && !owns_target(params.dev_id)) return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
+    auto& context = params.connection_type == "lan" ? plugin() : BBLNetworkPlugin::instance();
     return dispatch_start<func_start_local_print_legacy, func_start_local_print_0203>(
-        BBLNetworkPlugin::instance().get_start_local_print(), params, update_fn, cancel_fn);
+        context, context.get_start_local_print(), params, update_fn, cancel_fn);
 }
 
 int BBLPrinterAgent::start_sdcard_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn)
 {
+    if (params.connection_type == "lan" && !owns_target(params.dev_id)) return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
+    auto& context = params.connection_type == "lan" ? plugin() : BBLNetworkPlugin::instance();
     return dispatch_start<func_start_sdcard_print_legacy, func_start_sdcard_print_0203>(
-        BBLNetworkPlugin::instance().get_start_sdcard_print(), params, update_fn, cancel_fn);
+        context, context.get_start_sdcard_print(), params, update_fn, cancel_fn);
 }
 
 // ============================================================================
@@ -608,7 +667,7 @@ int BBLPrinterAgent::start_sdcard_print(PrintParams params, OnUpdateStatusFn upd
 
 int BBLPrinterAgent::set_on_ssdp_msg_fn(OnMsgArrivedFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_on_ssdp_msg_fn();
     if (func && agent) {
@@ -619,7 +678,7 @@ int BBLPrinterAgent::set_on_ssdp_msg_fn(OnMsgArrivedFn fn)
 
 int BBLPrinterAgent::set_on_printer_connected_fn(OnPrinterConnectedFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_on_printer_connected_fn();
     if (func && agent) {
@@ -630,7 +689,7 @@ int BBLPrinterAgent::set_on_printer_connected_fn(OnPrinterConnectedFn fn)
 
 int BBLPrinterAgent::set_on_subscribe_failure_fn(GetSubscribeFailureFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_on_subscribe_failure_fn();
     if (func && agent) {
@@ -641,7 +700,7 @@ int BBLPrinterAgent::set_on_subscribe_failure_fn(GetSubscribeFailureFn fn)
 
 int BBLPrinterAgent::set_on_message_fn(OnMessageFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_on_message_fn();
     if (func && agent) {
@@ -652,7 +711,7 @@ int BBLPrinterAgent::set_on_message_fn(OnMessageFn fn)
 
 int BBLPrinterAgent::set_on_user_message_fn(OnMessageFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_on_user_message_fn();
     if (func && agent) {
@@ -663,7 +722,7 @@ int BBLPrinterAgent::set_on_user_message_fn(OnMessageFn fn)
 
 int BBLPrinterAgent::set_on_local_connect_fn(OnLocalConnectedFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_on_local_connect_fn();
     if (func && agent) {
@@ -674,7 +733,7 @@ int BBLPrinterAgent::set_on_local_connect_fn(OnLocalConnectedFn fn)
 
 int BBLPrinterAgent::set_on_local_message_fn(OnMessageFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_on_local_message_fn();
     if (func && agent) {
@@ -685,7 +744,18 @@ int BBLPrinterAgent::set_on_local_message_fn(OnMessageFn fn)
 
 int BBLPrinterAgent::set_queue_on_main_fn(QueueOnMainFn fn)
 {
-    auto& plugin = BBLNetworkPlugin::instance();
+    if (m_plugin && fn) {
+        std::weak_ptr<BBLNetworkPlugin> weak_plugin = m_plugin;
+        fn = [weak_plugin, dispatch = std::move(fn)](std::function<void()> work) {
+            auto owner = weak_plugin.lock();
+            if (!owner) return;
+            // Vendor queued work may reference its SDK agent. Keep both that
+            // agent and its module alive until the queued work runs or is dropped.
+            auto pending = std::make_shared<QueuedPluginWork>(QueuedPluginWork{std::move(owner), std::move(work)});
+            dispatch([pending = std::move(pending)] { pending->work(); });
+        };
+    }
+    auto& plugin = this->plugin();
     auto agent = plugin.get_agent();
     auto func = plugin.get_set_queue_on_main_fn();
     if (func && agent) {

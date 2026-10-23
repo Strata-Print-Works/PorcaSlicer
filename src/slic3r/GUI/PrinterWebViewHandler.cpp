@@ -1,6 +1,7 @@
 #include "PrinterWebViewHandler.hpp"
 
 #include "Http.hpp"
+#include "GUI.hpp"
 #include "I18N.hpp"
 #include "PrinterWebView.hpp"
 #include "PrinterScanDialog.hpp"
@@ -100,13 +101,14 @@ std::string filename_to_utf8(const boost::filesystem::path& path)
 
 class ElegooPrinterWebViewHandler final : public PrinterWebViewHandler {
 public:
-    explicit ElegooPrinterWebViewHandler(PrinterWebView& owner)
-        : PrinterWebViewHandler(owner)
+    explicit ElegooPrinterWebViewHandler(PrinterWebView& owner, const DynamicPrintConfig& config)
+        : PrinterWebViewHandler(owner), m_config(config)
     {
     }
 
     ~ElegooPrinterWebViewHandler() override
     {
+        m_alive->store(false);
         stop_upload = true;
         if (upload_thread.joinable())
             upload_thread.join();
@@ -114,11 +116,21 @@ public:
 
     void on_script_message(wxWebViewEvent &evt) override
     {
-        const wxString message = evt.GetString();
+        const std::string message = into_u8(evt.GetString());
         if (message.empty())
             return;
+        // A file dialog or upload must not enter a nested event loop on the
+        // WebView callback stack. Retired views cannot act on a new selection.
+        wxGetApp().CallAfter([this, alive = m_alive, message] {
+            if (alive->load() && owner().IsShownOnScreen()) handle_message(message);
+        });
+    }
 
-        json root = json::parse(message.ToUTF8().data(), nullptr, false);
+private:
+    void handle_message(const std::string& message)
+    {
+
+        json root = json::parse(message, nullptr, false);
         if (root.is_discarded() || !root.is_object())
             return;
 
@@ -161,7 +173,7 @@ private:
     void send_ipc_message(const char* type, const std::string& request_id, const std::string& method, int code,
                           const std::string& message, const std::string& data_json = "{}")
     {
-        if (browser() == nullptr)
+        if (!m_alive->load())
             return;
 
         json body = json::object();
@@ -183,8 +195,8 @@ private:
 
         const wxString payload = wxString::FromUTF8(dump_json(body));
         const wxString script = "if (typeof HandleStudio === 'function') { HandleStudio(" + payload + "); } else { window.postMessage(" + payload + ", '*'); }";
-        wxGetApp().CallAfter([this, script]() {
-            if (browser() != nullptr)
+        wxGetApp().CallAfter([this, alive = m_alive, script]() {
+            if (alive->load() && owner().IsShownOnScreen() && browser() != nullptr)
                 WebView::RunScript(browser(), script);
         });
     }
@@ -217,8 +229,7 @@ private:
         if (file_name.empty())
             file_name = filename_to_utf8(source_path);
 
-        DynamicPrintConfig* config = get_active_printer_config();
-        std::unique_ptr<PrintHost> print_host(config == nullptr ? nullptr : PrintHost::get_print_host(config));
+        std::unique_ptr<PrintHost> print_host(PrintHost::get_print_host(&m_config));
         if (print_host == nullptr) {
             upload_in_progress = false;
             send_ipc_message("response", request_id, method, 1, "Could not get a valid Printer Host reference");
@@ -235,7 +246,8 @@ private:
             upload_data.source_path  = source_path;
             upload_data.upload_path  = path_from_utf8(file_name);
 
-            const bool success = print_host->upload(
+            bool success = false;
+            try { success = print_host->upload(
                 std::move(upload_data),
                 [this, request_id](Http::Progress progress, bool& cancel) {
                     cancel = stop_upload.load();
@@ -254,7 +266,8 @@ private:
                         {"status", status.ToUTF8().data()}
                     };
                     send_ipc_message("event", request_id, "upload_info", 0, "", dump_json(data));
-                });
+                }); }
+            catch (...) { error_message = "Could not upload the file. Check the printer connection and try again."; }
 
             upload_in_progress = false;
 
@@ -300,8 +313,8 @@ private:
         // Panel always calls get_sn with a 10s IPC timeout. Answer immediately from
         // dev_sn / cache — do not spawn a thread or perform HTTP (panel uses URL sn on miss).
         std::string sn;
-        if (DynamicPrintConfig* config = get_active_printer_config()) {
-            const std::unique_ptr<PrintHost> host(PrintHost::get_print_host(config));
+        {
+            const std::unique_ptr<PrintHost> host(PrintHost::get_print_host(&m_config));
             if (host)
                 sn = host->get_sn();
         }
@@ -312,20 +325,24 @@ private:
     std::atomic<bool> upload_in_progress { false };
     std::atomic<bool> stop_upload { false };
     std::thread       upload_thread;
+    DynamicPrintConfig m_config;
+    std::shared_ptr<std::atomic<bool>> m_alive = std::make_shared<std::atomic<bool>>(true);
 };
 
 } // namespace
 
-std::unique_ptr<PrinterWebViewHandler> create_printer_webview_handler(PrinterWebView& owner)
+std::unique_ptr<PrinterWebViewHandler> create_printer_webview_handler(PrinterWebView& owner, const DynamicPrintConfig* config)
 {
-    auto     cfg = get_active_printer_config();
+    auto cfg = config ? config : get_active_printer_config();
     if(cfg == nullptr) return nullptr;
     
-    const auto host_type = cfg->option<ConfigOptionEnum<PrintHostType>>("host_type")->value;
+    const auto* option = cfg->option<ConfigOptionEnum<PrintHostType>>("host_type");
+    if (!option) return nullptr;
+    const auto host_type = option->value;
     switch (host_type)
     {
         case PrintHostType::htElegooLink:
-            return std::make_unique<ElegooPrinterWebViewHandler>(owner);
+            return std::make_unique<ElegooPrinterWebViewHandler>(owner, *cfg);
         default:
             return nullptr;
     }

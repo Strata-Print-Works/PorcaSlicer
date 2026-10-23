@@ -32,6 +32,10 @@ struct Camera
     static double FrustrumZMargin;
     static double MaxFovDeg;
     static double ZoomUnit;
+    // Zooming out stops at this fraction of the zoom that fits the scene. Independent
+    // workspaces lay many beds out side by side and may zoom further out.
+    static constexpr double DefaultMinZoomFactor = 0.2;
+    static constexpr double WorkspaceMinZoomFactor = 0.05;
 
     enum class EType : unsigned char
     {
@@ -76,6 +80,7 @@ private:
     std::pair<double, double> m_frustrum_zs;
 
     BoundingBoxf3 m_scene_box;
+    double m_min_zoom_factor{ DefaultMinZoomFactor };
 
 public:
     Camera() { set_default_orientation(); }
@@ -107,6 +112,7 @@ public:
 
     const BoundingBoxf3& get_scene_box() const { return m_scene_box; }
     void set_scene_box(const BoundingBoxf3& box) { m_scene_box = box; }
+    void set_min_zoom_factor(double factor) { m_min_zoom_factor = factor; }
 
 
     void select_view(const std::string& direction);
@@ -142,9 +148,13 @@ public:
     void apply_viewport() const;
     // Calculates and applies the projection matrix tighting the frustrum z range around the given box.
     // If larger z span is needed, pass the desired values of near and far z (negative values are ignored)
-    void apply_projection(const BoundingBoxf3& box, double near_z = -1.0, double far_z = -1.0);
+    void apply_projection(const BoundingBoxf3& box, double near_z = -1.0, double far_z = -1.0, bool fixed_fov = false);
 
     void apply_projection(double left, double right, double bottom, double top, double near_z, double far_z);
+    // Reserve screen space for Preview's inspectors after applying the base projection.
+    // Keep the full viewport so picking and screen-to-world rays use the same matrix.
+    void apply_screen_insets(double left, double right, double bottom);
+    bool is_box_visible(const BoundingBoxf3& box) const;
 
     void zoom_to_box(const BoundingBoxf3& box, double margin_factor = DefaultZoomToBoxMarginFactor);
     void zoom_to_volumes(const GLVolumePtrs& volumes, double margin_factor = DefaultZoomToVolumesMarginFactor);
@@ -185,7 +195,7 @@ public:
     void look_at(const Vec3d& position, const Vec3d& target, const Vec3d& up);
 
     double max_zoom() const { return 250.0; }
-    double min_zoom() const { return 0.2 * calc_zoom_to_bounding_box_factor(m_scene_box); }
+    double min_zoom() const { return m_min_zoom_factor * calc_zoom_to_bounding_box_factor(m_scene_box); }
 
 private:
     // returns tight values for nearZ and farZ plane around the given bounding box
@@ -205,4 +215,3 @@ private:
 } // Slic3r
 
 #endif // slic3r_Camera_hpp_
-

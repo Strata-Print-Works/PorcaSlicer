@@ -1,3 +1,5 @@
+#include "WorkspaceStyle.hpp"
+#include "DesignTokens.hpp"
 #include "IMSlider.hpp"
 #include "GUI_App.hpp"
 #include "GUI.hpp"
@@ -63,11 +65,10 @@ static const float  GROOVE_WIDTH      = 12.0f;
 static const ImVec2 ONE_LAYER_MARGIN  = ImVec2(20.0f, 20.0f);
 static const ImVec2 ONE_LAYER_BUTTON_SIZE  = ImVec2(56.0f, 56.0f);
 
-static const ImU32 BACKGROUND_COLOR_DARK  = IM_COL32(65, 65, 71, 255);
-static const ImU32 BACKGROUND_COLOR_LIGHT = IM_COL32(255, 255, 255, 255);
-static const ImU32 GROOVE_COLOR_DARK      = IM_COL32(45, 45, 49, 255);
-static const ImU32 GROOVE_COLOR_LIGHT     = IM_COL32(206, 206, 206, 255);
-static const ImU32 BRAND_COLOR            = IM_COL32(0, 150, 136, 255);
+static const ImU32 BACKGROUND_COLOR_DARK  = ImGui::ColorConvertFloat4ToU32(ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::Surface, true)));
+static const ImU32 BACKGROUND_COLOR_LIGHT = ImGui::ColorConvertFloat4ToU32(ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::Surface, false)));
+static const ImU32 GROOVE_COLOR_DARK      = ImGui::ColorConvertFloat4ToU32(ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::LineControl, true)));
+static const ImU32 GROOVE_COLOR_LIGHT     = ImGui::ColorConvertFloat4ToU32(ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::LineControl, false)));
 
 static int m_tick_value = -1;
 static ImVec4 m_tick_rect;
@@ -541,16 +542,16 @@ bool IMSlider::horizontal_slider(const char* str_id, int* value, int v_min, int 
     const float  text_start_offset   = 8.0f * m_scale;
     const ImVec2 text_padding        = ImVec2(5.0f, 2.0f) * m_scale;
 
-    const ImU32 handle_clr = BRAND_COLOR;
+    const ImU32 handle_clr = ImGuiWrapper::to_ImU32(WorkspaceStyle::color(DesignSystem::ColorRole::Accent, m_is_dark));
     const ImU32 handle_border_clr = m_is_dark ? BACKGROUND_COLOR_DARK : BACKGROUND_COLOR_LIGHT;
-    const wxColour label_bg = StateColor::darkModeColorFor(wxGetApp().get_window_default_clr());
-    const wxColour label_border = StateColor::darkModeColorFor(wxColour("#CECECE"));
-    const wxColour rail_inner_bg = m_is_dark ? StateColor::darkModeColorFor(wxColour("#CECECE")) : wxGetApp().get_highlight_default_clr();
-    const wxColour rail_border = m_is_dark ? StateColor::darkModeColorFor(wxColour("#F0F0F1")) : wxColour("#CECECE");
+    const wxColour label_bg = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Surface, m_is_dark));
+    const wxColour label_border = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl, m_is_dark));
+    const wxColour rail_inner_bg = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl, m_is_dark));
+    const wxColour rail_border = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl, m_is_dark));
     const ImU32 label_bg_clr = IM_COL32(label_bg.Red(), label_bg.Green(), label_bg.Blue(), 238);
     const ImU32 label_border_clr = IM_COL32(label_border.Red(), label_border.Green(), label_border.Blue(), 255);
     const ImU32 label_shadow_clr = m_is_dark ? IM_COL32(0, 0, 0, 84) : IM_COL32(0, 0, 0, 38);
-    ImVec4 range_fill = ImGui::ColorConvertU32ToFloat4(BRAND_COLOR);
+    ImVec4 range_fill = ImGui::ColorConvertU32ToFloat4(ImGuiWrapper::to_ImU32(WorkspaceStyle::color(DesignSystem::ColorRole::Accent, m_is_dark)));
     range_fill.w = (m_is_dark ? 210.0f : 190.0f) / 255.0f;
     const ImU32 range_fill_clr = ImGui::GetColorU32(range_fill);
     const ImU32 rail_inner_clr = IM_COL32(rail_inner_bg.Red(), rail_inner_bg.Green(), rail_inner_bg.Blue(), 255);
@@ -742,7 +743,7 @@ void IMSlider::draw_ticks(const ImRect& slideable_region) {
     ImVec2 icon_size     = ImVec2(14.0f, 14.0f) * m_scale;
 
     const ImU32 tick_clr = IM_COL32(144, 144, 144, 255);
-    const ImU32 tick_hover_box_clr = m_is_dark ? IM_COL32(65, 65, 71, 255) : IM_COL32(219, 253, 231, 255);
+    const ImU32 tick_hover_box_clr = m_is_dark ? ImGuiWrapper::to_ImU32(WorkspaceStyle::color(DesignSystem::ColorRole::Surface, true)) : IM_COL32(219, 253, 231, 255);
 
     auto get_tick_pos = [this, slideable_region](int tick)
     {
@@ -827,16 +828,36 @@ void IMSlider::draw_ticks(const ImRect& slideable_region) {
 }
 
 void IMSlider::show_tooltip(const std::string tooltip) {
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 6 * m_scale, 3 * m_scale });
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 3 * m_scale);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGuiWrapper::COL_WINDOW_BACKGROUND);
-    ImGui::PushStyleColor(ImGuiCol_Border, { 0,0,0,0 });
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 1.00f, 1.00f, 1.00f));
+    using namespace DesignSystem;
+    const float wrap_width = 280.f * m_scale;
+    const ImGuiWindow* menu = ImGui::GetCurrentWindow();
+    if (menu->Flags & ImGuiWindowFlags_Popup) {
+        if (GImGui->HoveredIdTimer < .5f) {
+            wxGetApp().imgui()->set_requires_extra_frame();
+            return;
+        }
+        // Keep help outside the command list instead of covering the next action.
+        const ImVec2 size = ImGui::CalcTextSize(tooltip.c_str(), nullptr, false, wrap_width) + ImVec2(24.f, 16.f) * m_scale;
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        ImVec2 pos(menu->Pos.x, menu->Pos.y + menu->Size.y + 8.f * m_scale);
+        if (pos.y + size.y > display.y) pos.y = menu->Pos.y - size.y - 8.f * m_scale;
+        pos.x = ImClamp(pos.x, 0.f, ImMax(0.f, display.x - size.x));
+        pos.y = ImClamp(pos.y, 0.f, ImMax(0.f, display.y - size.y));
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(space_12, space_8) * m_scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, radius_sm * m_scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, m_scale);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(ColorRole::SurfaceRaised, m_is_dark)));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(ColorRole::LineControl, m_is_dark)));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(ColorRole::Ink, m_is_dark)));
     ImGui::BeginTooltip();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
     ImGui::TextUnformatted(tooltip.c_str());
+    ImGui::PopTextWrapPos();
     ImGui::EndTooltip();
     ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(3);
 }
 
 void IMSlider::show_tooltip(const TickCode& tick){
@@ -936,18 +957,18 @@ bool IMSlider::vertical_slider(const char* str_id, int* higher_value, int* lower
     ImVec2 text_size;
 
     const ImU32 white_bg = m_is_dark ? BACKGROUND_COLOR_DARK : BACKGROUND_COLOR_LIGHT;
-    const ImU32 handle_clr = BRAND_COLOR;
+    const ImU32 handle_clr = ImGuiWrapper::to_ImU32(WorkspaceStyle::color(DesignSystem::ColorRole::Accent, m_is_dark));
     const ImU32 handle_border_clr = m_is_dark ? BACKGROUND_COLOR_DARK : BACKGROUND_COLOR_LIGHT;
-    const wxColour label_bg = StateColor::darkModeColorFor(wxGetApp().get_window_default_clr());
-    const wxColour label_bg_active = StateColor::darkModeColorFor(wxColour("#E5F0EE"));
-    const wxColour label_border = StateColor::darkModeColorFor(wxColour("#CECECE"));
-    const wxColour rail_inner_bg = m_is_dark ? StateColor::darkModeColorFor(wxColour("#CECECE")) : wxGetApp().get_highlight_default_clr();
-    const wxColour rail_border = m_is_dark ? StateColor::darkModeColorFor(wxColour("#F0F0F1")) : wxColour("#CECECE");
+    const wxColour label_bg = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Surface, m_is_dark));
+    const wxColour label_bg_active = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::AccentSoft, m_is_dark));
+    const wxColour label_border = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl, m_is_dark));
+    const wxColour rail_inner_bg = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl, m_is_dark));
+    const wxColour rail_border = wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl, m_is_dark));
     const ImU32 label_bg_clr = IM_COL32(label_bg.Red(), label_bg.Green(), label_bg.Blue(), 238);
     const ImU32 label_bg_active_clr = IM_COL32(label_bg_active.Red(), label_bg_active.Green(), label_bg_active.Blue(), 246);
     const ImU32 label_border_clr = IM_COL32(label_border.Red(), label_border.Green(), label_border.Blue(), 255);
     const ImU32 label_shadow_clr = m_is_dark ? IM_COL32(0, 0, 0, 84) : IM_COL32(0, 0, 0, 38);
-    ImVec4 range_fill = ImGui::ColorConvertU32ToFloat4(BRAND_COLOR);
+    ImVec4 range_fill = ImGui::ColorConvertU32ToFloat4(ImGuiWrapper::to_ImU32(WorkspaceStyle::color(DesignSystem::ColorRole::Accent, m_is_dark)));
     range_fill.w = (m_is_dark ? 210.0f : 190.0f) / 255.0f;
     const ImU32 range_fill_clr = ImGui::GetColorU32(range_fill);
     const ImU32 rail_inner_clr = IM_COL32(rail_inner_bg.Red(), rail_inner_bg.Green(), rail_inner_bg.Blue(), 255);
@@ -1256,7 +1277,7 @@ bool IMSlider::vertical_slider(const char* str_id, int* higher_value, int* lower
     return value_changed;
 }
 
-bool IMSlider::render(int canvas_width, int canvas_height)
+bool IMSlider::render(int canvas_width, int canvas_height, float left)
 {
     bool result = false;
     ImGuiWrapper &imgui = *wxGetApp().imgui();
@@ -1265,7 +1286,7 @@ bool IMSlider::render(int canvas_width, int canvas_height)
     ImGui::PushStyleVar(ImGuiStyleVar_::ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_::ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_::ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    ImGui::PushStyleColor(ImGuiCol_::ImGuiCol_Text, ImGuiWrapper::COL_ORCA); // ORCA: Use orca color for slider value text
+    ImGui::PushStyleColor(ImGuiCol_::ImGuiCol_Text, ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(DesignSystem::ColorRole::Accent, m_is_dark))); // ORCA: Use orca color for slider value text
 
     int windows_flag = ImGuiWindowFlags_NoTitleBar
                        | ImGuiWindowFlags_NoCollapse
@@ -1278,7 +1299,8 @@ bool IMSlider::render(int canvas_width, int canvas_height)
 
     if (is_horizontal()) {
         ImVec2 size  = ImVec2(canvas_width - 2 * std::max(LEFT_MARGIN * m_scale, 0.2f * canvas_width), HORIZONTAL_SLIDER_WINDOW_HEIGHT * m_scale);
-        imgui.set_next_window_pos(0.5f * static_cast<float>(canvas_width), canvas_height, ImGuiCond_Always, 0.5f, 1.0f);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        imgui.set_next_window_pos(left + 0.5f * static_cast<float>(canvas_width), canvas_height, ImGuiCond_Always, 0.5f, 1.0f);
         imgui.begin(std::string("moves_slider"), windows_flag);
         int value = GetHigherValue();
         if (horizontal_slider("moves_slider", &value, GetMinValue(), GetMaxValue(), size, scale)) {
@@ -1288,7 +1310,10 @@ bool IMSlider::render(int canvas_width, int canvas_height)
         imgui.end();
     } else {
         ImVec2 size = ImVec2(VERTICAL_SLIDER_WINDOW_WIDTH * m_scale, 0.8f * canvas_height);
-        imgui.set_next_window_pos(canvas_width, 0.5f * static_cast<float>(canvas_height), ImGuiCond_Always, 1.0f, 0.5f);
+        // Pivot against this frame's height, including when the code drawer has
+        // just changed it. Auto-fitting from last frame can clip the top label.
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        imgui.set_next_window_pos(left + canvas_width, 0.5f * static_cast<float>(canvas_height), ImGuiCond_Always, 1.0f, 0.5f);
         imgui.begin(std::string("laysers_slider"), windows_flag);
 
         int higher_value = GetHigherValue();
@@ -1308,7 +1333,7 @@ bool IMSlider::render(int canvas_width, int canvas_height)
         render_menu();
         imgui.end();
 
-        imgui.set_next_window_pos(canvas_width, canvas_height, ImGuiCond_Always, 1.0f, 1.0f);
+        imgui.set_next_window_pos(left + canvas_width, canvas_height, ImGuiCond_Always, 1.0f, 1.0f);
         ImGui::SetNextWindowSize((ONE_LAYER_BUTTON_SIZE + ONE_LAYER_MARGIN) * m_scale, 0);
         imgui.begin(std::string("one_layer_button"), windows_flag);
         ImTextureID normal_id = m_is_dark ?
@@ -1548,9 +1573,6 @@ void IMSlider::render_add_menu()
                 if (hovered) { show_tooltip(_u8L("Insert template custom G-code at the beginning of this layer.")); }
             }
 
-            if (menu_item_with_icon(_u8L("Jump to layer").c_str(), "")) {
-                m_show_go_to_layer_dialog = true;
-            }
         }
 
         //BBS render this menu item only when extruder_num > 1
@@ -1570,6 +1592,10 @@ void IMSlider::render_add_menu()
                 end_menu();
             }
         }
+
+        ImGui::Separator();
+        if (menu_item_with_icon(_u8L("Jump to layer").c_str(), ""))
+            m_show_go_to_layer_dialog = true;
 
         ImGui::EndPopup();
     }

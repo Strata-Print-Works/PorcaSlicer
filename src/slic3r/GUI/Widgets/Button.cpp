@@ -356,11 +356,14 @@ void Button::render(wxDC& dc)
     }
     // move to center
     wxRect rcContent = {{0, 0}, size};
+    const bool pinned_icon = !isCenter && m_icon_right && !vertical;
     if (isCenter) {
         wxSize offset = (size - szContent) / 2;
         if (offset.x < 0)
             offset.x = 0;
         rcContent.Deflate(offset.x, offset.y);
+    } else if (pinned_icon) {
+        rcContent.Deflate(std::min(padding.x, size.x / 2), std::min(padding.y, size.y / 2));
     }
     // start draw
     wxPoint pt = rcContent.GetLeftTop();
@@ -369,13 +372,20 @@ void Button::render(wxDC& dc)
             pt.x += (rcContent.width - szIcon.x) / 2;
         else
             pt.y += (rcContent.height - szIcon.y) / 2;
-        dc.DrawBitmap(icon.bmp(), pt);
+        wxPoint icon_position = pt;
+        if (m_icon_right && !vertical) {
+            icon_position.x += pinned_icon ? std::max(0, rcContent.width - szIcon.x) :
+                std::min(textSize.x + (gap_reserved ? spacing : 0), std::max(0, rcContent.width - szIcon.x));
+        }
+        dc.DrawBitmap(icon.bmp(), icon_position);
         // BBS norrow size between text and icon
         if (vertical) {
             pt.y += szIcon.y + (gap_reserved ? spacing : 0);
             pt.x = rcContent.x;
-        } else {
+        } else if (!m_icon_right) {
             pt.x += szIcon.x + (gap_reserved ? spacing : 0);
+            pt.y = rcContent.y;
+        } else {
             pt.y = rcContent.y;
         }
     }
@@ -383,8 +393,10 @@ void Button::render(wxDC& dc)
         if (vertical) {
             pt.x += (rcContent.width - textSize.x) / 2;
         } else {
-            if (pt.x + textSize.x > size.x)
-                text = wxControl::Ellipsize(text, dc, wxELLIPSIZE_END, size.x - pt.x);
+            const int trailing_icon = m_icon_right && icon.bmp().IsOk() ? szIcon.x + (gap_reserved ? spacing : 0) : 0;
+            const int right = pinned_icon ? rcContent.GetRight() + 1 : size.x;
+            if (pt.x + textSize.x > right - trailing_icon)
+                text = wxControl::Ellipsize(text, dc, wxELLIPSIZE_END, std::max(0, right - pt.x - trailing_icon));
             pt.y += (rcContent.height - textSize.y) / 2;
         }
         dc.SetTextForeground(text_color.colorForStates(states));
@@ -399,6 +411,8 @@ void Button::render(wxDC& dc)
         const int dot = FromDIP(6); // diameter
         wxPoint dot_pt;
         dot_pt.x = pt.x + (text.IsEmpty() ? 0 : textSize.x) + FromDIP(6) + dot / 2;
+        if (m_icon_right && !vertical && icon.bmp().IsOk())
+            dot_pt.x += szIcon.x + (gap_reserved ? spacing : 0);
         // Centre on the content vertically; a bitmap-only (empty-label) tab has no text row.
         dot_pt.y = text.IsEmpty() ? rcContent.y + rcContent.height / 2 : pt.y + textSize.y / 2;
         const wxColour c = StateColor::darkModeColorFor(m_indicator_color);

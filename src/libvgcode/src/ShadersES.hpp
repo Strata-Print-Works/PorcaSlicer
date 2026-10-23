@@ -35,6 +35,7 @@ static const char* Segments_Vertex_Shader_ES =
 // ORCA: draw last segment first, so looking down the top layers hide the rest from the fragment shader.
 "uniform bool reverse_order;\n"
 "uniform int instances_count;\n"
+"uniform int segments_per_instance;\n"
 // ORCA: section view
 "uniform vec4 clipping_plane;\n"
 "in float vertex_id_float;\n"
@@ -83,7 +84,9 @@ static const char* Segments_Vertex_Shader_ES =
 "}\n"
 "void main() {\n"
 "  int vertex_id = int(vertex_id_float);\n"
-"  int instance = reverse_order ? instances_count - 1 - gl_InstanceID : gl_InstanceID;\n"
+"  int segment = gl_InstanceID * segments_per_instance + gl_VertexID / 8;\n"
+"  if (segment >= instances_count) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }\n"
+"  int instance = reverse_order ? instances_count - 1 - segment : segment;\n"
 "  int id_a = int(texelFetch(segment_index_tex, tex_coord_u(segment_index_tex, instance), 0).r);\n"
 "  int id_b = id_a + 1;\n"
 "  vec3 pos_a = texelFetch(position_tex, tex_coord(position_tex, id_a), 0).xyz;\n"

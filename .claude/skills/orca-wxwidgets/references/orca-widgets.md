@@ -327,6 +327,7 @@ Behaviour (`Button::mouseDown`, `Button::mouseReleased`, `Button::keyDownUp`):
   the tooltip on a disabled button by watching the parent's motion — MSW only (elsewhere a no-op).
 - `SetIndicator(bool)` draws a small dot after the label (TabCtrl uses it); `SetVertical`, `SetCenter`,
   `SetPaddingSize`, `SetIconSpacing`, `SetTextColor(StateColor)`, `SetIcon(name | wxBitmap)`.
+  `SetIconRight()` places an icon after the label in horizontal layouts; its default is the inherited leading icon.
 - `Rescale()` re-rasterises a **named** icon (one set from a `wxBitmap` has no source and stays as is), re-measures and
   re-runs `SetStyle` with the stored style/type.
 
@@ -545,6 +546,16 @@ real `wxTextCtrl` (on MSW the `TextCtrl` subclass in `Widgets/TextCtrl.h`, which
   (`DoSetToolTipText`), `Enable()` also enables the inner control and recolours it.
 - `TextInput::SetLabel()` changes the side label, not the text. The value API is `GetTextCtrl()->GetValue()/
   SetValue()/ChangeValue()`; `SetHint`, validators and `SetMaxLength` also go on `GetTextCtrl()`.
+- `SetSidebarStyle()` opts into the antialiased compact presentation; ordinary controls keep the inherited path.
+  Enable it before setting the owner's fonts and dimensions. It pads the native editor by 10 DIPs, centers the
+  trailing unit label in the wrapper's font, and draws read-only ComboBox values at the left with a right-side
+  vector chevron. `SetStaticTips` supplies a second line; allow enough height for both measured lines.
+  `SetLabelColor` colors the read-only primary value or numeric suffix; `SetTextColor` colors its subtitle or
+  native editor. In this presentation `SetFont` also updates the native editor; callers needing a different unit
+  font can use `wxWindow::SetFont` on the wrapper after setting the editor font. `SetSidebarItemIcons(false)`
+  hides selected-item icons only in the closed trigger, preserving popup item data and icons.
+  `SetSidebarSecondaryFont(wxFont)` selects an explicit font for the second line; without it the renderer
+  retains its primary-font-minus-one-point fallback. Reapply an owner-selected font after DPI changes.
 
 Event routing:
 - `wxEVT_TEXT` is a command event from the inner control; it propagates to the wrapper and beyond, carrying the
@@ -582,6 +593,20 @@ Pitfalls:
   on any control holding G-code, paths or URLs (`references/controls-dataview.md §wxTextCtrl`).
 
 ## ComboBox and DropDown
+
+`ComboBox::SetPrinterPopupStyle()` is opt-in; ordinary dropdowns retain their inherited host and rendering.
+The printer menu accepts typing focus, filters original item indices and preserves client data, disabled
+flags and item actions. `SetPrinterPopupActions` supplies deferred edit/manage actions;
+`SetPrinterPopupFooterIndex` excludes the corresponding existing manage item from the choice list.
+`SetPrinterPopupItemLabel` and `SetItemSubtitle` change presentation only. The host uses a frameless
+`DPIDialog` where native typing needs it and an anchored `PopupWindow` on GTK so Wayland can place it
+relative to its opener. Dismissal notifies the existing ComboBox relay exactly once.
+
+`SetItemStatusProvider` optionally supplies a live subtitle and a neutral/positive/negative dot in
+the printer popup. Providers run on the UI thread during painting: read cached state only, with no
+I/O, side effects or window operations. Capture stable identities by value rather than device pointers.
+The popup repaints once per second while open and stops its refresh timer on dismissal or detachment.
+Leave model-only rows without a provider so they have no connection indicator.
 
 `::ComboBox` (`Widgets/ComboBox.cpp`) is `wxWindowWithItems<TextInput, wxItemContainer>` plus an owned `DropDown drop`
 over its `std::vector<DropDown::Item> items`, so the `wxItemContainer` API (`Append/Insert/Set/Clear/Delete/
@@ -697,6 +722,8 @@ Three distinct mechanisms; don't confuse them:
 `TabCtrl`: `AppendItem(text[, image, selImage, clientData])`, `AppendItem(text, bitmap)`, `DeleteItem`,
 `DeleteAllItems`, `SelectItem(i)`/`Unselect()`, `GetSelection`, `SetItemText/Bitmap/Data`, `SetItemBold(i, bool)`,
 `SetItemTextColour(i, StateColor)`, `SetItemIndicator(i, bool)` (dot after the label), `SetFont`, `Rescale()`.
+`SetSidebarStyle(wxColour)` opts into a thin two-DIP selection underline in an already resolved theme color;
+the owner reapplies it after theme changes. An invalid color restores the inherited indicator path.
 `AssignImageList` is Orca's own method (takes ownership), not `wxWithImages`, and nothing draws from that list:
 `AppendItem` ignores its `image`, `selImage` and `clientData` arguments — give icons with `AppendItem(text, bitmap)`/
 `SetItemBitmap` and data with `SetItemData`. Call `SetFont` before `SetItemBold`: it derives the bold font that

@@ -315,6 +315,7 @@ wxColour StateColor::defaultColor() {
 
 wxColour StateColor::colorForStates(int states)
 {
+    if (!mapDarkMode_) return colorForStatesNoDark(states);
     bool focused = takeFocusedAsHovered_ && (states & Focused);
     for (int i = 0; i < statesList_.size(); ++i) {
         int s = statesList_[i];

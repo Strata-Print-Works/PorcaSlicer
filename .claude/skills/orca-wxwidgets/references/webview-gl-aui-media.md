@@ -370,7 +370,10 @@ support it (`interface/wx/webview.h:1463-1481`).
   ends the loop is never delivered to that thread).
 - Edge rejects sync `RunScript` inside its NAVIGATING and NEWWINDOW callbacks (`m_inEventCallback`,
   `src/msw/webview_edge.cpp:436-438`, `1586-1591`; a `wxCHECK`, silent in Orca).
-- `AddScriptMessageHandler` on macOS and GTK calls sync `RunScript` internally, so it yields too.
+- wx's `AddScriptMessageHandler` on macOS and GTK calls sync `RunScript` internally, so it yields too.
+  Orca's macOS `WebViewWebKit` override intercepts only this registration-time evaluation and uses
+  `WKWebView_evaluateJavaScript` without waiting. The native message handler and document-start alias
+  still come from wx; ordinary result-returning `RunScript` calls retain wx's behavior.
 - `SendScriptResult` dispatches `wxEVT_WEBVIEW_SCRIPT_RESULT` synchronously from the native completion
   handler (`src/common/webview.cpp:387-410`).
 
@@ -483,8 +486,9 @@ sanctioned way to make and drive a browser.
 - The UA is `… BBL-Slicer/v<version> (dark|light) BBL-Language/<lang>`.
 - Calls `EnableContextMenu(true)`.
 - Adds `"wx"` once per view: immediately on Windows (Edge queues it); on macOS/Linux inside
-  `webView->CallAfter` (after `Create`), because the add yields through the sync `RunScript`. While
-  one add is yielding (`GUI_App::is_adding_script_handler()`), other views wait in `g_delay_webviews`
+  `webView->CallAfter` (after `Create`). The macOS subclass avoids a nested yield during handler
+  registration by asynchronously evaluating the current-page alias; GTK still yields through wx's
+  sync `RunScript`. While one add is yielding (`GUI_App::is_adding_script_handler()`), other views wait in `g_delay_webviews`
   (`wxWeakRef<wxWebView>`, so a view destroyed meanwhile is skipped); `GUI_App`'s idle handler holds
   `post_init` back while an add is in progress, and on macOS `GUI_App::run_wizard` retries on a 200 ms
   one-shot `wxTimer` instead of opening the wizard during the add.

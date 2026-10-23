@@ -380,6 +380,7 @@ private:
         int segment_index_tex{ -1 };
         int reverse_order{ -1 };
         int instances_count{ -1 };
+        int segments_per_instance{ -1 };
         int clipping_plane{ -1 };
 
         void init(unsigned int shader_id);

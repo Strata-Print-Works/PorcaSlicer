@@ -121,7 +121,7 @@ public:
     bool switch_one_layer_mode();
     void show_go_to_layer(bool show) { m_show_go_to_layer_dialog = show; }
 
-    bool render(int canvas_width, int canvas_height);
+    bool render(int canvas_width, int canvas_height, float left = 0.f);
 
     //BBS update scroll value changed
     bool is_dirty() { return m_dirty; }

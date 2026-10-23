@@ -1,6 +1,7 @@
 #include "PrinterNetworkTypes.hpp"
 #include <nlohmann/json.hpp>
 #include "DeviceManager.hpp"
+#include "PrinterScanDialog.hpp"
 #include "HMS.hpp"
 #include "I18N.hpp"
 #include "libslic3r/Thread.hpp"
@@ -2692,7 +2693,8 @@ int MachineObject::connect()
     std::string ca_file;
 
     if (GUI::wxGetApp().preset_bundle) {
-        const auto& config = GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
+        const auto* inspected = GUI::scanned_printer_control_config();
+        const auto& config = inspected ? *inspected : GUI::wxGetApp().preset_bundle->printers.get_edited_preset().config;
         if (port.empty())
             port = config.opt_string("printhost_port");
         ca_file = config.opt_string("printhost_cafile");
@@ -2713,6 +2715,7 @@ int MachineObject::connect()
                 use_ssl,
                 ca_file
             };
+            GUI::saved_printer_connection_params(get_dev_id(), params);
             return m_agent->connect_printer(params);
         } catch (...) {
             ;
@@ -2723,17 +2726,18 @@ int MachineObject::connect()
 
 int MachineObject::disconnect()
 {
-    if (m_agent) {
-        const int result = m_agent->disconnect_printer();
-        if (result == 0)
-            set_online_state(false);
-        return result;
-    }
-    return -1;
+    if (!m_agent || !m_agent->has_printer_session(get_dev_id())) return -1;
+    m_agent->forget_printer_session(get_dev_id());
+    set_online_state(false);
+    return 0;
 }
 
 bool MachineObject::is_connected()
 {
+    if (is_lan_mode_printer() && m_agent) {
+        const auto token = m_agent->printer_session_token(dev_id);
+        if (!token || token->state != PrinterControlState::connected) return false;
+    }
     std::chrono::system_clock::time_point curr_time = std::chrono::system_clock::now();
     auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(curr_time - last_update_time);
     if (diff.count() > DISCONNECT_TIMEOUT) {
@@ -2752,6 +2756,10 @@ bool MachineObject::is_connected()
 
 bool MachineObject::is_connecting()
 {
+    if (m_agent) {
+        const auto token = m_agent->printer_session_token(dev_id);
+        if (token && token->state == PrinterControlState::connecting) return true;
+    }
     return is_connected() && m_push_count == 0;
 }
 
@@ -2833,7 +2841,10 @@ int MachineObject::publish_json(const json& json_item, int qos, int flag)
     // not-supported in its return value and this - the single funnel every command_* builder
     // passes through - is the one place that turns it into something the user sees. No list of
     // unsupported commands is needed anywhere: an agent that has no case for a command says so.
-    if (rtn == ORCA_NETWORK_ERR_CMD_NOT_SUPPORTED || rtn == ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE) {
+    if ((rtn == ORCA_NETWORK_ERR_CMD_NOT_SUPPORTED || rtn == ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE) &&
+        !json_item.contains("pushing")) {
+        // Status refresh requests run automatically. Their failure is represented
+        // by telemetry freshness, not a modal intended for user control actions.
         show_unsupported_dlg(rtn);
     }
 

@@ -1,3 +1,4 @@
+#include "../Widgets/StateColor.hpp"
 //**********************************************************/
 /* File: wgtDeviceNozzleRackUpdate.cpp
 *  Description: The panel with rack updating
@@ -641,7 +642,7 @@ void wgtDeviceNozzleRackHotendUpdate::UpdateInfo(const DevNozzle& nozzle)
         m_used_time->Show(true);
         m_status_label->Show(true);
         m_status_bitmap->Show(true);
-        m_status_label->SetForegroundColour(wxColour("#009688")); // Orca: accent green
+        m_status_label->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#009688"))); // Orca: accent green
         m_status_label->SetLabel(_L("Refresh"));
         m_status_bitmap->SetBitmap(m_refresh_icon->bmp());
         m_status_bitmap->Refresh();

@@ -6,6 +6,7 @@
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/IMEXArrange.hpp"
+#include "libslic3r/PlateCapacity.hpp"
 
 #include "slic3r/GUI/PartPlate.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
@@ -49,6 +50,8 @@
 
 namespace Slic3r { namespace GUI {
     using ArrangePolygon = arrangement::ArrangePolygon;
+
+static_assert(MAX_NUM_PLATES >= max_project_plates, "Arrangement must support every project plate");
 
 // Cache the wti info
 class WipeTower: public GLCanvas3D::WipeTowerInfo {

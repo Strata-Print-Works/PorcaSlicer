@@ -8,6 +8,7 @@
 #include "libslic3r/ProjectTask.hpp"
 #include "ICloudServiceAgent.hpp"
 #include "IPrinterAgent.hpp"
+#include "PrinterSessionRegistry.hpp"
 
 #include <functional>
 #include <map>
@@ -58,12 +59,22 @@ public:
 
     // Sub-agent accessors
     std::shared_ptr<ICloudServiceAgent> get_cloud_agent(const std::string& provider = ORCA_CLOUD_PROVIDER) const;
-    std::shared_ptr<IPrinterAgent> get_printer_agent() const { return m_printer_agent; }
+    std::shared_ptr<IPrinterAgent> get_printer_agent() const { return std::atomic_load(&m_printer_agent); }
     std::uint64_t get_user_machine_list_generation() const { return m_user_machine_list_generation.load(); }
 
     // Shared agent management
     void add_cloud_agent(const std::string& provider, std::shared_ptr<ICloudServiceAgent> agent);
     void set_printer_agent(std::shared_ptr<IPrinterAgent> printer_agent);
+    bool has_printer_session(const std::string& dev_id) const;
+    std::shared_ptr<PrinterSessionToken> printer_session_token(const std::string& dev_id) const;
+    std::shared_ptr<IPrinterAgent> printer_session_agent(const std::string& dev_id) const;
+    // Forgotten and replaced transports are destroyed on an owned thread, since
+    // their destructors join transport workers. Owners wait for that on destruction.
+    void forget_printer_session(const std::string& dev_id);
+    bool expire_printer_session(const std::string& dev_id);
+    void forget_printer_sessions_for_agent(const std::string& agent_id);
+    // Blocks until every transport retired so far has been destroyed.
+    static void wait_for_retired_printer_agents();
     int set_queue_on_main_fn(QueueOnMainFn fn, const std::string& provider = ORCA_CLOUD_PROVIDER);
 
     // Get underlying agent handle from BBLNetworkPlugin
@@ -165,6 +176,8 @@ public:
     int command_axis_control(std::string dev_id, std::string axis, double unit, double input_val, int speed,
                               bool is_core_xy, bool supports_mqtt_axis_control, int sequence_id, bool lan_mode);
     int connect_printer(const PrinterConnectionParams& params);
+    // Establish a saved device without changing the selected view or Prepare.
+    int connect_printer(const PrinterConnectionParams& params, std::shared_ptr<IPrinterAgent> printer);
     int disconnect_printer();
     int send_message_to_printer(std::string dev_id, std::string json_str, int qos, int flag);
     std::string default_lan_username() const;
@@ -196,6 +209,13 @@ public:
     int get_hms_snapshot(std::string dev_id, std::string file_name, std::function<void(std::string, int)> callback);
 
 private:
+    using PrinterSessions = PrinterSessionRegistry<IPrinterAgent, PrinterConnectionParams>;
+    PrinterSessions m_printer_sessions;
+    std::shared_ptr<IPrinterAgent> printer_agent_for(const std::string& dev_id) const;
+    // Physical controls reach only the visible view's own transport. Returns null
+    // with `error` set for an unknown routed device or a background session.
+    std::shared_ptr<IPrinterAgent> command_printer(const std::string& dev_id, bool routed, int& error) const;
+    void refresh_printer_callbacks();
     struct PrinterCallbacks {
         OnMsgArrivedFn on_ssdp_msg_fn = nullptr;
         OnPrinterConnectedFn on_printer_connected_fn = nullptr;
@@ -219,7 +239,7 @@ private:
     // of adding third-party cloud agents (e.g. BBLCloudServiceAgent) and delegating calls to them as needed
     std::map<std::string, std::shared_ptr<ICloudServiceAgent>> m_cloud_agents;
     std::shared_ptr<IPrinterAgent> m_printer_agent;
-    std::string m_printer_agent_id;
+    std::shared_ptr<IPrinterAgent> m_account_printer;
     std::atomic<std::uint64_t> m_user_machine_list_generation{0};
 };
 

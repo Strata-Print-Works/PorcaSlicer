@@ -137,6 +137,8 @@ public:
             bool m_is_dark = false;
             uint64_t m_selected_line_id{ 0 };
             size_t m_last_lines_size{ 0 };
+            uint64_t m_first_line_id{ 0 };
+            double m_scroll_line{ 0.0 };
             std::string m_filename;
             boost::iostreams::mapped_file_source m_file;
             // map for accessing data in file by line number
@@ -161,7 +163,8 @@ public:
 
             //BBS: GUI refactor: add canvas size
             //void render(float top, float bottom, uint64_t curr_line_id) const;
-            void render(float top, float bottom, float right, uint64_t curr_line_id) const;
+            void render(float left, float bottom, float right, uint64_t curr_line_id);
+            float height(float canvas_height) const;
             void on_change_color_mode(bool is_dark) { m_is_dark = is_dark; }
 
             void stop_mapping_file();
@@ -233,6 +236,9 @@ private:
 
     ConfigOptionMode m_user_mode;
     bool m_fold = {false};
+    int m_inspector_tab{0};
+    int m_selected_line_type{-1};
+    std::string m_applied_toolpath_palette;
     std::string m_marker_filename;      // cached for lazy secondary marker init
 
     // IDEX/IQEX: everything render_scene() needs to place the secondary carriage markers and the
@@ -326,6 +332,7 @@ private:
     size_t m_extruders_count;
     std::vector<float> m_filament_diameters;
     std::vector<float> m_filament_densities;
+    std::vector<float> m_filament_costs;
     SequentialView m_sequential_view;
     IMSlider* m_moves_slider;
     IMSlider* m_layers_slider;
@@ -388,7 +395,6 @@ public:
     void load_as_gcode(const GCodeProcessorResult& gcode_result, const Print& print, const std::vector<std::string>& str_tool_colors,
         const std::vector<std::string>& str_color_print_colors, const BuildVolume& build_volume,
         const std::vector<BoundingBoxf3>& exclude_bounding_box, ConfigOptionMode mode, bool only_gcode = false);
-    void load_as_preview(libvgcode::GCodeInputData&& data);
     void update_shells_color_by_extruder(const DynamicPrintConfig* config);
     void set_shell_transparency(float alpha = 0.15f);
 
@@ -509,6 +515,7 @@ public:
     void show_legend(bool show) { m_legend_visible = show; }
     void enable_legend(bool enable) { m_legend_enabled = enable; }
     float get_legend_height() { return m_legend_height; }
+    float get_gcode_height(int canvas_height) const;
 
     void export_toolpaths_to_obj(const char* filename) const;
 
@@ -534,6 +541,7 @@ private:
     // Canvas height minus the room the horizontal slider takes.
     int sequential_view_height(int canvas_height) const;
     void render_toolpaths();
+    void apply_toolpath_palette();
     void render_shells(int canvas_width, int canvas_height);
 
     //BBS: GUI refactor: add canvas size
@@ -546,4 +554,3 @@ private:
 } // namespace Slic3r
 
 #endif // slic3r_GCodeViewer_hpp_
-

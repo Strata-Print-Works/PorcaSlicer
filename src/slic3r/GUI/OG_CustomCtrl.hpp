@@ -56,6 +56,8 @@ class OG_CustomCtrl :public wxPanel
     ScalableBitmap m_bmp_multi_extruder; // ORCA multi extruder icon drawn on left margin for variant options
 
     int     m_max_win_width{0};
+    // A compact row's new height is laid out after its size event.
+    bool    m_parent_layout_pending{false};
 
     struct CtrlLine {
         wxCoord           width{ wxDefaultCoord };
@@ -121,7 +123,7 @@ public:
     int     get_max_win_width() { return m_max_win_width; }
 
     //BBS
-    int    get_title_width();
+    int    get_title_width() const;
     // BBS
     void fixup_items_positions();
 
@@ -130,6 +132,8 @@ public:
 
     wxPoint get_pos(const Line& line, Field* field = nullptr);
     int     get_height(const Line& line);
+    int     label_offset() const;
+    int     label_pixel_width() const;
 
     OptionsGroup*  opt_group;
 

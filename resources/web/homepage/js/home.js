@@ -6,6 +6,12 @@ function OnInit()
 {
 	//-----Official-----
     TranslatePage();
+    $("#FileList").on("keydown", ".FileItem", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            this.click();
+        }
+    });
     let pluginTip = document.getElementById("NoPluginText");
     if (pluginTip)
         AppendTemplate(pluginTip, T("plugin_not_detected", "Bambu Network plug-in not detected. Click <a>here</a> to install it."),
@@ -37,13 +43,11 @@ function Set_RecentFile_MouseRightBtn_Event()
 			if(e.which == 3){
 				//鼠标点击了右键+$(this).attr('ff') );
 				ShowRecnetFileContextMenu();
-			}else if(e.which == 2){
-				//鼠标点击了中键
-			}else if(e.which == 1){
-				//鼠标点击了左键
-				OnOpenRecentFile( encodeURI(RightBtnFilePath) );
 			}
-		});
+		}).on("click", function (e) {
+            if (e.button != null && e.button !== 0) return;
+            OnOpenRecentFile(encodeURI($(this).attr("fpath")));
+        });
 
 	$(document).bind("contextmenu",function(e){
 		//在这里书写代码，构建个性右键化菜单
@@ -296,42 +300,35 @@ function SetMallUrl( strUrl )
 }
 
 
-function ShowRecentFileList( pList )
+function ShowRecentFileList(pList)
 {
-	let nTotal=pList.length;
-	
-	let strHtml='';
-	for(let n=0;n<nTotal;n++)
-	{
-		let OneFile=pList[n];
-		
-		let sPath=OneFile['path'];
-		let sImg=OneFile["image"] || sImages[sPath];
-		let sTime=OneFile['time'];
-		let sName=OneFile['project_name'];
-		let sPublished=OneFile['published'] == '1';
-		sImages[sPath] = sImg;
-		
-		//let index=sPath.lastIndexOf('\\')>0?sPath.lastIndexOf('\\'):sPath.lastIndexOf('\/');
-		//let sShortName=sPath.substring(index+1,sPath.length);
-		
-		let sBadge=sPublished? '<span class="FilePublishedBadge">PUB</span>':'';
-		let sLogoBadge=sPublished? '<img class="FileLogoBadge" src="../../images/OrcaSlicer_gradient_circle.svg" alt="" />':'';
-
-		let TmpHtml='<div class="FileItem"  fpath="'+sPath+'"  >'+
-				'<a class="FileTip" title="'+sPath+'"></a>'+
-				'<div class="FileImg" ><img src="'+sImg+'" onerror="this.onerror=null;this.src=\'img/d.png\';"  alt="No Image"  />'+sLogoBadge+'</div>'+
-				'<div class="FileNamePack">'+sBadge+'<div class="FileName TextS1">'+sName+'</div></div>'+
-				'<div class="FileDate">'+sTime+'</div>'+
-			    '</div>';
-		
-		strHtml+=TmpHtml;
-	}
-	
-	$("#FileList").html(strHtml);	
-	
+    const list = $("#FileList").empty();
+    pList.forEach(function (file) {
+        const path = file.path;
+        const placeholder = "../../images/porca_mark.svg";
+        const cachedImage = file.image || sImages[path];
+        const image = cachedImage && !cachedImage.endsWith("img/d.png") ? cachedImage : placeholder;
+        sImages[path] = image;
+        const item = $("<div>", { "class": "FileItem", "fpath": path, "role": "button", "tabindex": 0,
+                                  "aria-label": file.project_name, "title": path });
+        $("<a>", { "class": "FileTip", "title": path, "aria-hidden": "true" }).appendTo(item);
+        const preview = $("<div>", { "class": "FileImg" }).appendTo(item);
+        $("<img>", { "src": image, "alt": "", "class": image === placeholder ? "FilePlaceholder" : "" }).on("error", function () {
+            $(this).off("error");
+            $(this).addClass("FilePlaceholder");
+            this.src = placeholder;
+        }).appendTo(preview);
+        const name = $("<div>", { "class": "FileNamePack" }).appendTo(item);
+        if (file.published == "1") {
+            $("<span>", { "class": "FilePublishedBadge", "text": "PUB" }).appendTo(name);
+            $("<img>", { "class": "FileLogoBadge", "src": "../../images/porca_icon.svg", "alt": "" }).appendTo(preview);
+        }
+        $("<div>", { "class": "FileName TextS1", "text": file.project_name }).appendTo(name);
+        $("<div>", { "class": "FileDate", "text": file.time }).appendTo(item);
+        list.append(item);
+    });
     Set_RecentFile_MouseRightBtn_Event();
-	UpdateRecentClearBtnDisplay();
+    UpdateRecentClearBtnDisplay();
 }
 
 function ShowRecnetFileContextMenu()

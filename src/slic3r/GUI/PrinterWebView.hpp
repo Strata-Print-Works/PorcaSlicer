@@ -32,6 +32,7 @@
 
 
 namespace Slic3r {
+class DynamicPrintConfig;
 namespace GUI {
 
 class PrinterWebViewHandler;
@@ -42,7 +43,7 @@ public:
     PrinterWebView(wxWindow *parent);
     virtual ~PrinterWebView();
 
-    void load_url(wxString& url, wxString apikey = "");
+    void load_url(wxString& url, wxString apikey = "", const DynamicPrintConfig* config = nullptr);
     void UpdateState();
     void OnClose(wxCloseEvent& evt);
     void OnError(wxWebViewEvent& evt);
@@ -69,6 +70,7 @@ private:
     wxString m_url;
     wxString m_url_deferred;
     std::unique_ptr<PrinterWebViewHandler> m_handler;
+    std::unique_ptr<DynamicPrintConfig> m_config;
     bool m_reset_on_show{false};
 
     // DECLARE_EVENT_TABLE()

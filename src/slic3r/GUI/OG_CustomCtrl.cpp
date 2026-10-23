@@ -4,8 +4,11 @@
 #include "Plater.hpp"
 #include "GUI_App.hpp"
 #include "MsgDialog.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 
 #include <wx/gdicmn.h>
+#include <wx/font.h>
 #include <wx/panel.h>
 #include <wx/stattext.h>
 #include "slic3r/GUI/wxExtensions.hpp"
@@ -74,6 +77,13 @@ OG_CustomCtrl::OG_CustomCtrl(   wxWindow*            parent,
     m_v_gap   = lround(1.2 * m_em_unit);
     m_v_gap2  = lround(0.8 * m_em_unit);
     m_h_gap   = lround(0.2 * m_em_unit);
+    if (opt_group->compact_sidebar()) {
+        m_font.SetFractionalPointSize(DesignSystem::font_points(DesignSystem::type_token(DesignSystem::TypeStyle::Body).size));
+        m_font.SetNumericWeight(DesignSystem::type_token(DesignSystem::TypeStyle::Body).weight);
+        SetFont(m_font);
+        m_v_gap = m_v_gap2 = FromDIP(4);
+        m_h_gap = FromDIP(4);
+    }
 
     //m_bmp_mode_sz       = get_bitmap_size(create_scaled_bitmap("mode_simple", this, wxOSX ? 10 : 12));
     m_bmp_blinking_sz   = get_bitmap_size(create_scaled_bitmap("blank_16", this));
@@ -84,6 +94,30 @@ OG_CustomCtrl::OG_CustomCtrl(   wxWindow*            parent,
     this->Bind(wxEVT_MOTION,    &OG_CustomCtrl::OnMotion, this);
     this->Bind(wxEVT_LEFT_DOWN, &OG_CustomCtrl::OnLeftDown, this);
     this->Bind(wxEVT_LEAVE_WINDOW, &OG_CustomCtrl::OnLeaveWin, this);
+    Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+        if (opt_group->compact_sidebar()) {
+            int height = 0;
+            for (CtrlLine& line : ctrl_lines) {
+                line.msw_rescale();
+                if (line.is_visible)
+                    height += line.height;
+            }
+            // Wrapped labels change the height with the width. Laying out the parent
+            // inside this event can resize the control again, so do it afterwards, once.
+            if (GetMinSize().y != height) {
+                SetMinSize(wxSize(GetMinSize().x, height));
+                if (!m_parent_layout_pending) {
+                    m_parent_layout_pending = true;
+                    CallAfter([this] {
+                        m_parent_layout_pending = false;
+                        if (!IsBeingDeleted() && GetParent()) GetParent()->Layout();
+                    });
+                }
+            }
+            Refresh();
+        }
+        event.Skip();
+    });
 }
 
 void OG_CustomCtrl::init_ctrl_lines()
@@ -131,6 +165,24 @@ void OG_CustomCtrl::init_ctrl_lines()
         else
             assert(false);
     }
+    if (opt_group->compact_sidebar())
+        for (CtrlLine& line : ctrl_lines)
+            line.msw_rescale();
+}
+
+int OG_CustomCtrl::label_offset() const
+{
+    return opt_group->compact_sidebar() ? 0 : get_title_width() * m_em_unit;
+}
+
+int OG_CustomCtrl::label_pixel_width() const
+{
+    if (!opt_group->compact_sidebar())
+        return static_cast<int>(opt_group->label_width * m_em_unit);
+    // Keep the value column against the trailing reset gutter as the sidebar
+    // grows. Checkboxes share its leading edge, rather than moving to the right.
+    const int value_and_reset_width = FromDIP(126 + 4 + 20);
+    return std::max(FromDIP(190), GetClientSize().x - value_and_reset_width);
 }
 
 int OG_CustomCtrl::get_height(const Line& line)
@@ -146,7 +198,7 @@ wxPoint OG_CustomCtrl::get_pos(const Line& line, Field* field_in/* = nullptr*/)
 {
     // BBS: new layout
     wxCoord v_pos = 0;
-    wxCoord h_pos = get_title_width() * m_em_unit;
+    wxCoord h_pos = label_offset();
 
     auto correct_line_height = [](int& line_height, wxWindow* win)
     {
@@ -156,7 +208,7 @@ wxPoint OG_CustomCtrl::get_pos(const Line& line, Field* field_in/* = nullptr*/)
     };
 
     auto correct_horiz_pos = [this](int& h_pos, Field* field) {
-        if (m_max_win_width > 0 && field->getWindow()) {
+        if (!opt_group->compact_sidebar() && m_max_win_width > 0 && field->getWindow()) {
             int win_width = field->getWindow()->GetSize().GetWidth();
             if (dynamic_cast<CheckBox*>(field))
                 win_width *= 0.5;
@@ -207,7 +259,7 @@ wxPoint OG_CustomCtrl::get_pos(const Line& line, Field* field_in/* = nullptr*/)
             }
             wxString label = line.label;
             if (opt_group->label_width != 0)
-                add_label_width(ctrl_line, label, opt_group->label_width * m_em_unit);
+                add_label_width(ctrl_line, label, label_pixel_width());
 
             int blinking_button_width = m_bmp_blinking_sz.GetWidth() + m_h_gap;
 
@@ -351,7 +403,7 @@ void OG_CustomCtrl::OnPaint(wxPaintEvent&)
 
     wxPaintDC dc(this);
 
-    wxCoord h_pos = get_title_width() * m_em_unit + 4; // ORCA Align label with group title. StaticLine.cpp uses 18px for icon 5px for spacing. Spacing doesnt scales on messureSize()
+    wxCoord h_pos = label_offset() + (opt_group->compact_sidebar() ? 0 : 4); // Match compact labels and controls.
     wxCoord v_pos = 0;
     // BBS: new layout
     if (!GetLabel().IsEmpty()) {
@@ -513,7 +565,7 @@ void OG_CustomCtrl::OnLeaveWin(wxMouseEvent& event)
 bool OG_CustomCtrl::update_visibility(ConfigOptionMode mode)
 {
     // BBS: new layout
-    wxCoord    h_pos = (ctrlWidth + get_title_width() - titleWidth) * m_em_unit;
+    wxCoord    h_pos = opt_group->compact_sidebar() ? FromDIP(340) : (ctrlWidth + get_title_width() - titleWidth) * m_em_unit;
     wxCoord    h_pos2 = get_title_width() * m_em_unit;
     wxCoord    v_pos = 0;
 
@@ -584,6 +636,10 @@ void OG_CustomCtrl::correct_widgets_position(wxSizer* widget, const Line& line, 
 
 void OG_CustomCtrl::init_max_win_width()
 {
+    if (opt_group->compact_sidebar()) {
+        m_max_win_width = FromDIP(126);
+        return;
+    }
     if (opt_group->ctrl_horiz_alignment == wxALIGN_RIGHT && m_max_win_width == 0)
         for (CtrlLine& line : ctrl_lines) {
             if (int max_win_width = line.get_max_win_width();
@@ -592,7 +648,7 @@ void OG_CustomCtrl::init_max_win_width()
         }
 }
 
-int OG_CustomCtrl::get_title_width()
+int OG_CustomCtrl::get_title_width() const
 {
     if (!GetLabel().IsEmpty())
         return titleWidth;
@@ -624,15 +680,22 @@ void OG_CustomCtrl::msw_rescale()
     m_v_gap     = lround(1.2 * m_em_unit);
     m_v_gap2    = lround(0.8 * m_em_unit);
     m_h_gap     = lround(0.2 * m_em_unit);
+    if (opt_group->compact_sidebar()) {
+        m_font.SetFractionalPointSize(DesignSystem::font_points(DesignSystem::type_token(DesignSystem::TypeStyle::Body).size));
+        m_font.SetNumericWeight(DesignSystem::type_token(DesignSystem::TypeStyle::Body).weight);
+        SetFont(m_font);
+        m_v_gap = m_v_gap2 = FromDIP(4);
+        m_h_gap = FromDIP(4);
+    }
 
     //m_bmp_mode_sz = create_scaled_bitmap("mode_simple", this, wxOSX ? 10 : 12).GetSize();
     m_bmp_blinking_sz = create_scaled_bitmap("blank_16", this).GetSize();
     if (m_bmp_multi_extruder.bmp().IsOk())
         m_bmp_multi_extruder.msw_rescale();
 
-    m_max_win_width = 0;
+    m_max_win_width = opt_group->compact_sidebar() ? FromDIP(126) : 0;
 
-    wxCoord    h_pos = (ctrlWidth + get_title_width() - titleWidth) * m_em_unit;
+    wxCoord    h_pos = opt_group->compact_sidebar() ? FromDIP(340) : (ctrlWidth + get_title_width() - titleWidth) * m_em_unit;
     wxCoord    h_pos2 = get_title_width() * m_em_unit;
     wxCoord    v_pos = 0;
     for (CtrlLine& line : ctrl_lines) {
@@ -658,8 +721,11 @@ void OG_CustomCtrl::msw_rescale()
 
 void OG_CustomCtrl::sys_color_changed()
 {
+    if (opt_group->compact_sidebar())
+        SetBackgroundColour(GetParent()->GetBackgroundColour());
     if (m_bmp_multi_extruder.bmp().IsOk())
         m_bmp_multi_extruder.msw_rescale();
+    Refresh();
 }
 
 OG_CustomCtrl::CtrlLine::CtrlLine(  wxCoord         height,
@@ -721,6 +787,16 @@ void OG_CustomCtrl::CtrlLine::correct_items_positions()
 
 void OG_CustomCtrl::CtrlLine::msw_rescale()
 {
+    if (ctrl->opt_group->compact_sidebar() && !is_separator()) {
+        wxClientDC dc(ctrl);
+        dc.SetFont(ctrl->m_font);
+        wxString wrapped;
+        const wxSize label = Label::split_lines(dc, ctrl->label_pixel_width(), og_line.label, wrapped);
+        const size_t count = ctrl->opt_group->split_multi_line ? std::max(size_t(1), og_line.get_options().size()) : 1;
+        height = std::max(ctrl->FromDIP(32) * static_cast<int>(count), label.y + ctrl->FromDIP(4));
+        correct_items_positions();
+        return;
+    }
     // if we have a single option with no label, no sidetext
     if (draw_just_act_buttons)
         height = get_bitmap_size(create_scaled_bitmap("empty")).GetHeight();
@@ -861,7 +937,7 @@ void OG_CustomCtrl::CtrlLine::render(wxDC& dc, wxCoord h_pos, wxCoord v_pos)
         }
         is_url_string = !suppress_hyperlinks && !og_line.label_path.empty();
         // BBS
-        h_pos = draw_text(dc, wxPoint(h_pos, v_pos), label /* + ":" */, text_clr, h_pos + ctrl->opt_group->label_width * ctrl->m_em_unit - h_pos, is_url_string, true);
+        h_pos = draw_text(dc, wxPoint(h_pos, v_pos), label /* + ":" */, text_clr, ctrl->label_pixel_width(), is_url_string, true);
     }
 
     // If there's a widget, build it and set result to the correct position.
@@ -905,6 +981,8 @@ void OG_CustomCtrl::CtrlLine::render(wxDC& dc, wxCoord h_pos, wxCoord v_pos)
     if (option_set.size() == 1 && option_set.front().opt.sidetext.size() == 0 &&
         option_set.front().side_widget == nullptr && og_line.get_extra_widgets().size() == 0)
     {
+        if (ctrl->opt_group->compact_sidebar() && field && field->getWindow() && !ctrl->opt_group->option_label_at_right)
+            h_pos = field->getWindow()->GetPosition().x;
         // BBS: new layout
         if (ctrl->opt_group->option_label_at_right)
             draw_buttons(field);
@@ -1011,6 +1089,24 @@ wxCoord OG_CustomCtrl::CtrlLine::draw_text(wxDC &dc, wxPoint pos, const wxString
             wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
 #endif /* _WIN32 */
         dc.DrawText(out_text, pos);
+        if (is_main && ctrl->opt_group->compact_sidebar() && !og_line.get_options().empty()) {
+            Field* field = ctrl->opt_group->get_field(og_line.get_options().front().opt_id);
+            if (field && field->getWindow() && !og_line.widget && !og_line.near_label_widget_win) {
+                // Guide only the final text line to the first control. In particular,
+                // checkboxes never get a second leader through their empty value column.
+                const wxString last_line = out_text.AfterLast('\n');
+                const int start = pos.x + dc.GetTextExtent(last_line).x + ctrl->FromDIP(8);
+                const int end = field->getWindow()->GetPosition().x - ctrl->FromDIP(10);
+                const int descent = dc.GetFontMetrics().descent;
+                const int y = pos.y + size.y - descent - ctrl->FromDIP(1);
+                const wxPen old_pen = dc.GetPen();
+                dc.SetPen(wxPen(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::LineControl,
+                                                               wxGetApp().dark_mode())), 1));
+                for (int x = start; x < end; x += ctrl->FromDIP(3))
+                    dc.DrawPoint(x, y);
+                dc.SetPen(old_pen);
+            }
+        }
         dc.SetTextForeground(old_clr);
         dc.SetFont(old_font);
 

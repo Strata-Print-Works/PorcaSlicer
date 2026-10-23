@@ -20,6 +20,9 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#ifdef __linux__
+#include <cstring>
+#endif
 #endif
 
 namespace Slic3r {
@@ -74,17 +77,20 @@ std::vector<DiscoveryInterface> discovery_interfaces()
     }
     freeifaddrs(head);
 #endif
+    // Index 0 is "any interface" to DNS-SD and the socket options below, never
+    // an eligible LAN. A failed if_nametoindex() lookup must not widen the scan.
+    result.erase(std::remove_if(result.begin(), result.end(), [](const auto& item) { return item.index == 0; }), result.end());
     std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.address < b.address; });
     result.erase(std::unique(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.address == b.address; }), result.end());
     if (result.size() > 4) result.resize(4);
     return result;
 }
 
-bool wait_for_discovery_probe(const std::atomic<bool>* cancelled)
+bool wait_for_discovery_probe(const std::atomic<bool>* cancelled, std::chrono::steady_clock::time_point deadline)
 {
     static std::mutex mutex;
     static DiscoveryProbeSchedule schedule;
-    while (!cancelled || !cancelled->load()) {
+    while ((!cancelled || !cancelled->load()) && std::chrono::steady_clock::now() < deadline) {
         {
             std::lock_guard<std::mutex> lock(mutex);
             const auto now = std::chrono::steady_clock::now();
@@ -97,10 +103,24 @@ bool wait_for_discovery_probe(const std::atomic<bool>* cancelled)
 
 bool constrain_discovery_socket(boost::asio::ip::udp::socket& socket, unsigned interface_index)
 {
-#ifdef __APPLE__
     // Binding a source address alone does not prevent VPN policy routing.
-    return interface_index != 0 && setsockopt(socket.native_handle(), IPPROTO_IP, IP_BOUND_IF,
-                                            &interface_index, sizeof(interface_index)) == 0;
+    // Each platform pins egress to the selected interface; failure fails closed.
+    if (interface_index == 0) return false;
+#ifdef __APPLE__
+    return setsockopt(socket.native_handle(), IPPROTO_IP, IP_BOUND_IF, &interface_index, sizeof(interface_index)) == 0;
+#elif defined(_WIN32)
+    // Both options take the IPv4 interface index in network byte order.
+    const DWORD index = htonl(interface_index);
+    return setsockopt(socket.native_handle(), IPPROTO_IP, IP_UNICAST_IF,
+                      reinterpret_cast<const char*>(&index), sizeof(index)) == 0 &&
+           setsockopt(socket.native_handle(), IPPROTO_IP, IP_MULTICAST_IF,
+                      reinterpret_cast<const char*>(&index), sizeof(index)) == 0;
+#elif defined(__linux__)
+    // Kernels before 5.7 require CAP_NET_RAW here; discovery then stays off
+    // rather than probing through a VPN, and direct-address entry still works.
+    char name[IF_NAMESIZE] = {};
+    return if_indextoname(interface_index, name) &&
+           setsockopt(socket.native_handle(), SOL_SOCKET, SO_BINDTODEVICE, name, socklen_t(std::strlen(name) + 1)) == 0;
 #else
     return true;
 #endif

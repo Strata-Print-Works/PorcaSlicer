@@ -364,7 +364,7 @@ private:
     bool             m_show_error_msgdlg{false};
     wxString         m_info_dialog_content;
     HttpServer       m_http_server;
-    bool             m_show_gcode_window{true};
+    bool             m_show_gcode_window{false};
     boost::thread    m_check_network_thread;
 public:
     //try again when subscription fails

@@ -224,6 +224,9 @@ src/libslic3r/PrintObjectSlice.cpp
 src/libslic3r/PlaceholderParser.cpp
 src/libslic3r/Support/TreeSupport.cpp
 src/libslic3r/Model.cpp
+src/libslic3r/PlatePrintSetup.cpp
+src/libslic3r/ProjectPlateImport.cpp
+src/libslic3r/Format/bbs_3mf.cpp
 src/libslic3r/Format/OBJ.cpp
 src/slic3r/GUI/CalibrationWizardPage.cpp
 src/slic3r/GUI/CalibrationPanel.cpp
@@ -260,6 +263,7 @@ src/slic3r/GUI/MultiTaskManagerPage.cpp
 src/slic3r/GUI/MultiMachine.cpp
 src/slic3r/GUI/FilamentMapDialog.cpp
 src/slic3r/GUI/FilamentGroupPopup.cpp
+src/slic3r/GUI/FilamentUsageReport.cpp
 src/slic3r/GUI/FilamentMapPanel.cpp
 src/slic3r/Utils/Obico.cpp
 src/slic3r/Utils/SimplyPrint.cpp
@@ -309,6 +313,7 @@ src/slic3r/GUI/BBLStatusBarPrint.cpp
 src/slic3r/GUI/BBLStatusBarSend.cpp
 src/slic3r/GUI/BaseTransparentDPIFrame.cpp
 src/slic3r/GUI/CloneDialog.cpp
+src/slic3r/GUI/PlateLayoutDialog.cpp
 src/slic3r/GUI/ColorDecomposeDialog.cpp
 src/slic3r/GUI/ColorDecomposeSupport.cpp
 src/slic3r/GUI/ConfigWizard.cpp
@@ -333,8 +338,10 @@ src/slic3r/GUI/OAuthDialog.cpp
 src/slic3r/GUI/PluginPickerDialog.cpp
 src/slic3r/GUI/PluginsConfigDialog.cpp
 src/slic3r/GUI/PluginsDialog.cpp
+src/slic3r/GUI/PrinterScanDialog.cpp
 src/slic3r/GUI/PrinterWebView.cpp
 src/slic3r/GUI/Project.cpp
+src/slic3r/GUI/ProductionPanel.cpp
 src/slic3r/GUI/PublishSettingsDialog.hpp
 src/slic3r/GUI/PurgeModeDialog.cpp
 src/slic3r/GUI/TerminalDialog.cpp
@@ -361,3 +368,8 @@ src/slic3r/GUI/PostProcessor.cpp
 src/slic3r/GUI/TaskManager.cpp
 src/slic3r/GUI/Widgets/ProgressDialog.hpp
 src/slic3r/GUI/Widgets/StepCtrl.cpp
+src/slic3r/GUI/Widgets/DropDown.cpp
+src/slic3r/GUI/wxMediaCtrl3.cpp
+src/slic3r/Utils/ElegooCanvas.hpp
+src/slic3r/Utils/ElegooCanvas.cpp
+src/slic3r/GUI/PlateTransfer.cpp

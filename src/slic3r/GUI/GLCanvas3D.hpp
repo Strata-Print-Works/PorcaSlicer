@@ -16,6 +16,8 @@
 #include "libslic3r/BoundingBox.hpp"
 #include <array>
 #include "libslic3r/Config.hpp"
+#include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/ObjectID.hpp"
 #include "libslic3r/Polygon.hpp"
 #include "libslic3r/Technologies.hpp"
 #include "libslic3r/Model.hpp"
@@ -32,10 +34,12 @@
 #include "GLToolbar.hpp"
 #include "Event.hpp"
 #include "Selection.hpp"
+#include "SelectAllSequence.hpp"
 #include "Gizmos/GLGizmosManager.hpp"
 #include "GUI_ObjectLayers.hpp"
 #include "GLSelectionRectangle.hpp"
 #include "GLModel.hpp"
+#include "GLTexture.hpp"
 #include "MeshUtils.hpp"
 #include "GCodeViewer.hpp"
 #include "Camera.hpp"
@@ -649,6 +653,9 @@ private:
     wxTimer m_timer_set_color;
     // Armed by each frame that draws the FPS overlay; its tick requests an overlay-only frame.
     wxTimer m_fps_overlay_timer;
+    // Opt-in local toolbar styling; no timer is started for normal launches.
+    wxTimer m_toolbar_style_timer;
+    std::uint64_t m_toolbar_style_revision{0};
     // True during the frame the timer requested, which is not counted.
     bool m_fps_overlay_tick{ false };
     LayersEditing m_layers_editing;
@@ -690,6 +697,41 @@ private:
     GLModel m_workspace_grid_minor;
     GLModel m_workspace_grid_major;
     BoundingBoxf m_workspace_extent;
+    GLModel m_stage_surfaces;
+    GLModel m_stage_title_bars;
+    GLModel m_stage_outlines;
+    size_t m_stage_geometry_signature {0};
+    struct StageControl {
+        enum Kind { Title, Actions, Resize, Rename };
+        std::string id;
+        BoundingBoxf bounds;
+        Kind kind;
+        int corner {-1};
+    };
+    std::vector<StageControl> m_stage_controls;
+    struct StageLabel {
+        std::string name;
+        std::string text;
+        int font_size {0};
+        bool dark {false};
+        double available_width {0.};
+        GLTexture texture;
+        GLModel model;
+        GLModel rename_model;
+        BoundingBoxf bounds;
+        BoundingBoxf rename_bounds;
+    };
+    std::map<std::string, std::unique_ptr<StageLabel>> m_stage_labels;
+    GLTexture m_stage_edit_texture;
+    bool m_stage_edit_dark {false};
+    GLModel m_stage_control_marks;
+    GLModel m_stage_hover_mark;
+    size_t m_stage_hover_signature {0};
+    GLModel m_stage_drop_mark;
+    std::string m_plate_drop_stage;
+    std::string m_stage_hover_id;
+    StageControl::Kind m_stage_hover_kind {StageControl::Title};
+    int m_stage_hover_corner {-1};
     // Geometry the CAD grid models were last built from, so they are rebuilt on bed-shape change
     // rather than every frame.
     BoundingBoxf m_cad_grid_bb;
@@ -748,6 +790,32 @@ private:
     bool m_initialized;
     //BBS: add flag to controll rendering
     bool m_render_preview{ true };
+    bool m_check_preview_camera{ false };
+    bool m_preview_scope_selected{ false };
+    std::string m_preview_stage_id;
+    // Preview navigation text, formatted again only when what it shows changes.
+    struct PreviewPlateRow
+    {
+        bool valid{ false };
+        std::string plate_name;
+        bool empty{ false };
+        bool fresh{ false };
+        float time{ 0.f };
+        std::string name;
+        std::string status;
+    };
+    std::vector<PreviewPlateRow> m_preview_plate_rows;
+    struct PreviewScopeSummary
+    {
+        bool valid{ false };
+        size_t count{ 0 };
+        size_t sliced{ 0 };
+        std::optional<double> seconds;
+        std::string progress;
+        std::string time;
+    };
+    PreviewScopeSummary m_preview_scope_summary;
+    int m_preview_plate_index{ -1 };
     bool m_enable_render { true };
     bool m_apply_zoom_to_volumes_filter;
     bool m_picking_enabled;
@@ -760,8 +828,11 @@ private:
     {
         int  code   = WXK_NONE;
         bool repeat = false;
+        long timestamp = 0;
     };
     KeyDown m_key_down;
+    SelectAllSequence m_select_all_sequence;
+    Selection::IndicesList m_select_all_selection;
     // A keyboard move or rotation of the selection runs from the key-down that started it to
     // that key's release, so a held key becomes one undo step.
     struct SelectionEdit
@@ -783,9 +854,42 @@ private:
     mutable std::vector<int> m_hover_volume_idxs;
     std::vector<int> m_hover_plate_idxs;
     int m_plate_drag_index {-1};
+    std::vector<int> m_plate_drag_indices;
     Vec3d m_plate_drag_origin {Vec3d::Zero()};
     Vec3d m_plate_drag_anchor {Vec3d::Zero()};
     bool m_plate_drag_snapshot {false};
+    std::map<std::string, BoundingBoxf> m_plate_drag_source_bounds;
+    std::string m_stage_drag_id;
+    std::string m_stage_action_pressed;
+    StageControl::Kind m_stage_action_kind {StageControl::Actions};
+    Vec2d m_stage_drag_origin {Vec2d::Zero()};
+    Vec3d m_stage_drag_anchor {Vec3d::Zero()};
+    bool m_stage_drag_blocked {false};
+    bool m_stage_drag_snapshot {false};
+    int m_stage_resize_corner {-1};
+    BoundingBoxf m_stage_resize_origin;
+    BoundingBoxf m_stage_resize_original_frame;
+    struct WorkspaceDragPlateState {
+        ObjectID id;
+        Vec3d origin;
+        bool affected;
+        bool has_workspace_position;
+        Vec2d workspace_position;
+        bool slice_valid;
+        bool apply_invalid;
+        float slice_percent;
+        // Captured for affected plates only; empty for stationary ones.
+        DynamicPrintConfig setup_config;
+        DynamicPrintConfig plate_config;
+    };
+    std::vector<WorkspaceDragPlateState> m_workspace_drag_plate_states;
+    bool m_workspace_drag_pending_update {false};
+    // The drag's undo snapshot, removed again when the drag is cancelled and rolled back.
+    std::optional<size_t> m_workspace_drag_snapshot_time;
+    DynamicPrintConfig m_workspace_drag_canvas_config;
+    bool m_workspace_drag_has_canvas_config {false};
+    // A focus loss cancelled the gesture; the rollback runs after the focus event.
+    bool m_workspace_drag_cancel_pending {false};
     // IMEX ghost hover state (plate-owned transparent ghost volumes).
     int m_hover_ghost_head  { -1 };  // physical head index, -1 when not hovering a ghost
     int m_hover_ghost_plate { -1 };  // plate index for the hovered ghost, -1 when none
@@ -1098,6 +1202,7 @@ public:
     void _update_select_plate_toolbar_stats_item(bool force_selected = false);
     void reset_select_plate_toolbar_selection();
     void enable_select_plate_toolbar(bool enable);
+    bool is_select_plate_toolbar_enabled() const { return m_sel_plate_toolbar.is_enabled(); }
     void enable_assemble_view_toolbar(bool enable);
     void enable_return_toolbar(bool enable);
     void enable_separator_toolbar(bool enable);
@@ -1232,6 +1337,7 @@ public:
 
     //BBS
     void select_curr_plate_all();
+    void select_all_from_shortcut(long input_timestamp = 0);
     void select_object_from_idx(std::vector<int>& object_idxs);
     void remove_curr_plate_all();
 
@@ -1255,6 +1361,7 @@ public:
     void mirror_selection(Axis axis);
 
     void reload_scene(bool refresh_immediately, bool force_full_scene_refresh = false);
+    bool is_workspace_dragging() const { return m_plate_drag_index >= 0 || (!m_stage_drag_id.empty() && m_stage_resize_corner < 0); }
     //Orca: shell preview improvement
     void set_shell_transparence(float alpha = 0.2f);
     void load_shells(const Print& print, bool force_previewing = false);
@@ -1275,6 +1382,11 @@ public:
     void on_idle(wxIdleEvent& evt);
     void on_char(wxKeyEvent& evt);
     void on_key(wxKeyEvent& evt);
+    void on_workspace_capture_lost(wxMouseCaptureLostEvent& evt);
+    void _cancel_workspace_drag();
+    // Runs a cancellation requested by a focus loss, unless the gesture already ended.
+    void _finish_cancelled_workspace_drag();
+    void _capture_workspace_drag_state(const std::string& stage_id, int plate_index);
     // Runs the Plater/Preview shortcut bound to chord, swallowing auto-repeats of one-shot
     // shortcuts; false when nothing is bound.
     bool handle_shortcut(const KeyChord& chord);
@@ -1287,6 +1399,7 @@ public:
     void on_render_timer(wxTimerEvent& evt);
     void on_set_color_timer(wxTimerEvent& evt);
     void on_fps_overlay_timer(wxTimerEvent& evt);
+    void on_toolbar_style_timer(wxTimerEvent& evt);
     void on_mouse(wxMouseEvent& evt);
     void on_gesture(wxGestureEvent& evt);
     void on_paint(wxPaintEvent& evt);
@@ -1350,6 +1463,7 @@ public:
         inline const Vec2d& pos() const { return m_pos; }
         inline double rotation() const { return m_rotation; }
         inline const Vec2d bb_size() const { return m_bb.size(); }
+        const BoundingBoxf& bounds() const { return m_bb; }
 
         void apply_wipe_tower() const { apply_wipe_tower(m_pos, m_rotation); }
         void apply_wipe_tower(Vec2d pos, double rot) const;
@@ -1542,6 +1656,9 @@ private:
     // when the bed shape changed.
     void _render_cad_grid(const Transform3d& view_matrix, const Transform3d& projection_matrix);
     void _render_workspace_plane(const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    void _render_workspace_stages(const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    const StageControl* _workspace_stage_control_at(const Vec2d& screen);
+    std::string _plate_drop_stage_at(const Vec2d& screen);
     //BBS: add outline drawing logic
     void _render_objects(GLVolumeCollection::ERenderType type, bool with_outline = true);
     // IMEX ghost volumes owned by PartPlate, drawn through the shader the caller bound:
@@ -1574,6 +1691,7 @@ private:
     void _render_gizmos_overlay();
     void _render_main_toolbar();
     void _render_imgui_select_plate_toolbar();
+    void _render_preview_navigation();
     void _render_assemble_view_toolbar() const;
     void _render_return_toolbar() const;
     void _render_canvas_toolbar();

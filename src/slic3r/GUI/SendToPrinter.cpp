@@ -1,3 +1,5 @@
+#include <initializer_list>
+#include "Widgets/StateColor.hpp"
 #include "SendToPrinter.hpp"
 #include "I18N.hpp"
 
@@ -423,7 +425,7 @@ SendToPrinterDialog::SendToPrinterDialog(Plater *plater)
 
     m_statictext_finish = new wxStaticText(m_panel_finish, wxID_ANY, _L("Send complete"), wxDefaultPosition, wxDefaultSize, 0);
     m_statictext_finish->Wrap(-1);
-    m_statictext_finish->SetForegroundColour(wxColour(0, 150, 136));
+    m_statictext_finish->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#009688")));
     m_sizer_finish_h->Add(m_statictext_finish, 0, wxALIGN_CENTER | wxALL, FromDIP(5));
 
     m_sizer_finish_v->Add(m_sizer_finish_h, 1, wxALIGN_CENTER, 0);
@@ -445,71 +447,20 @@ SendToPrinterDialog::SendToPrinterDialog(Plater *plater)
     wxBoxSizer* sizer_print_failed_info = new wxBoxSizer(wxVERTICAL);
     m_sw_print_failed_info->SetSizer(sizer_print_failed_info);
 
-    wxBoxSizer* sizer_error_code = new wxBoxSizer(wxHORIZONTAL);
-    wxBoxSizer* sizer_error_desc = new wxBoxSizer(wxHORIZONTAL);
-    wxBoxSizer* sizer_extra_info = new wxBoxSizer(wxHORIZONTAL);
-
-    auto st_title_error_code = new wxStaticText(m_sw_print_failed_info, wxID_ANY, _L("Error code"));
-    auto st_title_error_code_doc = new wxStaticText(m_sw_print_failed_info, wxID_ANY, ": ");
-    m_st_txt_error_code = new Label(m_sw_print_failed_info, wxEmptyString);
-    st_title_error_code->SetForegroundColour(0x909090);
-    st_title_error_code_doc->SetForegroundColour(0x909090);
-    m_st_txt_error_code->SetForegroundColour(0x909090);
-    st_title_error_code->SetFont(::Label::Body_13);
-    st_title_error_code_doc->SetFont(::Label::Body_13);
-    m_st_txt_error_code->SetFont(::Label::Body_13);
-    st_title_error_code->SetMinSize(wxSize(FromDIP(74), -1));
-    st_title_error_code->SetMaxSize(wxSize(FromDIP(74), -1));
-    m_st_txt_error_code->SetMinSize(wxSize(FromDIP(260), -1));
-    m_st_txt_error_code->SetMaxSize(wxSize(FromDIP(260), -1));
-    sizer_error_code->Add(st_title_error_code, 0, wxALL, 0);
-    sizer_error_code->Add(st_title_error_code_doc, 0, wxALL, 0);
-    sizer_error_code->Add(m_st_txt_error_code, 0, wxALL, 0);
-
-    auto st_title_error_desc = new wxStaticText(m_sw_print_failed_info, wxID_ANY, _L("Error desc"));
-    auto st_title_error_desc_doc = new wxStaticText(m_sw_print_failed_info, wxID_ANY, ": ");
+    // Stack the message and optional diagnostics so wrapping never overlaps a caption.
     m_st_txt_error_desc = new Label(m_sw_print_failed_info, wxEmptyString);
-    st_title_error_desc->SetForegroundColour(0x909090);
-    st_title_error_desc_doc->SetForegroundColour(0x909090);
-    m_st_txt_error_desc->SetForegroundColour(0x909090);
-    st_title_error_desc->SetFont(::Label::Body_13);
-    st_title_error_desc_doc->SetFont(::Label::Body_13);
-    m_st_txt_error_desc->SetFont(::Label::Body_13);
-    st_title_error_desc->SetMinSize(wxSize(FromDIP(74), -1));
-    st_title_error_desc->SetMaxSize(wxSize(FromDIP(74), -1));
-    m_st_txt_error_desc->SetMinSize(wxSize(FromDIP(260), -1));
-    m_st_txt_error_desc->SetMaxSize(wxSize(FromDIP(260), -1));
-    sizer_error_desc->Add(st_title_error_desc, 0, wxALL, 0);
-    sizer_error_desc->Add(st_title_error_desc_doc, 0, wxALL, 0);
-    sizer_error_desc->Add(m_st_txt_error_desc, 0, wxALL, 0);
-
-    auto st_title_extra_info = new wxStaticText(m_sw_print_failed_info, wxID_ANY, _L("Extra info"));
-    auto st_title_extra_info_doc = new wxStaticText(m_sw_print_failed_info, wxID_ANY, ": ");
+    m_st_txt_error_code = new Label(m_sw_print_failed_info, wxEmptyString);
     m_st_txt_extra_info = new Label(m_sw_print_failed_info, wxEmptyString);
-    st_title_extra_info->SetForegroundColour(0x909090);
-    st_title_extra_info_doc->SetForegroundColour(0x909090);
-    m_st_txt_extra_info->SetForegroundColour(0x909090);
-    st_title_extra_info->SetFont(::Label::Body_13);
-    st_title_extra_info_doc->SetFont(::Label::Body_13);
-    m_st_txt_extra_info->SetFont(::Label::Body_13);
-    st_title_extra_info->SetMinSize(wxSize(FromDIP(74), -1));
-    st_title_extra_info->SetMaxSize(wxSize(FromDIP(74), -1));
-    m_st_txt_extra_info->SetMinSize(wxSize(FromDIP(260), -1));
-    m_st_txt_extra_info->SetMaxSize(wxSize(FromDIP(260), -1));
-    sizer_extra_info->Add(st_title_extra_info, 0, wxALL, 0);
-    sizer_extra_info->Add(st_title_extra_info_doc, 0, wxALL, 0);
-    sizer_extra_info->Add(m_st_txt_extra_info, 0, wxALL, 0);
+    for (Label* label : {m_st_txt_error_desc, m_st_txt_error_code, m_st_txt_extra_info}) {
+        label->SetFont(::Label::Body_13);
+        label->SetForegroundColour(0x909090);
+        label->SetMinSize(wxSize(FromDIP(356), -1));
+        sizer_print_failed_info->Add(label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(6));
+    }
 
-    // ORCA standardized HyperLink
-    m_link_network_state = new HyperLink(m_sw_print_failed_info, _L("Check the status of current system services"), wxGetApp().link_to_network_check());
+    m_link_network_state = new HyperLink(m_sw_print_failed_info, _L("Check cloud service status"), wxGetApp().link_to_network_check());
     m_link_network_state->SetFont(::Label::Body_12);
-
-    sizer_print_failed_info->Add(m_link_network_state, 0, wxLEFT, 5);
-    sizer_print_failed_info->Add(sizer_error_code, 0, wxLEFT, 5);
-    sizer_print_failed_info->Add(0, 0, 0, wxTOP, FromDIP(3));
-    sizer_print_failed_info->Add(sizer_error_desc, 0, wxLEFT, 5);
-    sizer_print_failed_info->Add(0, 0, 0, wxTOP, FromDIP(3));
-    sizer_print_failed_info->Add(sizer_extra_info, 0, wxLEFT, 5);
+    sizer_print_failed_info->Add(m_link_network_state, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(6));
 
     // bind
     Bind(EVT_SHOW_ERROR_INFO_SEND, [this](auto& e) {
@@ -633,9 +584,8 @@ SendToPrinterDialog::SendToPrinterDialog(Plater *plater)
 
      m_last_refresh_time = wxDateTime::Now();
     show_print_failed_info(false);
-    SetSizer(m_sizer_main);
+    SetSizerAndFit(m_sizer_main);
     Layout();
-    Fit();
     Thaw();
 
     init_bind();
@@ -728,32 +678,28 @@ void SendToPrinterDialog::update_print_error_info(int code, std::string msg, std
 
 void SendToPrinterDialog::show_print_failed_info(bool show, int code, wxString description, wxString extra)
 {
+    // The disclosure toggles only here, after the actual labels have been laid out.
+    show = show && !m_sw_print_failed_info->IsShown();
     if (show) {
-        if (!m_sw_print_failed_info->IsShown()) {
-            m_sw_print_failed_info->Show(true);
+        m_st_txt_error_desc->SetLabel(wxGetApp().filter_string(m_print_error_msg));
+        m_st_txt_error_code->SetLabel(wxString::Format(_L("Error code: %d"), m_print_error_code));
+        m_st_txt_extra_info->SetLabel(wxGetApp().filter_string(m_print_error_extra));
+        for (Label* label : {m_st_txt_error_desc, m_st_txt_error_code, m_st_txt_extra_info})
+            label->Wrap(FromDIP(356));
+        m_st_txt_extra_info->Show(!m_print_error_extra.empty());
 
-            m_st_txt_error_code->SetLabelText(wxString::Format("%d", m_print_error_code));
-            m_st_txt_error_desc->SetLabelText( wxGetApp().filter_string(m_print_error_msg));
-            m_st_txt_extra_info->SetLabelText( wxGetApp().filter_string(m_print_error_extra));
-
-            m_st_txt_error_code->Wrap(FromDIP(260));
-            m_st_txt_error_desc->Wrap(FromDIP(260));
-            m_st_txt_extra_info->Wrap(FromDIP(260));
-        }
-        else {
-            m_sw_print_failed_info->Show(false);
-        }
-        Layout();
-        Fit();
+        DeviceManager* dev = wxGetApp().getDeviceManager();
+        MachineObject* printer = dev ? dev->get_selected_machine() : nullptr;
+        m_link_network_state->Show(printer && !printer->is_lan_mode_printer()
+                                  && wxGetApp().app_config->get("lan_mode_only") != "1");
     }
-    else {
-        if (!m_sw_print_failed_info->IsShown()) { return; }
-        m_sw_print_failed_info->Show(false);
-        m_st_txt_error_code->SetLabelText(wxEmptyString);
-        m_st_txt_error_desc->SetLabelText(wxEmptyString);
-        m_st_txt_extra_info->SetLabelText(wxEmptyString);
+    m_sw_print_failed_info->Show(show);
+    m_sw_print_failed_info->Layout();
+    m_sw_print_failed_info->FitInside();
+    m_sw_print_failed_info->Scroll(0, 0);
+    if (GetSizer()) {
+        GetSizer()->SetSizeHints(this);
         Layout();
-        Fit();
     }
 }
 
@@ -768,6 +714,9 @@ void SendToPrinterDialog::prepare_mode()
     Enable_Send_Button(true);
     show_print_failed_info(false);
 
+    m_print_error_code = 0;
+    m_print_error_msg.clear();
+    m_print_error_extra.clear();
     m_status_bar->reset();
     if (m_simplebook->GetSelection() != 0) {
         m_simplebook->SetSelection(0);
@@ -904,6 +853,9 @@ void SendToPrinterDialog::on_ok(wxCommandEvent &event)
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", print_job: for send task, current printer id =  " << m_printer_last_select << std::endl;
     show_status(PrintDialogStatus::PrintStatusSending);
 
+    m_print_error_code = 0;
+    m_print_error_msg.clear();
+    m_print_error_extra.clear();
     m_status_bar->reset();
     m_status_bar->set_prog_block();
     m_status_bar->set_cancel_callback_fina([this]() {
@@ -1512,7 +1464,7 @@ void SendToPrinterDialog::show_status(PrintDialogStatus status, std::vector<wxSt
 		Enable_Send_Button(false);
 		Enable_Refresh_Button(true);
     } else if (status == PrintDialogStatus::PrintStatusNotOnTheSameLAN) {
-        wxString msg_text = _L("The printer is required to be on the same LAN as Orca Slicer.");
+        wxString msg_text = _L("The printer is required to be on the same LAN as Porca.");
         update_print_status_msg(msg_text, true, true);
         Enable_Send_Button(false);
         Enable_Refresh_Button(true);
@@ -1599,6 +1551,9 @@ void SendToPrinterDialog::set_default()
     m_comboBox_printer->SetValue(wxEmptyString);
     m_comboBox_printer->Enable();
     // rset status bar
+    m_print_error_code = 0;
+    m_print_error_msg.clear();
+    m_print_error_extra.clear();
     m_status_bar->reset();
 
     NetworkAgent* agent = wxGetApp().getAgent();
@@ -2064,6 +2019,7 @@ void SendToPrinterDialog::UploadFileRessultCallback(int res, int resp_ec, std::s
             show_status(PrintDialogStatus::PrintStatusReadingFinished);
             wxCommandEvent *evt = new wxCommandEvent(m_plater->get_send_finished_event());
             evt->SetString(from_u8(m_current_project_name.utf8_string()));
+            evt->SetInt(m_print_plate_idx);
             wxQueueEvent(m_plater, evt);
         }
         else {

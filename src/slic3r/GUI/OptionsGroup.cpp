@@ -4,6 +4,8 @@
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
 #include "OG_CustomCtrl.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 #include "MsgDialog.hpp"
 #include "PluginPickerDialog.hpp"
 #include "Widgets/StaticLine.hpp"
@@ -27,6 +29,7 @@
 #include <vector>
 #include <wx/bookctrl.h>
 #include <wx/gdicmn.h>
+#include <wx/font.h>
 #include <wx/event.h>
 #include <wx/numformatter.h>
 #include <boost/algorithm/string/split.hpp>
@@ -108,6 +111,8 @@ const t_field& OptionsGroup::build_field(const t_config_option_key& id, const Co
     }
     // Grab a reference to fields for convenience
     const t_field& field = m_fields[id];
+    if (m_compact_sidebar)
+        field->apply_compact_sidebar();
     field->m_on_change   = [this](const std::string& opt_id, const boost::any& value) {
         //! This function will be called from Field.
         //! Call OptionGroup._on_change(...)
@@ -197,11 +202,12 @@ void OptionsGroup::remove_option_if(std::function<bool(std::string const&)> cons
         opts.erase(std::remove_if(opts.begin(), opts.end(), [&comp](Option& o) { return comp(o.opt.opt_key); }), opts.end());
         l.undo_to_sys = true;
     }
-    for (int i = m_lines.size() - 1; i >= 0; --i) {
-        if (m_lines[i].get_options().empty())
-            m_options_mode.erase(m_options_mode.begin() + i);
-    }
     m_lines.erase(std::remove_if(m_lines.begin(), m_lines.end(), [](auto& l) { return l.get_options().empty(); }), m_lines.end());
+    // Separators and custom rows do not append a mode. Their line indices
+    // therefore cannot index m_options_mode while filtering a settings scope.
+    m_options_mode.clear();
+    for (const auto& line : m_lines)
+        m_options_mode.push_back(line.get_options().front().opt.mode);
     // TODO: remove items from g->m_options;
 }
 
@@ -547,15 +553,29 @@ bool OptionsGroup::activate(std::function<void()> throw_if_canceled /* = [](){}*
             sizer     = new wxStaticBoxSizer(stb, wxVERTICAL);
         } else {
             // BBS: new layout
-            ::StaticLine* stl = new ::StaticLine(m_parent, false, _(title), icon);
-            stl->SetFont(Label::Head_14);
-            stl->SetForegroundColour("#363636"); // ORCA Match Parameters title color with tab title color
+            ::StaticLine* stl = new ::StaticLine(m_parent, false,
+                _(title), m_compact_sidebar ? wxString() : icon);
+            if (m_compact_sidebar) {
+                wxFont heading = Label::Body_14;
+                const auto& token = DesignSystem::type_token(DesignSystem::TypeStyle::BodyStrong);
+                heading.SetFractionalPointSize(DesignSystem::font_points(token.size));
+                heading.SetNumericWeight(token.weight);
+                stl->SetFont(heading);
+                stl->SetForegroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Ink, wxGetApp().dark_mode())));
+                stl->SetLineColour(m_parent->GetBackgroundColour());
+                stl->Rescale();
+            } else {
+                stl->SetFont(Label::Head_14);
+                stl->SetForegroundColour("#363636"); // ORCA Match Parameters title color with tab title color
+            }
             sizer = new wxBoxSizer(wxVERTICAL);
             if (title.IsEmpty()) {
                 stl->Hide();
             } else {
+                if (m_compact_sidebar)
+                    sizer->AddSpacer(m_parent->FromDIP(12));
                 sizer->Add(stl, 0, wxEXPAND);
-                sizer->AddSpacer(8);
+                sizer->AddSpacer(m_compact_sidebar ? m_parent->FromDIP(6) : 8);
             }
             this->stb = stl;
         }
@@ -631,7 +651,12 @@ void OptionsGroup::clear(bool destroy_custom_ctrl)
         for (auto const& item : m_fields) {
             wxWindow* win = item.second.get()->getWindow();
             if (win) {
-                free_window(win);
+                // Pooled controls must not carry this opt-in font, size and palette
+                // into a full settings dialog when the page is rebuilt.
+                if (m_compact_sidebar)
+                    win->Destroy();
+                else
+                    free_window(win);
                 win = nullptr;
             }
         }
@@ -969,8 +994,11 @@ void ConfigOptionsGroup::msw_rescale()
             rescale_extra_column_item(extra_col);
 
     // update undo buttons : rescale bitmaps
-    for (const auto& field : m_fields)
+    for (const auto& field : m_fields) {
         field.second->msw_rescale();
+        if (compact_sidebar())
+            field.second->apply_compact_sidebar();
+    }
 
     auto rescale = [](wxSizer* sizer) {
         for (wxSizerItem* item : sizer->GetChildren())
@@ -1043,8 +1071,22 @@ void ConfigOptionsGroup::sys_color_changed()
     }
 
     // update undo buttons : rescale bitmaps
-    for (const auto& field : m_fields)
+    for (const auto& field : m_fields) {
         field.second->sys_color_changed();
+        if (compact_sidebar())
+            field.second->apply_compact_sidebar();
+    }
+    if (compact_sidebar()) {
+        if (stb) {
+            stb->SetForegroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Ink, wxGetApp().dark_mode())));
+            stb->SetBackgroundColour(parent()->GetBackgroundColour());
+            if (auto* line = dynamic_cast<::StaticLine*>(stb))
+                line->SetLineColour(parent()->GetBackgroundColour());
+            stb->Refresh();
+        }
+        if (custom_ctrl)
+            custom_ctrl->sys_color_changed();
+    }
 }
 
 void ConfigOptionsGroup::refresh()

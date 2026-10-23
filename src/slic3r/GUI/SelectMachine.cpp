@@ -1,3 +1,4 @@
+#include <initializer_list>
 #include "Branding.hpp"
 #include "SelectMachine.hpp"
 #include "I18N.hpp"
@@ -470,7 +471,7 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
     m_sizer_autorefill = new wxBoxSizer(wxHORIZONTAL);
     m_ams_backup_tip = new Label(m_scroll_area, _L("Auto Refill"));
     m_ams_backup_tip->SetFont(::Label::Head_13);
-    m_ams_backup_tip->SetForegroundColour(wxColour("#009688"));
+    m_ams_backup_tip->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#009688")));
     m_ams_backup_tip->SetBackgroundColour(*wxWHITE);
     img_ams_backup = new wxStaticBitmap(m_scroll_area, wxID_ANY, create_scaled_bitmap("automatic_material_renewal", this, 16), wxDefaultPosition, wxSize(FromDIP(16), FromDIP(16)), 0);
     img_ams_backup->SetBackgroundColour(*wxWHITE);
@@ -786,7 +787,7 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
 
     m_statictext_finish = new wxStaticText(m_panel_finish, wxID_ANY, _L("Send complete"), wxDefaultPosition, wxDefaultSize, 0);
     m_statictext_finish->Wrap(-1);
-    m_statictext_finish->SetForegroundColour(wxColour(0, 150, 136));
+    m_statictext_finish->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#009688")));
     m_sizer_finish_h->Add(m_statictext_finish, 0, wxALIGN_CENTER | wxALL, FromDIP(5));
 
     m_sizer_finish_v->Add(m_sizer_finish_h, 1, wxALIGN_CENTER, 0);
@@ -809,72 +810,20 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
     m_sw_print_failed_info->SetSizer(sizer_print_failed_info);
 
 
-    wxBoxSizer* sizer_error_code = new wxBoxSizer(wxHORIZONTAL);
-    wxBoxSizer* sizer_error_desc = new wxBoxSizer(wxHORIZONTAL);
-    wxBoxSizer* sizer_extra_info = new wxBoxSizer(wxHORIZONTAL);
-
-    auto st_title_error_code = new wxStaticText(m_sw_print_failed_info, wxID_ANY, _L("Error code"));
-    auto st_title_error_code_doc = new wxStaticText(m_sw_print_failed_info, wxID_ANY,": ");
-    m_st_txt_error_code = new Label(m_sw_print_failed_info, wxEmptyString);
-    st_title_error_code->SetForegroundColour(0x909090);
-    st_title_error_code_doc->SetForegroundColour(0x909090);
-    m_st_txt_error_code->SetForegroundColour(0x909090);
-    st_title_error_code->SetFont(::Label::Body_13);
-    st_title_error_code_doc->SetFont(::Label::Body_13);
-    m_st_txt_error_code->SetFont(::Label::Body_13);
-    st_title_error_code->SetMinSize(wxSize(FromDIP(74), -1));
-    st_title_error_code->SetMaxSize(wxSize(FromDIP(74), -1));
-    m_st_txt_error_code->SetMinSize(wxSize(FromDIP(500), -1));
-    m_st_txt_error_code->SetMaxSize(wxSize(FromDIP(500), -1));
-    sizer_error_code->Add(st_title_error_code, 0, wxALL, 0);
-    sizer_error_code->Add(st_title_error_code_doc, 0, wxALL, 0);
-    sizer_error_code->Add(m_st_txt_error_code, 0, wxALL, 0);
-
-
-    auto st_title_error_desc = new wxStaticText(m_sw_print_failed_info, wxID_ANY, _L("Error desc"));
-    auto st_title_error_desc_doc = new wxStaticText(m_sw_print_failed_info, wxID_ANY,": ");
+    // Stack the message and optional diagnostics so wrapping never overlaps a caption.
     m_st_txt_error_desc = new Label(m_sw_print_failed_info, wxEmptyString);
-    st_title_error_desc->SetForegroundColour(0x909090);
-    st_title_error_desc_doc->SetForegroundColour(0x909090);
-    m_st_txt_error_desc->SetForegroundColour(0x909090);
-    st_title_error_desc->SetFont(::Label::Body_13);
-    st_title_error_desc_doc->SetFont(::Label::Body_13);
-    m_st_txt_error_desc->SetFont(::Label::Body_13);
-    st_title_error_desc->SetMinSize(wxSize(FromDIP(74), -1));
-    st_title_error_desc->SetMaxSize(wxSize(FromDIP(74), -1));
-    m_st_txt_error_desc->SetMinSize(wxSize(FromDIP(500), -1));
-    m_st_txt_error_desc->SetMaxSize(wxSize(FromDIP(500), -1));
-    sizer_error_desc->Add(st_title_error_desc, 0, wxALL, 0);
-    sizer_error_desc->Add(st_title_error_desc_doc, 0, wxALL, 0);
-    sizer_error_desc->Add(m_st_txt_error_desc, 0, wxALL, 0);
-
-    auto st_title_extra_info = new wxStaticText(m_sw_print_failed_info, wxID_ANY, _L("Extra info"));
-    auto st_title_extra_info_doc = new wxStaticText(m_sw_print_failed_info, wxID_ANY, ": ");
+    m_st_txt_error_code = new Label(m_sw_print_failed_info, wxEmptyString);
     m_st_txt_extra_info = new Label(m_sw_print_failed_info, wxEmptyString);
-    st_title_extra_info->SetForegroundColour(0x909090);
-    st_title_extra_info_doc->SetForegroundColour(0x909090);
-    m_st_txt_extra_info->SetForegroundColour(0x909090);
-    st_title_extra_info->SetFont(::Label::Body_13);
-    st_title_extra_info_doc->SetFont(::Label::Body_13);
-    m_st_txt_extra_info->SetFont(::Label::Body_13);
-    st_title_extra_info->SetMinSize(wxSize(FromDIP(74), -1));
-    st_title_extra_info->SetMaxSize(wxSize(FromDIP(74), -1));
-    m_st_txt_extra_info->SetMinSize(wxSize(FromDIP(500), -1));
-    m_st_txt_extra_info->SetMaxSize(wxSize(FromDIP(500), -1));
-    sizer_extra_info->Add(st_title_extra_info, 0, wxALL, 0);
-    sizer_extra_info->Add(st_title_extra_info_doc, 0, wxALL, 0);
-    sizer_extra_info->Add(m_st_txt_extra_info, 0, wxALL, 0);
+    for (Label* label : {m_st_txt_error_desc, m_st_txt_error_code, m_st_txt_extra_info}) {
+        label->SetFont(::Label::Body_13);
+        label->SetForegroundColour(0x909090);
+        label->SetMinSize(wxSize(SELECT_MACHINE_DIALOG_SIMBOOK_SIZE2.x - FromDIP(24), -1));
+        sizer_print_failed_info->Add(label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(6));
+    }
 
-    // ORCA standardized HyperLink
-    m_link_network_state = new HyperLink(m_sw_print_failed_info, _L("Check the status of current system services"), wxGetApp().link_to_network_check());
+    m_link_network_state = new HyperLink(m_sw_print_failed_info, _L("Check cloud service status"), wxGetApp().link_to_network_check());
     m_link_network_state->SetFont(::Label::Body_12);
-
-    sizer_print_failed_info->Add(m_link_network_state, 0, wxLEFT, 5);
-    sizer_print_failed_info->Add(sizer_error_code, 0, wxLEFT, 5);
-    sizer_print_failed_info->Add(0, 0, 0, wxTOP, FromDIP(3));
-    sizer_print_failed_info->Add(sizer_error_desc, 0, wxLEFT, 5);
-    sizer_print_failed_info->Add(0, 0, 0, wxTOP, FromDIP(3));
-    sizer_print_failed_info->Add(sizer_extra_info, 0, wxLEFT, 5);
+    sizer_print_failed_info->Add(m_link_network_state, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(6));
 
     m_scroll_sizer->Add(m_line_top, 0, wxEXPAND, 0);
     m_scroll_sizer->Add(0, 0, 0, wxTOP, FromDIP(11));
@@ -911,9 +860,8 @@ SelectMachineDialog::SelectMachineDialog(Plater *plater)
     sizer_main->Add(m_sw_print_failed_info, 0, wxALIGN_CENTER, 0);
     sizer_main->Add(0, 0, 0, wxTOP, FromDIP(18));
 
-    SetSizer(sizer_main);
+    SetSizerAndFit(sizer_main);
     Layout();
-    Fit();
     Thaw();
 
     init_bind();
@@ -978,33 +926,28 @@ void SelectMachineDialog::init_bind()
 
 void SelectMachineDialog::show_print_failed_info(bool show, int code, wxString description, wxString extra)
 {
-
+    // The disclosure toggles only here, after the actual labels have been laid out.
+    show = show && !m_sw_print_failed_info->IsShown();
     if (show) {
-        if (!m_sw_print_failed_info->IsShown()) {
-            m_sw_print_failed_info->Show(true);
+        m_st_txt_error_desc->SetLabel(wxGetApp().filter_string(m_print_error_msg));
+        m_st_txt_error_code->SetLabel(wxString::Format(_L("Error code: %d"), m_print_error_code));
+        m_st_txt_extra_info->SetLabel(wxGetApp().filter_string(m_print_error_extra));
+        for (Label* label : {m_st_txt_error_desc, m_st_txt_error_code, m_st_txt_extra_info})
+            label->Wrap(SELECT_MACHINE_DIALOG_SIMBOOK_SIZE2.x - FromDIP(24));
+        m_st_txt_extra_info->Show(!m_print_error_extra.empty());
 
-            m_st_txt_error_code->SetLabelText(wxString::Format("%d", m_print_error_code));
-            m_st_txt_error_desc->SetLabelText( wxGetApp().filter_string(m_print_error_msg));
-            m_st_txt_extra_info->SetLabelText( wxGetApp().filter_string(m_print_error_extra));
-
-            m_st_txt_error_code->Wrap(FromDIP(500));
-            m_st_txt_error_desc->Wrap(FromDIP(500));
-            m_st_txt_extra_info->Wrap(FromDIP(500));
-        }
-        else {
-            m_sw_print_failed_info->Show(false);
-        }
-        Layout();
-        Fit();
+        DeviceManager* dev = wxGetApp().getDeviceManager();
+        MachineObject* printer = dev ? dev->get_selected_machine() : nullptr;
+        m_link_network_state->Show(printer && !printer->is_lan_mode_printer()
+                                  && wxGetApp().app_config->get("lan_mode_only") != "1");
     }
-    else {
-        if (!m_sw_print_failed_info->IsShown()) {return;}
-        m_sw_print_failed_info->Show(false);
-        m_st_txt_error_code->SetLabelText(wxEmptyString);
-        m_st_txt_error_desc->SetLabelText(wxEmptyString);
-        m_st_txt_extra_info->SetLabelText(wxEmptyString);
+    m_sw_print_failed_info->Show(show);
+    m_sw_print_failed_info->Layout();
+    m_sw_print_failed_info->FitInside();
+    m_sw_print_failed_info->Scroll(0, 0);
+    if (GetSizer()) {
+        GetSizer()->SetSizeHints(this);
         Layout();
-        Fit();
     }
 }
 
@@ -1065,6 +1008,9 @@ void SelectMachineDialog::prepare_mode(bool refresh_button)
         Enable_Send_Button(true);
     }
 
+    m_print_error_code = 0;
+    m_print_error_msg.clear();
+    m_print_error_extra.clear();
     m_status_bar->reset();
     if (m_simplebook->GetSelection() != 0) {
         m_simplebook->SetSelection(0);
@@ -3496,7 +3442,7 @@ void SelectMachineDialog::show_timelapse_storage_dialog(MachineObject* obj)
     if (show_confirm_btn) {
         auto* btn_confirm = new Button(&dlg, _L("Confirm & Print"));
         // Orca: use the accent green rather than the reference's hard-coded confirm colour.
-        StateColor confirm_bg(std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal));
+        StateColor confirm_bg(std::pair<wxColour, int>(wxColour("#009688"), StateColor::Normal));
         btn_confirm->SetBackgroundColor(confirm_bg);
         btn_confirm->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour(Branding::accent_foreground), StateColor::Normal)));
         btn_confirm->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent&) { dlg.EndModal(wxID_OK); });
@@ -3506,7 +3452,7 @@ void SelectMachineDialog::show_timelapse_storage_dialog(MachineObject* obj)
     auto* btn_cancel_tl = new Button(&dlg, _L("Cancel Timelapse & Print"));
     if (!show_confirm_btn) {
         // Orca: use the accent green rather than the reference's hard-coded confirm colour.
-        StateColor cancel_bg(std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal));
+        StateColor cancel_bg(std::pair<wxColour, int>(wxColour("#009688"), StateColor::Normal));
         btn_cancel_tl->SetBackgroundColor(cancel_bg);
         btn_cancel_tl->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour(Branding::accent_foreground), StateColor::Normal)));
     }
@@ -3596,6 +3542,9 @@ void SelectMachineDialog::on_send_print()
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ", print_job: for send task, current printer id =  " << m_printer_last_select << std::endl;
     show_status(PrintDialogStatus::PrintStatusSending);
 
+    m_print_error_code = 0;
+    m_print_error_msg.clear();
+    m_print_error_extra.clear();
     m_status_bar->reset();
     m_status_bar->set_prog_block();
     m_status_bar->set_cancel_callback_fina([this]() {
@@ -4235,6 +4184,9 @@ void SelectMachineDialog::on_timer(wxTimerEvent &event)
 void SelectMachineDialog::on_selection_changed(wxCommandEvent &event)
 {
     /* reset timeout and reading printer info */
+    m_print_error_code = 0;
+    m_print_error_msg.clear();
+    m_print_error_extra.clear();
     m_status_bar->reset();
     m_timeout_count      = 0;
     s_nozzle_mapping_last_request_time = 0;
@@ -5483,6 +5435,9 @@ void SelectMachineDialog::set_default()
     m_warn_when_drying_sizer->Show(false);
 
     // rset status bar
+    m_print_error_code = 0;
+    m_print_error_msg.clear();
+    m_print_error_extra.clear();
     m_status_bar->reset();
 
     NetworkAgent* agent = wxGetApp().getAgent();

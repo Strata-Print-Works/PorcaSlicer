@@ -4,6 +4,7 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/asio/ip/address.hpp>
+#include <boost/asio/ip/address_v4.hpp>
 #include <boost/system/error_code.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -29,18 +30,92 @@ bool valid_address(const std::string& address)
 }
 bool valid(const DiscoveredPrinter& p)
 {
-    for (const auto* field : {&p.name, &p.model, &p.serial, &p.preset})
+    for (const auto* field : {&p.name, &p.model, &p.serial, &p.preset, &p.identity_key})
         if (std::any_of(field->begin(), field->end(), [](unsigned char c) { return c < 32 || c == 127; })) return false;
     return (p.vendor == "bambu" || p.vendor == "snapmaker" || p.vendor == "flashforge" ||
-            p.vendor == "creality" || p.vendor == "moonraker" || p.vendor == "octoprint") &&
+            p.vendor == "creality" || p.vendor == "moonraker" || p.vendor == "octoprint" || p.vendor == "elegoo") &&
            !p.name.empty() && p.name.size() <= 256 && p.model.size() <= 256 && p.serial.size() <= 256 &&
-           p.preset.size() <= 512 && p.port <= 65535 && valid_address(p.address);
+           p.preset.size() <= 512 && p.identity_key.size() <= 768 && p.port <= 65535 && valid_address(p.address);
 }
 } // namespace
 
 std::string DiscoveredPrinter::key() const
 {
-    return vendor + ":" + (serial.empty() ? address + ":" + std::to_string(port) : serial);
+    return identity_key.empty() ? vendor + ":" + (serial.empty() ? address + ":" + std::to_string(port) : serial) : identity_key;
+}
+
+bool discovered_printer_requires_code(const DiscoveredPrinter& printer)
+{
+    return printer.vendor == "bambu" || (printer.vendor == "elegoo" &&
+        printer.lan_mode.value_or(false) && printer.access_code_required != false);
+}
+
+// Protocol facts: ELEGOO elegoo-link CC2 discovery (id 0 / method 7000),
+// independently implemented for Porca from private reference sources; no
+// proprietary implementation or real-device fixture is copied.
+std::optional<DiscoveredPrinter> parse_elegoo_printer_notice(const std::string& notice,
+                                                            const std::string& sender, unsigned port)
+{
+    if (port != 52700 || notice.empty() || notice.size() > 8192) return std::nullopt;
+    boost::system::error_code error;
+    const auto ip = boost::asio::ip::make_address(sender, error);
+    if (error || !ip.is_v4()) return std::nullopt;
+    const auto address = ip.to_v4().to_uint();
+    // Deliberately private IPv4 (RFC 1918) only: the notice carries LAN access
+    // details, so link-local, CGNAT and routed addresses are not accepted.
+    if (!((address & 0xff000000u) == 0x0a000000u || (address & 0xfff00000u) == 0xac100000u ||
+          (address & 0xffff0000u) == 0xc0a80000u)) return std::nullopt;
+    const auto json = nlohmann::json::parse(notice, nullptr, false);
+    if (!json.is_object() || !json.contains("id") || !json["id"].is_number_integer() || json["id"] != 0 ||
+        !json.contains("result") || !json["result"].is_object()) return std::nullopt;
+    const auto& result = json["result"];
+    const auto text = [&](const char* key) {
+        const auto found = result.find(key);
+        if (found == result.end() || !found->is_string()) return std::string();
+        auto value = found->get<std::string>();
+        if (value.size() > 128 || std::any_of(value.begin(), value.end(), [](unsigned char c) { return c < 32 || c == 127; })) return std::string();
+        return value;
+    };
+    const auto flag = [&](const char* key) -> std::optional<bool> {
+        const auto found = result.find(key);
+        if (found == result.end()) return std::nullopt;
+        if (found->is_boolean()) return found->get<bool>();
+        if (found->is_number_integer() && (*found == 0 || *found == 1)) return *found == 1;
+        return std::nullopt;
+    };
+    auto model = text("machine_model");
+    boost::trim(model);
+    if (model != "Centauri Carbon 2" && model != "Elegoo Centauri Carbon 2" && model != "Centauri Carbon 2 Combo") return std::nullopt;
+    const auto serial = text("sn");
+    if (serial.empty() || !std::all_of(serial.begin(), serial.end(), [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-';
+    })) return std::nullopt;
+    DiscoveredPrinter printer{"elegoo", text("host_name"), "Elegoo Centauri Carbon 2", serial, sender, 0, false, ""};
+    if (printer.name.empty()) printer.name = printer.model;
+    printer.lan_mode = flag("lan_status");
+    printer.access_code_required = flag("token_status");
+    printer.local_control = printer.lan_mode.value_or(false);
+    return printer;
+}
+
+bool change_discovered_printer_connection(DiscoveredPrinter& printer, const std::string& vendor,
+                                          const std::string& profile_model)
+{
+    if (vendor == printer.vendor) return true;
+    auto updated = printer;
+    updated.identity_key = printer.key();
+    updated.vendor = vendor;
+    if (vendor == "elegoo") {
+        if (profile_model != "Elegoo Centauri Carbon" && profile_model != "Elegoo Centauri Carbon 2") return false;
+        updated.model = profile_model;
+    }
+    // Only replace the old protocol's default. An explicit custom endpoint
+    // remains the user's setting and is editable alongside the connection type.
+    if (!updated.port || updated.port == (printer.vendor == "moonraker" ? 7125u : 80u))
+        updated.port = vendor == "moonraker" ? 7125u : 0u;
+    if (!valid(updated)) return false;
+    printer = std::move(updated);
+    return true;
 }
 
 bool address_based_printer_destination(const std::string& destination)
@@ -95,7 +170,10 @@ std::string local_printer_destination(const std::string& destination, const AppC
 std::string DiscoveredPrinter::serialize() const
 {
     return nlohmann::json{{"vendor", vendor}, {"name", name}, {"model", model}, {"serial", serial},
-                          {"address", address}, {"port", port}, {"local_control", local_control}, {"preset", preset}}.dump();
+                          {"address", address}, {"port", port}, {"local_control", local_control}, {"preset", preset},
+                          {"identity_key", identity_key},
+                          {"lan_mode", lan_mode ? nlohmann::json(*lan_mode) : nlohmann::json(nullptr)},
+                          {"access_code_required", access_code_required ? nlohmann::json(*access_code_required) : nlohmann::json(nullptr)}}.dump();
 }
 
 std::optional<DiscoveredPrinter> DiscoveredPrinter::deserialize(const std::string& value)
@@ -106,7 +184,9 @@ std::optional<DiscoveredPrinter> DiscoveredPrinter::deserialize(const std::strin
         DiscoveredPrinter p{j.at("vendor").get<std::string>(), j.at("name").get<std::string>(),
                             j.at("model").get<std::string>(), j.value("serial", std::string()),
                             j.at("address").get<std::string>(), j.value("port", 0u),
-                            j.value("local_control", false), j.value("preset", std::string())};
+                            j.value("local_control", false), j.value("preset", std::string()), j.value("identity_key", std::string())};
+        if (j.contains("lan_mode") && j["lan_mode"].is_boolean()) p.lan_mode = j["lan_mode"].get<bool>();
+        if (j.contains("access_code_required") && j["access_code_required"].is_boolean()) p.access_code_required = j["access_code_required"].get<bool>();
         if (valid(p)) return p;
     } catch (const nlohmann::json::exception&) {}
     return std::nullopt;
@@ -155,6 +235,18 @@ bool merge_discovered_printer(std::vector<DiscoveredPrinter>& printers, Discover
     }
     if (printer.preset.empty()) printer.preset = found->preset;
     if (printer.serial.empty()) printer.serial = found->serial;
+    if (printer.identity_key.empty()) printer.identity_key = found->identity_key;
+    if (printer.vendor == "elegoo") {
+        // Discovery's UDP port is not the user's HTTP endpoint. Keep confirmed
+        // setup and user naming while accepting a new address for the same serial.
+        printer.port = found->port;
+        if (!found->model.empty()) printer.model = found->model;
+        if (!found->preset.empty()) printer.name = found->name;
+    }
+    // Flashforge discovery reports only the brand. Keep the model explicitly
+    // chosen by the user when a later scan refreshes the address.
+    if (printer.vendor == "flashforge" && printer.model == "Flashforge" &&
+        !found->model.empty() && found->model != "Flashforge") printer.model = found->model;
     *found = std::move(printer);
     return false;
 }

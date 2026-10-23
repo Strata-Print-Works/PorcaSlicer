@@ -8,19 +8,27 @@ Rules for writing tests under `tests/`. [CATCH2.md](CATCH2.md) is the Catch2 ref
 - `fff_print`: the FFF slicing pipeline, from a `Model` plus config through `Print` and `PrintObject` to emitted G-code.
 - `sla_print`: SLA support-tree and pad geometry, support-point generation, raycast.
 - `libnest2d`: 2D nesting and packing.
-- `slic3rutils`: the Python plugin system and its slicing-pipeline bindings.
+- `slic3rutils`: GUI/utility behavior, printer-agent fakes, the Python plugin system and its slicing-pipeline bindings. This executable also contains real network tests; never run it unfiltered under the current local restriction.
+- `porca_unit`: a lightweight build target reusing selected pure tests from `libslic3r` and `slic3rutils`, with their small production sources. Test ownership remains in those suites; keep their full copies. Do not link `libslic3r` or `libslic3r_gui` into this target.
 - `filament_group`: filament-to-extruder grouping, checked against golden files.
 - `cli`: end-to-end runs of the built `orca-slicer` binary, Linux only. These tests carry the `RequiresApp` label, which the CI unit-test job excludes because it receives only `build/tests`; run them with `ctest --test-dir build/tests -C Release -L RequiresApp`.
 
 ## Building and running
 
-Tests are off by default, so the build has to be told to include them.
+The root [AGENTS.md](../AGENTS.md) owns the current local validation restriction. Use an already configured Release tree with tests enabled (`BUILD_TESTS=ON`) and dependencies available locally:
 
-- Windows: `build_win.bat -ds --run-tests`, which builds the dependencies and the tests and runs them (`-l -x` for the clang-cl and Ninja build CI uses)
-- macOS: `./build_release_macos.sh -s -a arm64 -T`, which builds and runs them
-- Linux: `./build_linux.sh -t`, then `ctest --test-dir build/tests -C Release`
+```sh
+python3 scripts/build_porca.py libslic3r_tests slic3rutils_tests porca_unit_tests
+python3 scripts/verify_offline.py all
+```
 
-Rebuild a single suite with `cmake --build build --config Release --target <suite>_tests`. Visual Studio, Xcode and the Ninja Multi-Config generator that `build_linux.sh` uses are all multi-configuration, so `ctest` needs `-C` on every platform; without it, tests registered with plain `add_test()` lose their labels and report "Not Run".
+Both commands accept `--build-dir <path>` for a different configured tree. Build only the targets required for the change; `verify_offline.py --list` shows each group's targets and tags. The runner holds the same build lock while testing, uses an isolated temporary working directory for each tag, and reports failures and empty selections. It does not rebuild stale executables.
+
+For the pure subset, use `python3 scripts/build_porca.py porca_unit_tests` then `python3 scripts/verify_offline.py quick`. Camera projection, workspace geometry and project persistence still require the full targets. The lightweight target has prefixed CTest names so it can coexist with the original cases without duplicate registration names.
+
+Do not use the inherited bootstrap/build-and-test scripts or blanket CTest commands under the current restriction: they can download dependencies or run real network tests. Follow [the build guide](../docs/development-builds.md) for offline checks and prerequisites.
+
+Before adding a tag to the runner or extending a listed tag, inspect every matching test, helper, startup hook and production call for real sockets, DNS, HTTP, subprocesses and application startup. A tag name is not a network sandbox. Keep the source references beside the runner's group definitions current. New coverage outside those groups still needs a targeted, inspected run; do not broaden a group to an entire suite.
 
 ## Where a test goes
 

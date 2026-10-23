@@ -52,9 +52,9 @@ static auto     file_is_not_exists_str      = _u8L("Print file not found; please
 static auto file_over_size_str = _u8L("The print file exceeds the maximum allowable size (1GB). Please simplify the model and slice again.");
 static auto print_canceled_str    = _u8L("Task canceled.");
 static auto send_print_failed_str = _u8L("Failed to send the print job. Please try again.");
-static auto upload_ftp_failed_str = _u8L("Failed to upload file to ftp. Please try again.");
+static auto upload_ftp_failed_str = _u8L("Failed to upload the file to the printer. Check the printer connection and storage, then try again.");
 
-static auto     desc_network_error          = _u8L("Check the current status of the Bambu Lab server by clicking on the link above.");
+static auto     desc_network_error          = _u8L("Check the printer connection and try again.");
 static auto     desc_file_too_large         = _u8L("The size of the print file is too large. Please adjust the file size and try again.");
 static auto     desc_fail_not_exist         = _u8L("Print file not found; please slice it again and send it for printing.");
 
@@ -420,6 +420,9 @@ void PrintJob::process(Ctl &ctl)
 
     wxString error_text;
     std::string msg_text;
+    int error_code = 0;
+    std::string error_description;
+    std::string error_extra;
 
 
     const int StagePercentPoint[(int)PrintingStageFinished + 1] = {
@@ -435,7 +438,7 @@ void PrintJob::process(Ctl &ctl)
     bool is_try_lan_mode = false;
     bool is_try_lan_mode_failed = false;
 
-    auto update_fn = [this, &ctl,
+    auto update_fn = [this, &ctl, &error_code, &error_description, &error_extra,
         &is_try_lan_mode,
         &is_try_lan_mode_failed,
         &msg,
@@ -501,16 +504,20 @@ void PrintJob::process(Ctl &ctl)
                             }
                         }
 
-                        //get errors
+                        // Retain plain error data here; publish it on the UI thread at completion.
                         if (code > 100 || code < 0 || stage == SendingPrintJobStage::PrintingStageERROR) {
+                            error_code = code;
+                            error_extra = info;
                             if (code == BAMBU_NETWORK_ERR_PRINT_WR_FILE_OVER_SIZE || code == BAMBU_NETWORK_ERR_PRINT_SP_FILE_OVER_SIZE) {
-                                m_plater->update_print_error_info(code, desc_file_too_large, info);
+                                error_description = desc_file_too_large;
                             }else if (code == BAMBU_NETWORK_ERR_PRINT_WR_FILE_NOT_EXIST || code == BAMBU_NETWORK_ERR_PRINT_SP_FILE_NOT_EXIST){
-                                m_plater->update_print_error_info(code, desc_fail_not_exist, info);
+                                error_description = desc_fail_not_exist;
                             }else if (code == BAMBU_NETWORK_ERR_PRINT_LP_UPLOAD_FTP_FAILED || code == BAMBU_NETWORK_ERR_PRINT_SG_UPLOAD_FTP_FAILED) {
-                                m_plater->update_print_error_info(code, desc_upload_ftp_failed, info);
+                                error_description = desc_upload_ftp_failed;
                             }else {
-                                m_plater->update_print_error_info(code, desc_network_error, info);
+                                error_description = connection_type == "lan"
+                                    ? _u8L("Check that the printer is reachable on your local network and that its storage is available, then try again.")
+                                    : desc_network_error;
                             }
                         }
                         else {
@@ -635,6 +642,9 @@ void PrintJob::process(Ctl &ctl)
                 }
                 if (result < 0) {
                     is_try_lan_mode_failed = true;
+                    error_code = 0;
+                    error_description.clear();
+                    error_extra.clear();
                     // try to send with cloud
                     BOOST_LOG_TRIVIAL(warning) << "print_job: try to send with cloud";
                     ctl.update_status(curr_percent, _u8L("Sending print job through cloud service"));
@@ -691,6 +701,8 @@ void PrintJob::process(Ctl &ctl)
         // user to retry rather than showing a generic error.
         if (result == BAMBU_NETOWRK_ERR_PRINT_SP_ENC_FLAG_NOT_READY) {
             msg_text = _u8L("Retrieving printer information, please try again later.");
+        } else if (result == BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED) {
+            msg_text = _u8L("Could not connect to the printer. Check its network connection and try again.");
         } else if (result == BAMBU_NETWORK_ERR_PRINT_WR_FILE_NOT_EXIST || result == BAMBU_NETWORK_ERR_PRINT_SP_FILE_NOT_EXIST) {
             msg_text = file_is_not_exists_str;
         } else if (result == BAMBU_NETWORK_ERR_PRINT_SP_FILE_OVER_SIZE || result == BAMBU_NETWORK_ERR_PRINT_WR_FILE_OVER_SIZE) {
@@ -702,14 +714,22 @@ void PrintJob::process(Ctl &ctl)
         } else if (result == BAMBU_NETWORK_ERR_PRINT_LP_UPLOAD_FTP_FAILED || result == BAMBU_NETWORK_ERR_PRINT_SG_UPLOAD_FTP_FAILED) {
             msg_text = upload_ftp_failed_str;
         } else if (result == BAMBU_NETWORK_ERR_CANCELED) {
-            msg_text = print_canceled_str;
+            msg_text = ctl.was_canceled() ? print_canceled_str :
+                _u8L("The transfer was interrupted. Check the printer before sending again.");
             ctl.update_status(0, msg_text);
         } else {
             msg_text = send_print_failed_str;
         }
 
-        if (result != BAMBU_NETWORK_ERR_CANCELED) {
-            ctl.show_error_info(msg_text, 0, "", "");
+        if (result != BAMBU_NETWORK_ERR_CANCELED || !ctl.was_canceled()) {
+            if (error_code == 0)
+                error_code = result;
+            if (error_description.empty())
+                error_description = msg_text;
+            ctl.call_on_main_thread([plater = m_plater, error_code, error_description, error_extra] {
+                plater->update_print_error_info(error_code, error_description, error_extra);
+            });
+            ctl.show_error_info(msg_text, error_code, error_description, error_extra);
         }
 
         BOOST_LOG_TRIVIAL(error) << "print_job: failed, result = " << result;
@@ -724,6 +744,9 @@ void PrintJob::process(Ctl &ctl)
             evt->SetString(m_completed_evt_data);
         else
             evt->SetString(m_dev_id);
+        // Sending every plate is not one plate's print, so no single plate records it.
+        if (m_print_job_completed_id != wxGetApp().plater()->get_send_calibration_finished_event())
+            evt->SetInt(m_print_type == "from_normal" && job_data.plate_idx != PLATE_ALL_IDX ? curr_plate_idx - 1 : -1);
         if (m_print_job_completed_id == wxGetApp().plater()->get_send_calibration_finished_event()) {
             int sel = wxGetApp().mainframe->get_calibration_curr_tab();
             if (sel >= 0) {

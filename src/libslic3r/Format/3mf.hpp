@@ -2,6 +2,7 @@
 #define slic3r_Format_3mf_hpp_
 #include <expat.h>
 #include <string>
+#include <vector>
 
 namespace Slic3r {
 // PrusaFileParser is used to check 3mf file is from Prusa
@@ -52,6 +53,11 @@ private:
     struct ConfigSubstitutionContext;
     class DynamicPrintConfig;
     struct ThumbnailData;
+    struct PlateData;
+
+    // Recover declared PrusaSlicer 2.9 beds without importing incompatible print settings.
+    // Empty means the layout cannot be identified safely; the model is never modified.
+    std::vector<PlateData> load_prusa_plate_layout(const char* path, const Model& model);
 
     // Load the content of a 3mf file into the given model and preset bundle.
     extern bool load_3mf(const char* path, DynamicPrintConfig& config, ConfigSubstitutionContext& config_substitutions, Model* model, bool check_version);

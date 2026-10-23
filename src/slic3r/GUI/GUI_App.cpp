@@ -854,7 +854,7 @@ static void generic_exception_handle()
         // and terminate the app so it is at least certain to happen now.
         BOOST_LOG_TRIVIAL(error) << boost::format("std::bad_alloc exception: %1%") % ex.what();
         flush_logs();
-        wxString errmsg = wxString::Format(_L("OrcaSlicer will terminate because of running out of memory. "
+        wxString errmsg = wxString::Format(_L("Porca will terminate because of running out of memory. "
                                               "It may be a bug. It will be appreciated if you report the issue to our team."));
         wxMessageBox(errmsg + "\n\n" + wxString(ex.what()), _L("Fatal error"), wxOK | wxICON_ERROR);
 
@@ -863,7 +863,7 @@ static void generic_exception_handle()
      } catch (const boost::io::bad_format_string& ex) {
      	BOOST_LOG_TRIVIAL(error) << boost::format("Uncaught exception: %1%") % ex.what();
         	flush_logs();
-        wxString errmsg = _L("OrcaSlicer will terminate because of a localization error. "
+        wxString errmsg = _L("Porca will terminate because of a localization error. "
                              "It will be appreciated if you report the specific scenario this issue happened.");
         wxMessageBox(errmsg + "\n\n" + wxString(ex.what()), _L("Critical error"), wxOK | wxICON_ERROR);
         std::terminate();
@@ -871,7 +871,7 @@ static void generic_exception_handle()
     } catch (const std::exception& ex) {
         BOOST_LOG_TRIVIAL(error) << boost::format("Uncaught exception: %1%") % ex.what();
         flush_logs();
-        wxLogError(format_wxstr(_L("OrcaSlicer got an unhandled exception: %1%"), ex.what()));
+        wxLogError(format_wxstr(_L("Porca got an unhandled exception: %1%"), ex.what()));
         throw;
     }
 //#endif
@@ -880,7 +880,6 @@ static void generic_exception_handle()
 void GUI_App::toggle_show_gcode_window()
 {
     m_show_gcode_window = !m_show_gcode_window;
-    app_config->set_bool("show_gcode_window", m_show_gcode_window);
 }
 
 std::vector<std::string> GUI_App::split_str(std::string src, std::string separator)
@@ -1075,7 +1074,8 @@ void GUI_App::post_init()
 
     hms_query = new HMSQuery();
 
-    m_show_gcode_window = app_config->get_bool("show_gcode_window");
+    // The G-code source drawer starts collapsed on each launch; the toggle is session state.
+    m_show_gcode_window = false;
     if (m_networking_need_update) {
         show_network_plugin_download_dialog(false);
     }
@@ -1126,9 +1126,9 @@ void GUI_App::post_init()
         CallAfter([] {
             const wxString wiki_url = "https://www.orcaslicer.com/wiki/user_profiles/user_profiles.html#profiles-missing-after-updating-from-bambu-cloud";
             MessageDialog dlg(nullptr,
-                _L("Since version 2.4.0, OrcaSlicer syncs user profiles through Orca Cloud instead of Bambu Cloud.\n\n"
+                _L("Since version 2.4.0, Porca syncs user profiles through Orca Cloud instead of Bambu Cloud.\n\n"
                    "To migrate your existing profiles, log in to Orca Cloud and they will be transferred automatically. "
-                   "To learn more about how OrcaSlicer stores and syncs your profiles, or to migrate your presets manually, check out our wiki.\n\n"
+                   "To learn more about how Porca stores and syncs your profiles, or to migrate your presets manually, check out our wiki.\n\n"
                    "If you did not use Bambu Cloud to sync profiles, this change does not affect you and you can safely ignore this message."),
                 _L("Profile syncing change"),
                 wxOK,
@@ -2319,12 +2319,14 @@ void GUI_App::init_networking_callbacks()
             if (is_closing()) {
                 return;
             }
-            GUI::wxGetApp().CallAfter([this, dev_id] {
-                if (is_closing())
-                    return;
+            const auto token = m_agent->printer_session_token(dev_id.rfind("tunnel/", 0) == 0 ? dev_id.substr(7) : dev_id);
+            GUI::wxGetApp().CallAfter([this, dev_id, token] {
+                if (is_closing() || (token && !token->valid)) return;
                 bool tunnel = boost::algorithm::starts_with(dev_id, "tunnel/");
                 /* request_pushing */
-                MachineObject* obj = m_device_manager->get_my_machine(tunnel ? dev_id.substr(7) : dev_id);
+                const auto id = tunnel ? dev_id.substr(7) : dev_id;
+                MachineObject* obj = m_device_manager->get_local_machine(id);
+                if (!obj) obj = m_device_manager->get_my_machine(id);
                 if (obj) {
                     obj->is_tunnel_mqtt = tunnel;
                     obj->command_request_push_all(true);
@@ -2346,7 +2348,11 @@ void GUI_App::init_networking_callbacks()
         );
 
         m_agent->set_on_subscribe_failure_fn([this](std::string dev_id) {
-            CallAfter([this, dev_id] {
+            const auto token = m_agent->printer_session_token(dev_id);
+            CallAfter([this, dev_id, token] {
+                if (is_closing() || (token && !token->valid)) return;
+                const auto* selected = m_device_manager ? m_device_manager->get_selected_machine() : nullptr;
+                if (token && (!selected || selected->get_dev_id() != dev_id)) return;
                 on_start_subscribe_again(dev_id);
             });
         });
@@ -2356,12 +2362,14 @@ void GUI_App::init_networking_callbacks()
                 if (is_closing()) {
                     return;
                 }
-                CallAfter([this, state, dev_id, msg] {
-                    if (is_closing()) {
+                const auto token = m_agent->printer_session_token(dev_id);
+                CallAfter([this, state, dev_id, msg, token] {
+                    if (is_closing() || (token && !token->valid)) {
                         return;
                     }
                     /* request_pushing */
-                    MachineObject* obj = m_device_manager->get_my_machine(dev_id);
+                    MachineObject* obj = m_device_manager->get_local_machine(dev_id);
+                    if (!obj) obj = m_device_manager->get_my_machine(dev_id);
                     wxCommandEvent event(EVT_CONNECT_LAN_MODE_PRINT);
 
                     if (obj) {
@@ -2375,13 +2383,18 @@ void GUI_App::init_networking_callbacks()
 
                                 obj->set_online_state(true);
                             } else if (state == ConnectStatus::ConnectStatusFailed) {
-                                // Orca: only update status if same device id
-                                if (m_device_manager->selected_machine != dev_id) return;
-
-                                m_device_manager->set_selected_machine("");
+                                // Retain the attempt and its failure state until explicit
+                                // Reconnect or edited credentials. A background failure must
+                                // never change the visible target.
+                                if (m_device_manager->selected_machine != dev_id) {
+                                    obj->set_online_state(false);
+                                    obj->set_lan_mode_connection_state(false);
+                                    return;
+                                }
                                 wxString text;
-                                if (msg == "5") {
-                                    obj->set_access_code("");
+                                if (token) {
+                                    // Saved Devices reports this attempt's state inline.
+                                } else if (msg == "5") {
                                     text = wxString::Format(_L("Incorrect password"));
                                     wxGetApp().show_dialog(text);
                                 } else {
@@ -2392,7 +2405,6 @@ void GUI_App::init_networking_callbacks()
 
                                 obj->set_online_state(false);
                             } else if (state == ConnectStatus::ConnectStatusLost) {
-                                m_device_manager->set_selected_machine("");
                                 event.SetInt(-1);
                                 BOOST_LOG_TRIVIAL(info) << "set_on_local_connect_fn: state = lost";
 
@@ -2438,7 +2450,10 @@ void GUI_App::init_networking_callbacks()
                     return;
                 }
 
-                const std::string provider = this->get_printer_cloud_provider();
+                const auto payload = nlohmann::json::parse(msg, nullptr, false);
+                const auto origin = payload.is_object() ? payload.find("__porca_printer_agent_id") : payload.end();
+                const bool bambu_message = payload.is_object() && origin != payload.end() && *origin == BBL_PRINTER_AGENT_ID;
+                const std::string provider = bambu_message ? BBL_CLOUD_PROVIDER : this->get_printer_cloud_provider();
                 if (MachineObject* obj = this->m_device_manager->get_user_machine(dev_id, provider)) {
                     auto sel = this->m_device_manager->get_selected_machine();
                     if (sel && sel->get_dev_id() == dev_id) {
@@ -2479,15 +2494,17 @@ void GUI_App::init_networking_callbacks()
             if (is_closing()) {
                 return;
             }
-            CallAfter([this, dev_id, msg] {
-                if (is_closing())
-                    return;
+            const auto token = m_agent->printer_session_token(dev_id);
+            CallAfter([this, dev_id, msg, token] {
+                if (is_closing() || (token && !token->valid)) return;
 
                 if (this->process_network_msg(dev_id, msg)) {
                     return;
                 }
 
-                if (MachineObject* obj = m_device_manager->get_my_machine(dev_id)) {
+                MachineObject* obj = m_device_manager->get_local_machine(dev_id);
+                if (!obj) obj = m_device_manager->get_my_machine(dev_id);
+                if (obj) {
                     obj->parse_json("lan", msg);
                     // Orca: skip it if it doesn't support subscription based filament sync
                     if (this->m_device_manager->get_selected_machine() == obj &&
@@ -2637,7 +2654,7 @@ void GUI_App::init_webview_runtime()
     }
 
     BOOST_LOG_TRIVIAL(warning) << "WebView2 runtime not found; prompting user to install.";
-    int nRet = wxMessageBox(_L("Orca Slicer requires the Microsoft WebView2 Runtime to operate certain features.\nClick Yes to install it now."),
+    int nRet = wxMessageBox(_L("Porca requires the Microsoft WebView2 Runtime to operate certain features.\nClick Yes to install it now."),
                             _L("WebView2 Runtime"), wxYES_NO);
     if (nRet != wxYES) {
         BOOST_LOG_TRIVIAL(warning) << "User declined WebView2 runtime installation.";
@@ -2659,7 +2676,7 @@ void GUI_App::init_webview_runtime()
         BOOST_LOG_TRIVIAL(error) << "WebView2 runtime installation failed or still not detected.";
         wxMessageBox(format_wxstr(_L("The Microsoft WebView2 Runtime could not be installed.\n"
                                      "Some features, including the setup wizard, may appear blank until it is installed.\n"
-                                     "Please install it manually from %1% and restart Orca Slicer."),
+                                     "Please install it manually from %1% and restart Porca."),
                                   "https://developer.microsoft.com/microsoft-edge/webview2/"),
                      _L("WebView2 Runtime"), wxOK | wxICON_WARNING);
     }
@@ -2673,7 +2690,7 @@ void GUI_App::init_app_config()
     SetAppDisplayName("Porca");
 //	SetAppName(SLIC3R_APP_KEY "-alpha");
 //  SetAppName(SLIC3R_APP_KEY "-beta");
-//	SetAppDisplayName(SLIC3R_APP_NAME);
+//	SetAppDisplayName(SLIC3R_APP_DISPLAY_NAME);
 
 	// Set the Slic3r data directory at the Slic3r XS module.
 	// Unix: ~/ .Slic3r
@@ -3218,7 +3235,7 @@ bool GUI_App::on_init_inner()
             RichMessageDialog
                 dlg(nullptr,
                     wxString::Format(_L("%s\nDo you want to continue?"), msg),
-                    "OrcaSlicer", wxICON_QUESTION | wxYES_NO);
+                    "Porca", wxICON_QUESTION | wxYES_NO);
             dlg.ShowCheckBox(_L("Remember my choice"));
             if (dlg.ShowModal() != wxID_YES) return false;
 
@@ -3362,7 +3379,7 @@ bool GUI_App::on_init_inner()
                /* wxString tips = wxString::Format(_L("Click to download new version in default browser: %s"), version_info.version_str);
                 DownloadDialog dialog(this->mainframe,
                     tips,
-                    _L("New version of Orca Slicer"),
+                    _L("New version of Porca"),
                     false,
                     wxCENTER | wxICON_INFORMATION);
 
@@ -3413,7 +3430,7 @@ bool GUI_App::on_init_inner()
                 wxString tips = wxString::Format(_L("Click to download new version in default browser: %s"), version_str);
                 DownloadDialog dialog(this->mainframe,
                     tips,
-                    _L("OrcaSlicer needs an update"),
+                    _L("Porca needs an update"),
                     false,
                     wxCENTER | wxICON_INFORMATION);
                 dialog.SetExtendedMessage(description_text);
@@ -3735,7 +3752,7 @@ bool GUI_App::on_init_inner()
         m_config_corrupted = false;
         show_error(nullptr,
                    _u8L(
-                       "The OrcaSlicer configuration file may be corrupted and cannot be parsed.\nOrcaSlicer has attempted to recreate the "
+                       "The Porca configuration file may be corrupted and cannot be parsed.\nPorca has attempted to recreate the "
                        "configuration file.\nPlease note, application settings will be lost, but printer profiles will not be affected."));
     }
     return true;
@@ -4157,7 +4174,7 @@ void GUI_App::set_live_printer_agent(std::shared_ptr<IPrinterAgent> agent)
     // a standalone helper. Pass nullptr to clear the selection.
     if (DeviceManager* dev = getDeviceManager())
     {
-        dev->set_selected_machine(""); // why: empty id disconnects and deselects the current machine
+        dev->set_selected_machine(""); // Release the view; owned LAN sessions remain retained.
         m_agent->set_user_selected_machine("");
         // note: belt-and-suspenders (precedent: DeviceManagerRefresher::on_timer)
         dev->OnSelectedMachineLost(); // why: clear stale sidebar sync-status / AMS
@@ -4211,8 +4228,12 @@ void GUI_App::switch_printer_agent()
     std::shared_ptr<ICloudServiceAgent> cloud_agent = m_agent->get_cloud_agent(cloud_agent_id);
 
     // Create new printer agent via registry
+    const std::string device_key = effective_agent_id == BBL_PRINTER_AGENT_ID ?
+        (inspected ? scanned_printer_control_device_id() : sidebar().printer_combox()->get_selected_dev_id()) :
+        MachineObject::dev_id_from_address(config.opt_string("print_host"), config.opt_string("printhost_port"));
     std::shared_ptr<IPrinterAgent> new_printer_agent =
-        NetworkAgentFactory::create_printer_agent_by_id(effective_agent_id, cloud_agent, log_dir);
+        NetworkAgentFactory::create_printer_agent_by_id(effective_agent_id, cloud_agent, log_dir,
+                                                       device_key);
 
     if (!new_printer_agent) {
         BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": failed to create agent '" << effective_agent_id
@@ -4221,15 +4242,13 @@ void GUI_App::switch_printer_agent()
         return;
     }
 
-    // Compare the registered IDs, not only the implementation pointer. Different registry IDs
-    // may intentionally be backed by the same implementation object (especially for plugins).
+    // A cached instance identifies the backend and, for audited native adapters,
+    // its host. Reapplying the same setup must not replace its transport.
     const auto current_printer_agent = m_agent->get_printer_agent();
-    if (current_printer_agent && current_printer_agent->get_agent_info().id == effective_agent_id) {
-        // Orca: the agent type is unchanged (e.g. switching between two Moonraker/Klipper
-        // printer presets), so the selected machine and the agent's cached device_info still
-        // point at the previously active printer preset. Re-select the machine when the new
-        // preset targets a different host, otherwise filament sync keeps hitting the old
-        // printer. (#12506)
+    if (current_printer_agent == new_printer_agent &&
+        current_printer_agent->get_agent_info().id == effective_agent_id) {
+        // Singleton/plugin instances may still target different hosts. Select the
+        // requested device synchronously; equal parameters reuse its attempt.
         if (effective_agent_id != BBL_PRINTER_AGENT_ID && m_device_manager && preset_bundle) {
             const std::string print_host = config.opt_string("print_host");
             if (!print_host.empty()) {
@@ -4249,7 +4268,7 @@ void GUI_App::switch_printer_agent()
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": printer agent switched to " << effective_agent_id;
 
     // Start discovery so Python agents can populate the device list via SSDP callback
-    m_agent->start_discovery(true, false);
+    if (!inspected) m_agent->start_discovery(true, false);
 
     // Auto-switch MachineObject (new agent has empty device_info, so always re-select)
     select_machine(effective_agent_id);
@@ -5698,7 +5717,7 @@ void GUI_App::on_http_error(wxCommandEvent &evt)
 
     // Version limit
     if (code == HttpErrorVersionLimited) {
-        MessageDialog msg_dlg(nullptr, _L("The version of Orca Slicer is too low and needs to be updated to the latest version before it can be used normally."), "", wxAPPLY | wxOK);
+        MessageDialog msg_dlg(nullptr, _L("The version of Porca is too low and needs to be updated to the latest version before it can be used normally."), "", wxAPPLY | wxOK);
         if (msg_dlg.ShowModal() == wxOK) {
         }
     }
@@ -6285,6 +6304,14 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
     AppConfig* app_config = wxGetApp().app_config;
     bool       check_stable_only = app_config->get_bool("check_stable_update_only");
     auto version_check_url = app_config->version_check_url();
+    if (version_check_url.empty()) {
+        if (by_user != 0) {
+            MessageDialog dialog(mainframe, _L("Update checks will be available when Porca has its own release feed."),
+                                 _L("Check for Updates"), wxOK);
+            dialog.ShowModal();
+        }
+        return;
+    }
 
     UpdaterQuery query{
         detect_updater_iid(app_config),
@@ -6448,7 +6475,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "update_studio") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, update_studio";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("Please try updating OrcaSlicer and then try again."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("Please try updating Porca and then try again."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6458,7 +6485,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "update_fixed_studio") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, update_fixed_studio";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("Please try updating OrcaSlicer and then try again."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("Please try updating Porca and then try again."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6468,7 +6495,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "cert_expired") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, cert_expired";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("The certificate has expired. Please check the time settings or update OrcaSlicer and try again."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("The certificate has expired. Please check the time settings or update Porca and try again."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6488,7 +6515,7 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         else if (msg == "update_firmware_studio") {
             BOOST_LOG_TRIVIAL(info) << "process_network_msg, firmware internal error";
             if (!m_show_error_msgdlg) {
-                MessageDialog msg_dlg(nullptr, _L("Internal error. Please try upgrading the firmware and OrcaSlicer version. If the issue persists, contact support."), "", wxAPPLY | wxOK);
+                MessageDialog msg_dlg(nullptr, _L("Internal error. Please try upgrading the firmware and Porca version. If the issue persists, contact support."), "", wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
                 m_show_error_msgdlg = false;
@@ -6503,12 +6530,12 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
                 m_unsigned_plugin_warning_shown = true;
                 MessageDialog
                     msg_dlg(nullptr,
-                            _L("To use OrcaSlicer with Bambu Lab printers, you need to enable LAN mode and Developer mode on your printer.\n\n"
+                            _L("To use Porca with Bambu Lab printers, you need to enable LAN mode and Developer mode on your printer.\n\n"
                                "Please go to your printer's settings and:\n"
                                "1. Turn on LAN mode\n"
                                "2. Enable Developer mode\n\n"
                                "Developer mode allows the printer to work exclusively through local network access, "
-                               "enabling full functionality with OrcaSlicer."),
+                               "enabling full functionality with Porca."),
                             _L("Network Plug-in Restriction"), wxAPPLY | wxOK);
                 m_show_error_msgdlg = true;
                 msg_dlg.ShowModal();
@@ -8302,14 +8329,14 @@ bool GUI_App::load_language(wxString language, bool initial)
 
     if (!wxLocale::IsAvailable(locale_language_info->Language)) {
     	// Loading the language dictionary failed.
-	    wxString message = wxString::Format(_L("Switching Orca Slicer to language %s failed."), requested_language_code);
+	    wxString message = wxString::Format(_L("Switching Porca to language %s failed."), requested_language_code);
 #if !defined(_WIN32) && !defined(__APPLE__)
         // likely some linux system
         message += _L("\nYou may need to reconfigure the missing locales, likely by running the \"locale-gen\" and \"dpkg-reconfigure locales\" commands.\n");
 #endif
         if (initial)
         	message += "\n\n" + _L("Application will close.");
-        wxMessageBox(message, _L("Orca Slicer - Switching language failed"), wxOK | wxICON_ERROR);
+        wxMessageBox(message, _L("Porca - Switching language failed"), wxOK | wxICON_ERROR);
         if (initial)
 			std::exit(EXIT_FAILURE);
 		else
@@ -9009,7 +9036,7 @@ bool GUI_App::check_print_host_queue()
     //wxMessageDialog dialog(mainframe,
     MessageDialog dialog(mainframe,
         message,
-        wxString(SLIC3R_APP_NAME) + " - " + _(L("Ongoing uploads")),
+        wxString(SLIC3R_APP_DISPLAY_NAME) + " - " + _(L("Ongoing uploads")),
         wxICON_QUESTION | wxYES_NO | wxNO_DEFAULT);
     if (dialog.ShowModal() == wxID_YES)
         return true;
@@ -9979,7 +10006,7 @@ void GUI_App::associate_files(std::wstring extend)
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
     std::wstring prog_id = L" Orca.Slicer.1";
-    std::wstring prog_desc = L"OrcaSlicer";
+    std::wstring prog_desc = L"Porca";
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;
@@ -10006,7 +10033,7 @@ void GUI_App::disassociate_files(std::wstring extend)
 
     std::wstring prog_path = L"\"" + std::wstring(app_path) + L"\"";
     std::wstring prog_id = L" Orca.Slicer.1";
-    std::wstring prog_desc = L"OrcaSlicer";
+    std::wstring prog_desc = L"Porca";
     std::wstring prog_command = prog_path + L" \"%1\"";
     std::wstring reg_base = L"Software\\Classes";
     std::wstring reg_extension = reg_base + L"\\." + extend;

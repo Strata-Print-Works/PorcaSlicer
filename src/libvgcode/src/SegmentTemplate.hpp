@@ -12,6 +12,7 @@ namespace libvgcode {
 class SegmentTemplate
 {
 public:
+    static constexpr size_t SEGMENTS_PER_INSTANCE = 256;
     SegmentTemplate() = default;
     ~SegmentTemplate() { shutdown(); }
     SegmentTemplate(const SegmentTemplate& other) = delete;

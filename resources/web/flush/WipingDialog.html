@@ -178,13 +178,13 @@
 
       /* 暗色模式样式 */
       body.dark-mode {
-        background-color: #2d2d31;
+        background-color: var(--porca-surface);
         color: #e0e0e0;
       }
 
       body.dark-mode .container {
         background: inherit;
-        border-color: #2d2d31;
+        border-color: var(--porca-surface);
       }
 
       body.dark-mode .tip-panel {
@@ -229,7 +229,7 @@
       }
 
       body.dark-mode tbody tr:nth-child(even) {
-        background: #2d2d31;
+        background: var(--porca-surface);
       }
 
       body.dark-mode tbody tr:nth-child(odd) {
@@ -254,6 +254,7 @@
         background-color: #4c4c55;
       }
     </style>
+    <link rel="stylesheet" href="../include/flush-theme.css" />
   </head>
 
   <link rel="stylesheet" type="text/css" href="../include/global.css" /> <!-- ORCA One for all-->
@@ -261,9 +262,8 @@
   <body>
     <div class="container">
       <div class="tip-panel" id="auto_flush_tip">
-        Orca would re-calculate your flushing volumes every time the filament
-        color changed or filaments changed. You could disable the auto-calculate
-        in Orca Slicer &gt; Preferences.
+        Porca recalculates flushing volumes when you change filaments or their colors.
+        You can turn this off in Porca &gt; Preferences.
       </div>
 
       <div style="margin-bottom: 10px; display: flex; align-items: center; flex-shrink: 0;">
@@ -505,6 +505,7 @@
         m_min_flush_multiplier = data.min_flush_multiplier
         m_max_flush_multiplier = data.max_flush_multiplier
 
+        document.documentElement.setAttribute("data-porca-theme", data.is_dark_mode ? "dark" : "light");
         if(data.is_dark_mode == true)
           document.body.classList.add('dark-mode');
 

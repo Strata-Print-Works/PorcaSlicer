@@ -442,6 +442,10 @@ time.
 - `colorForStates()` passes the result through the dark map when StateColor's `gDarkMode` is set, **at paint time**:
   owner-drawn widgets switch theme on `Refresh()` with no extra code. `colorForStatesNoDark()` skips mapping;
   `defaultColor()` = `colorForStates(0)`.
+- `StateColor::resolved(palette)` preserves already-resolved token colors instead of applying the legacy map again.
+  Its owner must replace that palette in its theme-change hook; it does not switch themes automatically.
+  Other palettes retain the existing automatic mapping. Equality includes this choice so a widget setter
+  cannot confuse a resolved palette with a legacy palette containing the same RGB values.
 - Single-colour ctors `StateColor(wxColour)`, `(wxString)`, `(unsigned long)` store a `Normal` entry. Integer forms
   (`StateColor(unsigned long)`, `append(unsigned long, int)`, `std::make_pair(0x009688, …)`) are **`0xRRGGBB`**; an
   alpha byte of 0 is treated as opaque — the opposite of `wxColour(unsigned long)`.

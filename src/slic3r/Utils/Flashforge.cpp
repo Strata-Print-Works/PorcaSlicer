@@ -259,13 +259,15 @@ bool Flashforge::discover_printers(std::vector<FlashforgeDiscoveredPrinter>& pri
                     if (!probe.socket->is_open()) continue;
                     open = true;
                     for (int packet = 0; packet < 32; ++packet) {
-                        std::vector<unsigned char> buffer(512);
+                        std::array<unsigned char, 8192> bytes;
                         udp::endpoint remote;
                         boost::system::error_code ec;
-                        const auto size = probe.socket->receive_from(boost::asio::buffer(buffer), remote, 0, ec);
+                        const auto size = probe.socket->receive_from(boost::asio::buffer(bytes), remote, 0, ec);
                         if (ec == boost::asio::error::would_block || ec == boost::asio::error::try_again) break;
+                        // An oversized datagram (reported on Windows) is skipped, not fatal to this interface.
+                        if (ec == boost::asio::error::message_size) continue;
                         if (ec) { probe.socket->close(ec); break; }
-                        buffer.resize(size);
+                        const std::vector<unsigned char> buffer(bytes.begin(), bytes.begin() + size);
                         FlashforgeDiscoveredPrinter printer;
                         if (parse_discovery_response(buffer, remote.address().to_string(), printer)) {
                             by_ip[printer.ip_address] = std::move(printer);

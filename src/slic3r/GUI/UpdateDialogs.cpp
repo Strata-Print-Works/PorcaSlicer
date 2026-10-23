@@ -124,7 +124,7 @@ MsgUpdateConfig::MsgUpdateConfig(const std::vector<Update> &updates, bool force_
 
     m_sizer_body->Add(0, 0, 0, wxLEFT, FromDIP(38));
 
-    auto sm    = create_scaled_bitmap("OrcaSlicer", nullptr, 70);
+    auto sm    = create_scaled_bitmap("porca_icon", nullptr, 70);
     auto brand = new wxStaticBitmap(this, wxID_ANY, sm, wxDefaultPosition, wxSize(FromDIP(70), FromDIP(70)));
 
     m_sizer_body->Add(brand, 0, wxALL, 0);
@@ -315,11 +315,11 @@ MsgDataIncompatible::MsgDataIncompatible(const std::unordered_map<std::string, w
 
 	//	"You may either exit %s and try again with a newer version, or you may re-run the initial configuration. "
 	//	"Doing so will create a backup snapshot of the existing configuration before installing files compatible with this %s.")) + "\n", 
-	//	SLIC3R_APP_NAME, SLIC3R_APP_NAME, SLIC3R_APP_NAME, SLIC3R_APP_NAME));
+	//	SLIC3R_APP_DISPLAY_NAME, SLIC3R_APP_DISPLAY_NAME, SLIC3R_APP_DISPLAY_NAME, SLIC3R_APP_DISPLAY_NAME));
 	//text->Wrap(CONTENT_WIDTH * wxGetApp().em_unit());
 	//content_sizer->Add(text);
 
-	//auto *text2 = new wxStaticText(this, wxID_ANY, wxString::Format(_(L("This %s version: %s")), SLIC3R_APP_NAME, SLIC3R_VERSION));
+	//auto *text2 = new wxStaticText(this, wxID_ANY, wxString::Format(_(L("This %s version: %s")), SLIC3R_APP_DISPLAY_NAME, SLIC3R_VERSION));
 	//text2->Wrap(CONTENT_WIDTH * wxGetApp().em_unit());
 	//content_sizer->Add(text2);
 	//content_sizer->AddSpacer(VERT_SPACING);
@@ -341,7 +341,7 @@ MsgDataIncompatible::MsgDataIncompatible(const std::unordered_map<std::string, w
 	//content_sizer->AddSpacer(2*VERT_SPACING);
 
 	//add_button(wxID_REPLACE, true, _L("Re-configure"));
-	//add_button(wxID_EXIT, false, wxString::Format(_L("Exit %s"), SLIC3R_APP_NAME));
+	//add_button(wxID_EXIT, false, wxString::Format(_L("Exit %s"), SLIC3R_APP_DISPLAY_NAME));
 
 	//for (auto ID : {wxID_EXIT, wxID_REPLACE})
 	//	get_button(ID)->Bind(wxEVT_BUTTON, [this](const wxCommandEvent& evt) { this->EndModal(evt.GetId()); });
@@ -369,7 +369,7 @@ MsgDataIncompatible::~MsgDataIncompatible() {}
 //			"Please proceed with the %s that follows to set up the new presets "
 //			"and to choose whether to enable automatic preset updates."
 //        )))
-//        % SLIC3R_APP_NAME
+//        % SLIC3R_APP_DISPLAY_NAME
 //        % _utf8(ConfigWizard::name())).str()
 //	));
 //	text->Wrap(CONTENT_WIDTH * wxGetApp().em_unit());
@@ -379,7 +379,7 @@ MsgDataIncompatible::~MsgDataIncompatible() {}
 //	auto *text2 = new wxStaticText(this, wxID_ANY, _(L("For more information please visit our wiki page:")));
 //	static const wxString url("");
 //	// The wiki page name is intentionally not localized:
-//	auto *link = new wxHyperlinkCtrl(this, wxID_ANY, wxString::Format("%s 1.40 configuration update", SLIC3R_APP_NAME), CONFIG_UPDATE_WIKI_URL);
+//	auto *link = new wxHyperlinkCtrl(this, wxID_ANY, wxString::Format("%s 1.40 configuration update", SLIC3R_APP_DISPLAY_NAME), CONFIG_UPDATE_WIKI_URL);
 //	content_sizer->Add(text2);
 //	content_sizer->Add(link);
 //	content_sizer->AddSpacer(VERT_SPACING);

@@ -280,34 +280,17 @@ bool BitmapChoiceRenderer::GetValue(wxVariant& value) const
 bool BitmapChoiceRenderer::Render(wxRect rect, wxDC* dc, int state)
 {
     const wxBitmap& icon = m_value.GetBitmap();
-    if (icon.IsOk())
-    {
-        dc->DrawBitmap(icon, rect.x, rect.y + (rect.height - icon.GetHeight()) / 2);
-
-        if (rect.height == 0)
-          rect.height = icon.GetHeight();
+    if (icon.IsOk()) {
+        const wxSize size = icon.GetLogicalSize();
+        dc->DrawBitmap(icon, rect.x + (rect.width - size.x) / 2,
+                       rect.y + (rect.height - size.y) / 2);
     }
-
-#ifdef _WIN32
-    // workaround for Windows DarkMode : Don't respect to the state & wxDATAVIEW_CELL_SELECTED to avoid update of the text color
-//    RenderText(m_value.GetText(), xoffset, rect, dc, state & wxDATAVIEW_CELL_SELECTED ? 0 : state);
-#else
-//    RenderText(m_value.GetText(), xoffset, rect, dc, state);
-#endif
-
     return true;
 }
 
 wxSize BitmapChoiceRenderer::GetSize() const
 {
-    wxSize sz;// = GetTextExtent(m_value.GetText());
-
-    if (m_value.GetBitmap().IsOk()) {
-        sz.x += m_value.GetBitmap().GetWidth() + 4;
-        sz.y = m_value.GetBitmap().GetHeight() + 4;
-    }
-
-    return sz;
+    return m_value.GetBitmap().IsOk() ? m_value.GetBitmap().GetLogicalSize() + (GetView() ? GetView()->FromDIP(wxSize(4, 4)) : wxSize(4, 4)) : wxSize();
 }
 
 wxWindow* BitmapChoiceRenderer::CreateEditorCtrl(wxWindow* parent, wxRect labelRect, const wxVariant& value)

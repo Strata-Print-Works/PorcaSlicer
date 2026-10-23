@@ -142,16 +142,19 @@ public:
 
     void clear_percent() override
     {
-        if (m_progress) {
-            m_progress->clear_percent();
-        }
+        call_on_main_thread([this] {
+            if (m_progress)
+                m_progress->clear_percent();
+        });
     }
 
     void show_error_info(const std::string &msg, int code, const std::string &description, const std::string &extra) override
     {
-        if (m_progress) {
-            m_progress->show_error_info(from_u8(msg), code, from_u8(description), from_u8(extra));
-        }
+        // Keep errors ordered after progress, and convert strings only on the UI thread.
+        call_on_main_thread([this, msg, code, description, extra] {
+            if (m_progress)
+                m_progress->show_error_info(from_u8(msg), code, from_u8(description), from_u8(extra));
+        });
     }
 
     void process_events() override;

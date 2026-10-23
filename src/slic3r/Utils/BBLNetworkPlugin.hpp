@@ -4,6 +4,7 @@
 #include "bambu_networking.hpp"
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "PluginAgentOwner.hpp"
 #include <string>
 #include <memory>
 #include <vector>
@@ -173,6 +174,8 @@ typedef int (*func_sync_ams_filaments)(void *agent, AmsSyncParams params, std::s
  *       // Now BBLCloudServiceAgent/BBLPrinterAgent can use plugin
  *   }
  */
+enum class BambuAgentError { none, library_load, unsupported_version, missing_symbols, null_handle, duplicate_handle };
+
 class BBLNetworkPlugin {
 public:
     // Singleton access
@@ -213,6 +216,7 @@ public:
      * Check if DLL is currently loaded.
      */
     bool is_loaded() const;
+    const std::string& library_path() const { return m_library_path; }
 
     /**
      * Get the plugin version string.
@@ -230,6 +234,11 @@ public:
      * @return The created agent handle, or nullptr on failure
      */
     void* create_agent(const std::string& log_dir);
+
+    // A LAN device owns its SDK agent and a module reference independently of
+    // account services and other devices. No discovery or cloud connection is started.
+    std::shared_ptr<BBLNetworkPlugin> create_device_plugin(const std::string& log_dir);
+    static std::shared_ptr<BBLNetworkPlugin> load_device_plugin(const std::string& library_path, const std::string& log_dir, BambuAgentError* error = nullptr);
 
     /**
      * Destroy the shared agent handle.
@@ -446,6 +455,10 @@ private:
 
     // Shared agent handle
     void* m_agent{nullptr};
+    PluginAgentOwner m_agent_owner;
+    BambuAgentError m_agent_error = BambuAgentError::none;
+    bool m_device_instance = false;
+    std::string m_library_path;
 
     // Load error state
     NetworkLibraryLoadError m_load_error;

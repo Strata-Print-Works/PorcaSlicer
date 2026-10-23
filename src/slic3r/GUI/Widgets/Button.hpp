@@ -54,6 +54,7 @@ class Button : public StaticBox
     bool canFocus    = true;
     bool isCenter    = true;
     bool vertical    = false;
+    bool m_icon_right = false;
     bool m_show_indicator = false;
     wxColour m_indicator_color = wxColour("#009688");
 
@@ -80,6 +81,7 @@ public:
     void SetPaddingSize(const wxSize& size);
 
     void SetIconSpacing(int spacing);
+    void SetIconRight(bool right = true) { m_icon_right = right; Refresh(); }
 
     void SetStyle(const ButtonStyle style /*= ButtonStyle::Regular*/, const ButtonType type /*= ButtonType::None*/);
 

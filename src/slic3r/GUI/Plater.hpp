@@ -3,6 +3,7 @@
 
 #include "libslic3r/Config.hpp"
 #include "libslic3r/PrintConfig.hpp"
+#include "libslic3r/PlateSliceBatch.hpp"
 #include <cstddef>
 #include <map>
 #include "libslic3r/Technologies.hpp"
@@ -16,6 +17,7 @@
 #include "libslic3r/libslic3r.h"
 #include <atomic>
 #include <memory>
+#include <optional>
 #include "slic3r/GUI/Event.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include <string>
@@ -194,10 +196,16 @@ public:
     void on_change_color_mode(bool is_dark);
     void create_printer_preset();
     void init_filament_combo(PlaterPresetComboBox **combo, const int filament_idx);
+    void show_filament_actions(int filament_idx);
     void remove_unused_filament_combos(const size_t current_extruder_count);
     void update_all_preset_comboboxes();
     //void update_partplate(PartPlateList& list);
     void update_presets(Slic3r::Preset::Type preset_type);
+    void update_settings_scope(bool refresh_editor = false);
+    ProcessSettingsScope settings_scope() const;
+    void select_settings_scope(ProcessSettingsScope scope);
+    bool apply_scope_setting(const std::string& key, const ConfigOption* value, bool inherit = false);
+    bool applying_scope_setting() const;
     //BBS
     const std::vector<BedType>& get_cur_combox_bed_types() { return m_cur_combox_bed_types; }
     void update_presets_from_to(Slic3r::Preset::Type preset_type, std::string from, std::string to);
@@ -227,6 +235,7 @@ public:
     void on_bed_type_change(BedType bed_type);
     void load_ams_list(MachineObject* obj);
     std::map<int, DynamicPrintConfig> build_filament_ams_list(MachineObject* obj);
+    void sync_elegoo_filaments();
     void sync_ams_list(bool is_from_big_sync_btn = false);
     bool sync_extruder_list();
     bool is_fila_switch_ready();
@@ -248,6 +257,7 @@ public:
     void update_dynamic_filament_list();
 
     PlaterPresetComboBox *  printer_combox();
+    void                   show_printer_picker();
     ObjectList*             obj_list();
     ObjectSettings*         obj_settings();
     ObjectLayers*           obj_layers();
@@ -343,6 +353,7 @@ private:
 class Plater: public wxPanel
 {
 public:
+    using SliceScope = Slic3r::SliceScope;
 
     Plater(wxWindow *parent, MainFrame *main_frame);
     Plater(Plater &&) = delete;
@@ -391,6 +402,7 @@ public:
     bool up_to_date(bool saved, bool backup);
 
     bool open_3mf_file(const boost::filesystem::path &file_path);
+    bool import_project_plates(const boost::filesystem::path& file_path, bool keep_settings);
     int  get_3mf_file_count(std::vector<boost::filesystem::path> paths);
     void add_file();
     // Returns false when no object was added (e.g. the user cancelled the load dialog).
@@ -555,6 +567,13 @@ public:
     void increase_instances(size_t num = 1);
     void decrease_instances(size_t num = 1);
     void set_number_of_copies(/*size_t num*/);
+    void align_selection();
+    void preview_plate_layout();
+    void arrange_workspace_plates();
+    void cleanup_empty_plates();
+    // Removes the requested empty, unlocked plates inside the caller's snapshot.
+    // Returns the indices actually removed, ascending; empty when nothing was removed.
+    std::vector<int> remove_empty_plates_in_current_snapshot(const std::vector<int>& indices);
     void fill_bed_with_copies();
     void fill_bed_with_instances();
     bool is_selection_empty() const;
@@ -600,6 +619,17 @@ public:
     bool has_toolpaths_to_export() const;
     void export_toolpaths_to_obj() const;
     void reslice();
+    void set_slice_scope(SliceScope scope, const std::string& stage_id = {});
+    SliceScope slice_scope() const;
+    std::string slice_scope_stage_id() const;
+    wxString slice_scope_label() const;
+    bool can_slice_scope(bool force = false) const;
+    void slice_selected_scope(bool force = false);
+    void slice_workspace_stage(const std::string& stage_id, bool force = false);
+    bool slice_batch_running() const;
+    wxString slice_batch_label() const;
+    void cancel_slice_batch();
+    void show_filament_usage_report();
     void record_slice_preset(std::string action);
     void reslice_SLA_supports(const ModelObject &object, bool postpone_error_messages = false);
     void reslice_SLA_hollowing(const ModelObject &object, bool postpone_error_messages = false);
@@ -635,6 +665,11 @@ public:
     //void take_snapshot(const wxString &snapshot_name);
     void take_snapshot(const std::string &snapshot_name, UndoRedo::SnapshotType snapshot_type);
     //void take_snapshot(const wxString &snapshot_name, UndoRedo::SnapshotType snapshot_type);
+    // A snapshot for a gesture that can be cancelled: its time, or nothing when snapshots are suppressed.
+    std::optional<size_t> take_cancellable_snapshot(const std::string &snapshot_name);
+    // After the gesture is cancelled and its state restored, remove that snapshot again,
+    // unless anything was snapshotted, undone or redone since.
+    bool discard_cancelled_snapshot(size_t snapshot_time);
 
     void undo();
     void redo();
@@ -666,7 +701,8 @@ public:
     void enable_independent_plates();
     void capture_plate_setup();
     bool prepare_plate_setup_switch(int plate_index);
-    void activate_plate_setup();
+    // select_device: also select the plate's saved printer in the device manager.
+    void activate_plate_setup(bool select_device = true);
     bool activating_plate_setup() const;
     void force_filament_colors_update();
     void force_print_bed_update();
@@ -864,6 +900,14 @@ public:
     //BBS: add an empty plate and switch to it (the toolbar's Add Plate). Returns the new
     // plate index, or -1 when the plate cap is reached.
     int add_plate();
+    void create_workspace_stage();
+    void show_workspace_stage_menu(const std::string& stage_id = {});
+    void resize_workspace_stage(const std::string& id);
+    void rename_workspace_stage(const std::string& id);
+    void remove_workspace_stage(const std::string& id);
+    int add_plate_to_stage(const std::string& id);
+    bool assign_plate_to_stage(int plate_index, const std::string& id);
+    void focus_workspace_stage(const std::string& id);
     //BBS: delete the plate, index= -1 means the current plate
     int delete_plate(int plate_index = -1);
     int duplicate_plate(int plate_index = -1);

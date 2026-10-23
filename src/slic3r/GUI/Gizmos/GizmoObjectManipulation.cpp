@@ -20,6 +20,7 @@
 #include "libslic3r/Geometry.hpp"
 #include "slic3r/GUI/Selection.hpp"
 #include "slic3r/GUI/Plater.hpp"
+#include "slic3r/GUI/PlateTransfer.hpp"
 #include "slic3r/GUI/MainFrame.hpp"
 #include "GLGizmoUtils.hpp"
 
@@ -356,10 +357,14 @@ void GizmoObjectManipulation::change_position_value(int axis, double value)
     }
     }
     selection.translate(position - m_cache.position, trafo_type);
-    wxGetApp().plater()->take_snapshot("Set Position", UndoRedo::SnapshotType::GizmoAction);
-    m_glcanvas.do_move("");
+    // A move onto another plate waits for its filaments to be matched and then
+    // records its own undo step; until then the selection keeps its placement.
+    if (!defer_plate_transfer(m_glcanvas, "Set Position")) {
+        wxGetApp().plater()->take_snapshot("Set Position", UndoRedo::SnapshotType::GizmoAction);
+        m_glcanvas.do_move("");
+    }
 
-    m_cache.position = position;
+    // Show the placement the model now has, not the value that was typed.
 	m_cache.position_rounded(axis) = DBL_MAX;
     this->UpdateAndShow(true);
 }
@@ -576,8 +581,11 @@ void GizmoObjectManipulation::reset_position_value()
         return;
 
     // Copy position values from GLVolumes into Model (ModelInstance / ModelVolume), trigger background processing.
-    wxGetApp().plater()->take_snapshot(_u8L("Reset position"), UndoRedo::SnapshotType::GizmoAction);
-    m_glcanvas.do_move("");
+    // A reset onto another plate is deferred like a typed position and records its own undo step.
+    if (!defer_plate_transfer(m_glcanvas, _u8L("Reset position"))) {
+        wxGetApp().plater()->take_snapshot(_u8L("Reset position"), UndoRedo::SnapshotType::GizmoAction);
+        m_glcanvas.do_move("");
+    }
 
     UpdateAndShow(true);
 }

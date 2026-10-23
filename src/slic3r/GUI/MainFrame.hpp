@@ -33,6 +33,7 @@
 #include "Monitor.hpp"
 #include "Auxiliary.hpp"
 #include "Project.hpp"
+#include "ProductionPanel.hpp"
 #include "CalibrationPanel.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "Widgets/SideButton.hpp"
@@ -66,6 +67,7 @@
 #define TAB_ID_MONITOR_WEB   "monitor_web"
 #define TAB_ID_MULTI_DEVICE  "multi_device"
 #define TAB_ID_PROJECT       "project"
+#define TAB_ID_PRODUCTION    "production"
 #define TAB_ID_CALIBRATION   "calibration"
 
 #define ENABEL_PRINT_ALL 0
@@ -73,6 +75,7 @@
 class Notebook;
 class wxBookCtrlBase;
 class wxProgressDialog;
+class Button;
 
 namespace Slic3r {
 
@@ -311,6 +314,7 @@ class MainFrame : public DPIFrame
     {
         eSliceAll = 0,
         eSlicePlate = 1,
+        eSliceStage = 2,
     };
 
     //jump to editor under preview only mode
@@ -519,6 +523,7 @@ public:
     //AuxiliaryPanel*       m_auxiliary{ nullptr };
     LazyPage<MultiMachinePage>* m_multi_machine_page{ nullptr };
     LazyPage<ProjectPanel>* m_project_page{ nullptr };
+    LazyPage<ProductionPanel>* m_production_page{ nullptr };
 
     LazyPage<CalibrationPanel>* m_calibration_page{ nullptr };
     LazyPage<WebViewPanel>* m_home_page { nullptr };
@@ -540,14 +545,15 @@ public:
 
     
     mutable int m_print_select{ ePrintAll };
-    mutable int m_slice_select{ eSliceAll };
+    mutable int m_slice_select{ eSlicePlate };
     // Button* m_publish_btn{ nullptr };
     SideButton* m_slice_btn{ nullptr };
     SideButton* m_slice_option_btn{ nullptr };
+    ::Button* m_slice_cancel_btn{ nullptr };
     SideButton* m_print_btn{ nullptr };
     SideButton* m_print_option_btn{ nullptr };
 
-    SidePopup*  m_slice_option_pop_up{ nullptr };
+    bool m_slice_menu_open {false};
 
     FilamentGroupPopup* m_filament_group_popup{ nullptr };
     mutable bool          m_slice_enable{ true };

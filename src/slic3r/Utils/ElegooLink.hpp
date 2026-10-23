@@ -98,6 +98,7 @@ private:
 #endif
 
     std::string m_printerModel;
+    std::string m_expected_serial;
 };
 }
 

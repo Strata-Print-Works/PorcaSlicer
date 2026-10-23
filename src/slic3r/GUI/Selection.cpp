@@ -474,15 +474,15 @@ void Selection::add_curr_plate()
     if (!m_valid)
         return;
 
-    wxGetApp().plater()->take_snapshot(std::string("Selection-Add Curr Plate All!"));
+    wxGetApp().plater()->take_snapshot(std::string("Selection-Add Curr Plate All!"), UndoRedo::SnapshotType::Selection);
     m_mode = Instance;
     clear();
 
     PartPlate* plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
     for (int obj_idx = 0; obj_idx < m_model->objects.size(); obj_idx++) {
-        if (plate && plate->contain_instance_totally(obj_idx, 0)) {
-            std::vector<unsigned int> volume_idxs = get_volume_idxs_from_object(obj_idx);
-            do_add_volumes(volume_idxs);
+        for (size_t instance_idx = 0; instance_idx < m_model->objects[obj_idx]->instances.size(); ++instance_idx) {
+            if (plate && plate->contain_instance(obj_idx, int(instance_idx)))
+                do_add_volumes(get_volume_idxs_from_instance(obj_idx, unsigned(instance_idx)));
         }
     }
 

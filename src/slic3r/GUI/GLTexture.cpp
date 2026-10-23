@@ -1,4 +1,5 @@
 #include "ToolbarStyle.hpp"
+#include "LiveToolbarStyle.hpp"
 //BBS:add i18n
 #include "I18N.hpp"
 //BBS: add fstream for debug output
@@ -364,7 +365,8 @@ bool GLTexture::load_from_svg_files_as_sprites_array(const std::vector<std::stri
         if (image == nullptr)
             continue;
 
-        const float glyph_size = palette ? sprite_size_px * float(DesignSystem::icon_lg) / DesignSystem::control_md : float(sprite_size_px);
+        const auto& style = DesignSystem::live_toolbar_style().snapshot();
+        const float glyph_size = palette ? sprite_size_px * style.icon_size / style.control_size : float(sprite_size_px);
         const float padding = (sprite_size_px - glyph_size) * 0.5f;
         float scale = glyph_size / std::max(image->width, image->height);
         std::fill(sprite_data.begin(), sprite_data.end(), 0);

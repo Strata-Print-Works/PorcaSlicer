@@ -103,3 +103,29 @@ TEST_CASE("System discovery preserves long service types and escaped DNS labels"
     CHECK_FALSE(discovery_dns_name(compressed.data(), compressed.size()));
     CHECK_FALSE(discovery_dns_name(nullptr, 10));
 }
+
+TEST_CASE("Printer certificate pins are learned once and reject a changed certificate", "[DiscoveryPolicy]")
+{
+    const std::array<unsigned char, 4> fake_digest{0x00, 0x9f, 0xa0, 0xff};
+    const auto first = certificate_fingerprint_hex(fake_digest.data(), fake_digest.size());
+    CHECK(first == "009fa0ff");
+    CHECK(certificate_fingerprint_hex(nullptr, 4).empty());
+    const std::string other = "11111111";
+
+    CHECK(compare_certificate_pin("", "") == CertificatePin::missing);
+    CHECK(compare_certificate_pin(first, "") == CertificatePin::missing);
+    CHECK(compare_certificate_pin("", first) == CertificatePin::first_use);
+    CHECK(compare_certificate_pin(first, first) == CertificatePin::matched);
+    CHECK(compare_certificate_pin(first, other) == CertificatePin::changed);
+
+    // Only an authenticated first-use check stores the presented fingerprint.
+    CHECK(should_store_certificate_pin("", "", first, true));
+    CHECK_FALSE(should_store_certificate_pin("", "", first, false));
+    CHECK_FALSE(should_store_certificate_pin("", "", "", true));
+    // An existing pin is never replaced by a later check.
+    CHECK_FALSE(should_store_certificate_pin(first, first, first, true));
+    // A pin stored by another check, or cleared by an explicit credential reset
+    // while this check ran, is left as the user or the other check set it.
+    CHECK_FALSE(should_store_certificate_pin("", other, first, true));
+    CHECK_FALSE(should_store_certificate_pin(other, "", first, true));
+}

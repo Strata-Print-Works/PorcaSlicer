@@ -5,6 +5,8 @@
 #include "libslic3r/AppConfig.hpp"
 #include "slic3r/GUI/KeyChord.hpp"
 #include "slic3r/GUI/Shortcuts.hpp"
+#include "slic3r/GUI/SelectAllSequence.hpp"
+#include <chrono>
 
 #include <wx/accel.h>
 #include <string>
@@ -345,4 +347,50 @@ TEST_CASE("Unreadable config entries fall back to the default binding", "[Shortc
     registry.load(config);
     CHECK_FALSE(registry.is_customized(Shortcut::Arrange));
     CHECK(registry.lookup(ShortcutContext::Plater, { 'A' }) == Shortcut::Arrange);
+}
+
+TEST_CASE("A quick second select-all expands selection across plates", "[Shortcuts]")
+{
+    SelectAllSequence sequence;
+    const auto start = SelectAllSequence::Clock::time_point{};
+    CHECK_FALSE(sequence.press(start, 2));
+    CHECK(sequence.press(start + std::chrono::milliseconds(200), 2));
+    CHECK(sequence.press(start + std::chrono::milliseconds(300), 2));
+    CHECK_FALSE(sequence.press(start + std::chrono::milliseconds(1000), 2));
+    CHECK(sequence.press(start + std::chrono::milliseconds(1500), 2));
+}
+
+TEST_CASE("Interrupted select-all presses start on the active plate", "[Shortcuts]")
+{
+    SelectAllSequence sequence;
+    const auto start = SelectAllSequence::Clock::time_point{};
+    CHECK_FALSE(sequence.press(start, 0));
+    CHECK_FALSE(sequence.press(start + std::chrono::milliseconds(100), 1));
+    sequence.reset();
+    CHECK_FALSE(sequence.press(start + std::chrono::milliseconds(200), 1));
+    CHECK(sequence.press(start + std::chrono::milliseconds(300), 1));
+}
+
+TEST_CASE("Queued select-all presses use input timing instead of redraw time", "[Shortcuts]")
+{
+    SelectAllSequence sequence;
+    const auto start = SelectAllSequence::Clock::time_point{};
+    CHECK_FALSE(sequence.press(start, 0, 1000));
+    CHECK(sequence.press(start + std::chrono::seconds(2), 0, 1200));
+    // A later user press does not become a double press just because the GUI
+    // dispatches both queued events next to each other.
+    CHECK_FALSE(sequence.press(start + std::chrono::seconds(2), 0, 2000));
+    sequence.reset();
+    CHECK_FALSE(sequence.press(start + std::chrono::seconds(3), 0, 2100));
+    CHECK_FALSE(sequence.press(start + std::chrono::seconds(3), 1, 2200));
+}
+
+TEST_CASE("Select-all input timestamps tolerate missing values and clock resets", "[Shortcuts]")
+{
+    SelectAllSequence sequence;
+    const auto start = SelectAllSequence::Clock::time_point{};
+    CHECK_FALSE(sequence.press(start, 0, 1000));
+    CHECK_FALSE(sequence.press(start + std::chrono::milliseconds(100), 0, 900));
+    CHECK(sequence.press(start + std::chrono::milliseconds(200), 0));
+    CHECK(sequence.press(start + std::chrono::milliseconds(300), 0, 1100));
 }

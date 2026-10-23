@@ -495,10 +495,15 @@ BoundingBoxf3 GLVolume::transformed_non_sinking_bounding_box(const Transform3d& 
 
 const BoundingBoxf3& GLVolume::transformed_non_sinking_bounding_box() const
 {
+    return transformed_non_sinking_bounding_box(GUI::wxGetApp().plater()->model());
+}
+
+const BoundingBoxf3& GLVolume::transformed_non_sinking_bounding_box(const Model& model) const
+{
     if (!m_transformed_non_sinking_bounding_box.has_value()) {
         std::optional<BoundingBoxf3>* trans_box = const_cast<std::optional<BoundingBoxf3>*>(&m_transformed_non_sinking_bounding_box);
         const Transform3d& trafo = world_matrix();
-        *trans_box = transformed_non_sinking_bounding_box(trafo);
+        *trans_box = model.objects[object_idx()]->volumes[volume_idx()]->mesh().transformed_bounding_box(trafo, 0.0);
     }
     return *m_transformed_non_sinking_bounding_box;
 }
@@ -844,7 +849,12 @@ bool GLVolume::is_sla_pad() const { return this->composite_id.volume_id == -int(
 
 bool GLVolume::is_sinking() const
 {
-    if (is_modifier || GUI::wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() == ptSLA)
+    return !is_modifier && is_sinking(GUI::wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology());
+}
+
+bool GLVolume::is_sinking(PrinterTechnology technology) const
+{
+    if (is_modifier || technology == ptSLA)
         return false;
     const BoundingBoxf3& box = transformed_convex_hull_bounding_box();
     return box.min.z() < SINKING_Z_THRESHOLD && box.max.z() >= SINKING_Z_THRESHOLD;
@@ -1186,7 +1196,6 @@ GLVolumeWithIdAndZList volumes_to_render(const GLVolumePtrs& volumes, GLVolumeCo
 float GLVolumeCollection::get_selection_support_normal_z() const
 {
     const DynamicPrintConfig& glb_cfg  = GUI::wxGetApp().preset_bundle->prints.get_edited_preset().config;
-    const auto& full_cfg               = GUI::wxGetApp().preset_bundle->full_config();
     const auto support_type            = glb_cfg.opt_enum<SupportType>("support_type");
     const int  support_threshold_angle = glb_cfg.opt_int("support_threshold_angle");
     double angle_rad;
@@ -1198,6 +1207,7 @@ float GLVolumeCollection::get_selection_support_normal_z() const
     } else if (is_tree(support_type)) {
         angle_rad = Geometry::deg2rad(30.0); // fallback value for tree supports
     } else { // For normal supports, if the angle is set to 0, calculate normal_z from overlap.
+        const auto full_cfg = GUI::wxGetApp().preset_bundle->full_config();
         const double layer_height        = full_cfg.opt_float("layer_height");
         const auto*  nozzle_diameter_opt = full_cfg.option<ConfigOptionFloats>("nozzle_diameter");
         const int    wall_filament_id       = full_cfg.opt_int("outer_wall_filament_id");
@@ -1261,7 +1271,10 @@ void GLVolumeCollection::render(GLVolumeCollection::ERenderType       type,
     if (disable_cullface)
         glsafe(::glDisable(GL_CULL_FACE));
 
-    const float support_normal_z = get_selection_support_normal_z();
+    // Preview shells and ordinary model drawing do not use overhang highlighting.
+    // Avoid rebuilding the complete printer/material configuration on every camera frame.
+    const float support_normal_z = m_slope.isGlobalActive && shader->get_uniform_location("slope.normal_z") >= 0 ?
+        get_selection_support_normal_z() : m_slope.normal_z;
 
     // The outline passes below are driven by is_outline, which only the object shaders have; with an
     // overlay one (wireframe, x-ray) bound they would just draw the volume again.
@@ -1463,15 +1476,24 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
         return false;
     }
 
-    const Model&        model              = GUI::wxGetApp().plater()->model();
+    auto* plater = GUI::wxGetApp().plater();
+    return check_outside_state(build_volume, plater->model(), plater->get_partplate_list(),
+        GUI::wxGetApp().preset_bundle->project_config,
+        GUI::wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology(), out_state, object_results);
+}
+
+bool GLVolumeCollection::check_outside_state(const BuildVolume& build_volume, const Model& model,
+    GUI::PartPlateList& plates, const DynamicPrintConfig& project_config, PrinterTechnology technology,
+    ModelInstanceEPrintVolumeState* out_state, ObjectFilamentResults* object_results) const
+{
     auto                volume_below       = [](GLVolume& volume) -> bool
         { return volume.object_idx() != -1 && volume.volume_idx() != -1 && volume.is_below_printbed(); };
     // Volume is partially below the print bed, thus a pre-calculated convex hull cannot be used.
-    auto                volume_sinking     = [](GLVolume& volume) -> bool
-        { return volume.object_idx() != -1 && volume.volume_idx() != -1 && volume.is_sinking(); };
+    auto                volume_sinking     = [technology](GLVolume& volume) -> bool
+        { return volume.object_idx() != -1 && volume.volume_idx() != -1 && volume.is_sinking(technology); };
     // Cached bounding box of a volume above the print bed.
-    auto                volume_bbox        = [volume_sinking](GLVolume& volume) -> BoundingBoxf3
-        { return volume_sinking(volume) ? volume.transformed_non_sinking_bounding_box() : volume.transformed_convex_hull_bounding_box(); };
+    auto                volume_bbox        = [volume_sinking, &model](GLVolume& volume) -> BoundingBoxf3
+        { return volume_sinking(volume) ? volume.transformed_non_sinking_bounding_box(model) : volume.transformed_convex_hull_bounding_box(); };
     // Cached 3D convex hull of a volume above the print bed.
     auto                volume_convex_mesh = [volume_sinking, &model](GLVolume& volume) -> const TriangleMesh&
         { return volume_sinking(volume) ? model.objects[volume.object_idx()]->volumes[volume.volume_idx()]->mesh() : *volume.convex_hull(); };
@@ -1482,7 +1504,7 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
     //BBS: add instance judge logic, besides to original volume judge logic
     //std::map<int64_t, ModelInstanceEPrintVolumeState> model_state;
 
-    GUI::PartPlate* curr_plate = GUI::wxGetApp().plater()->get_partplate_list().get_selected_plate();
+    GUI::PartPlate* curr_plate = plates.get_selected_plate();
     const Pointfs& pp_bed_shape = curr_plate->get_shape();
     BuildVolume plate_build_volume(pp_bed_shape, build_volume.printable_height(), build_volume.extruder_areas(), build_volume.extruder_heights());
     const std::vector<BoundingBoxf3>& exclude_areas = curr_plate->get_exclude_areas();
@@ -1494,7 +1516,11 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
     const ModelObjectPtrs &model_objects = model.objects;
     for (GLVolume* volume : this->volumes)
     {
-        auto& plates = GUI::wxGetApp().plater()->get_partplate_list();
+        // Modifiers have no collision hull. Apply the same eligibility check to
+        // inactive beds before the independent-plate path reads that hull.
+        if (volume->is_modifier || !(volume->shader_outside_printer_detection_enabled ||
+            (!volume->is_wipe_tower && volume->composite_id.volume_id >= 0)))
+            continue;
         if (plates.independent_setups() && volume->object_idx() >= 0 && volume->object_idx() < int(model.objects.size())) {
             const int owner = plates.find_instance_belongs(volume->object_idx(), volume->instance_idx());
             if (owner >= 0 && owner != plates.get_curr_plate_index()) {
@@ -1624,7 +1650,6 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
     //check per-object error for extruder areas
     if (object_results && (extruder_count > 1))
     {
-        const auto& project_config = Slic3r::GUI::wxGetApp().preset_bundle->project_config;
         object_results->mode = curr_plate->get_real_filament_map_mode(project_config);
         if (object_results->mode < FilamentMapMode::fmmManual)
         {
@@ -1687,7 +1712,6 @@ bool GLVolumeCollection::check_outside_state(const BuildVolume &build_volume, Mo
         else
         {
             std::set<int> conflict_filaments_set;
-            const auto& project_config = Slic3r::GUI::wxGetApp().preset_bundle->project_config;
             std::vector<int> filament_maps = curr_plate->get_real_filament_maps(project_config);
             for (auto& object_map: objects_unprintable_filaments)
             {

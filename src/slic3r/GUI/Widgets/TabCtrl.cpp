@@ -12,6 +12,7 @@
 #include <wx/gdicmn.h>
 #include <wx/sizer.h>
 #include <wx/string.h>
+#include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Widgets/Button.hpp"
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "slic3r/GUI/Widgets/StateHandler.hpp"
@@ -62,6 +63,7 @@ int TabCtrl::GetSelection() const { return sel; }
 
 void TabCtrl::SelectItem(int item)
 {
+    if (item < -1 || item >= int(btns.size())) return;
     if (item == sel || !sendTabCtrlEvent(true))
         return;
     if (sel >= 0) {
@@ -89,6 +91,20 @@ void TabCtrl::Rescale()
     for (auto& b : btns)
         b->Rescale();
     relayout();
+}
+
+void TabCtrl::SetSidebarStyle(const wxColour& indicator)
+{
+    sidebar_indicator = indicator;
+    sidebar_indicator_role.reset();
+    Refresh();
+}
+
+void TabCtrl::SetSidebarStyle(Slic3r::GUI::DesignSystem::ColorRole indicator)
+{
+    sidebar_indicator = wxNullColour;
+    sidebar_indicator_role = indicator;
+    Refresh();
 }
 
 bool TabCtrl::SetFont(wxFont const& font)
@@ -191,6 +207,11 @@ void TabCtrl::SetItemIndicator(unsigned int item, bool on)
         return;
     btns[item]->SetIndicator(on);
     relayout();
+}
+
+void TabCtrl::EnableItem(unsigned int item, bool enabled)
+{
+    if (item < btns.size()) btns[item]->Enable(enabled);
 }
 
 bool TabCtrl::GetItemBold(unsigned int item) const
@@ -322,18 +343,11 @@ void TabCtrl::buttonClicked(wxCommandEvent& event)
 
 void TabCtrl::keyDown(wxKeyEvent& event)
 {
-    switch (event.GetKeyCode()) {
-    case WXK_UP:
-    case WXK_DOWN:
-    case WXK_LEFT:
-    case WXK_RIGHT:
-        if ((event.GetKeyCode() == WXK_UP || event.GetKeyCode() == WXK_LEFT) && GetSelection() > 0) {
-            SelectItem(GetSelection() - 1);
-        } else if ((event.GetKeyCode() == WXK_DOWN || event.GetKeyCode() == WXK_RIGHT) && GetSelection() + 1 < btns.size()) {
-            SelectItem(GetSelection() + 1);
-        }
-        break;
-    }
+    const int key = event.GetKeyCode();
+    const int direction = key == WXK_UP || key == WXK_LEFT ? -1 : key == WXK_DOWN || key == WXK_RIGHT ? 1 : 0;
+    if (!direction) { event.Skip(); return; }
+    for (int item = GetSelection() + direction; item >= 0 && item < int(btns.size()); item += direction)
+        if (btns[item]->IsEnabled()) { SelectItem(item); break; }
 }
 
 void TabCtrl::doRender(wxDC& dc)
@@ -364,6 +378,16 @@ void TabCtrl::doRender(wxDC& dc)
 #else
     dc.SetPen(wxPen(border_color.colorForStates(states), border_width));
     dc.DrawLine(0, size.y - BS2, size.x, size.y - BS2);
+    const wxColour indicator = sidebar_indicator_role
+        ? wxColour(Slic3r::GUI::DesignSystem::color_hex(*sidebar_indicator_role, Slic3r::GUI::wxGetApp().dark_mode()))
+        : sidebar_indicator;
+    if (indicator.IsOk()) {
+        const int height = FromDIP(3);
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(indicator);
+        dc.DrawRoundedRectangle(x1, size.y - BS2 - height, x2 - x1, height, FromDIP(1));
+        return;
+    }
     wxColour c = StateColor::darkModeColorFor("#009688");
     dc.SetPen(wxPen(c, 1));
     dc.SetBrush(c);

@@ -1,5 +1,9 @@
 #include "DailyTips.hpp"
-#include "slic3r/GUI/Widgets/Label.hpp"
+#include "DesignTokens.hpp"
+#include "WorkspaceStyle.hpp"
+#include <algorithm>
+#include <utility>
+#include <wx/string.h>
 #include <string>
 #include <functional>
 #include <imgui.h>
@@ -20,6 +24,24 @@
 #include <imgui/imgui_internal.h>
 
 namespace Slic3r { namespace GUI {
+namespace {
+ImVec4 tip_color(DesignSystem::ColorRole role, bool dark, float opacity = 1.0f)
+{
+    if (!dark && role == DesignSystem::ColorRole::Accent)
+        role = DesignSystem::ColorRole::AccentInk;
+    ImVec4 result = ImGuiWrapper::to_ImVec4(WorkspaceStyle::color(role, dark));
+    result.w *= opacity;
+    return result;
+}
+
+std::pair<std::string, std::string> tip_text(const std::string& text)
+{
+    const size_t split = text.find('\n');
+    return split == std::string::npos ? std::make_pair(text, std::string()) :
+        std::make_pair(text.substr(0, split), text.substr(split + 1));
+}
+}
+
 
 
 struct DailyTipsData {
@@ -38,6 +60,7 @@ public:
     void update_data(const DailyTipsData& data);
     void render(const ImVec2& pos, const ImVec2& size) const;
     bool has_image() const;
+    float preferred_height(float width) const;
     void on_change_color_mode(bool is_dark);
     void set_fade_opacity(float opacity);
 
@@ -51,7 +74,6 @@ protected:
 private:
     DailyTipsData m_data;
     GLTexture* m_texture{ nullptr };
-    GLTexture* m_placeholder_texture{ nullptr };
     bool m_is_dark{ false };
     DailyTipsLayout m_layout;
     float m_fade_opacity{ 1.0f };
@@ -65,8 +87,6 @@ DailyTipsDataRenderer::DailyTipsDataRenderer(DailyTipsLayout layout)
 DailyTipsDataRenderer::~DailyTipsDataRenderer() {
     if (m_texture)
         delete m_texture;
-    if (m_placeholder_texture)
-        delete m_placeholder_texture;
 }
 
 void DailyTipsDataRenderer::update_data(const DailyTipsData& data)
@@ -85,19 +105,16 @@ void DailyTipsDataRenderer::load_texture_from_img_url(const std::string url)
         m_texture = new GLTexture();
         m_texture->load_from_file(Slic3r::resources_dir() + "/" + url, true, GLTexture::None, false);
     }
-    else {
-        if (!m_placeholder_texture) {
-            m_placeholder_texture = new GLTexture();
-            m_placeholder_texture->load_from_file(Slic3r::resources_dir() + "/images/dailytips_placeholder.png", true, GLTexture::None, false);
-        }
-    }
 }
 
 void DailyTipsDataRenderer::open_wiki() const
 {
     if (!m_data.wiki_url.empty())
     {
-        wxGetApp().open_browser_with_warning_dialog(m_data.wiki_url);
+        wxGetApp().CallAfter([url = m_data.wiki_url] {
+            if (!wxGetApp().is_closing())
+                wxGetApp().open_browser_with_warning_dialog(url);
+        });
     }
 }
 
@@ -119,7 +136,8 @@ void DailyTipsDataRenderer::render(const ImVec2& pos, const ImVec2& size) const
                 render_img({0, 0}, img_size);
                 img_text_gap = ImGui::CalcTextSize("A").y;
             }
-            render_text({ 0, img_size.y + img_text_gap }, size);
+            render_text({ 0, img_size.y + img_text_gap },
+                        {ImGui::GetContentRegionAvail().x, size.y});
         }
         if (m_layout == DailyTipsLayout::Horizontal) {
             ImVec2 img_size(0, 0);
@@ -137,7 +155,24 @@ void DailyTipsDataRenderer::render(const ImVec2& pos, const ImVec2& size) const
 
 bool DailyTipsDataRenderer::has_image() const
 {
-    return !m_data.img_url.empty();
+    return m_texture && m_texture->get_id() != 0;
+}
+
+float DailyTipsDataRenderer::preferred_height(float width) const
+{
+    ImGuiWrapper& imgui = *wxGetApp().imgui();
+    const float scale = imgui.get_font_size() / 15.0f;
+    const auto text = tip_text(m_data.main_text);
+    imgui.push_bold_font();
+    float height = ImGui::CalcTextSize(text.first.c_str(), nullptr, false, width).y;
+    imgui.pop_bold_font();
+    if (!text.second.empty())
+        height += 8.0f * scale + ImGui::CalcTextSize(text.second.c_str(), nullptr, false, width).y;
+    if (!m_data.wiki_url.empty())
+        height += 12.0f * scale + ImGui::GetFontSize() + 8.0f * scale;
+    if (has_image())
+        height += width * 9.0f / 16.0f + 16.0f * scale;
+    return height + 16.0f * scale;
 }
 
 void DailyTipsDataRenderer::on_change_color_mode(bool is_dark)
@@ -154,102 +189,40 @@ void DailyTipsDataRenderer::render_img(const ImVec2& start_pos, const ImVec2& si
 {
     if (has_image())
         ImGui::Image((ImTextureID)(intptr_t)m_texture->get_id(), size, ImVec2(0, 0), ImVec2(1, 1), m_is_dark ? ImVec4(0.8, 0.8, 0.8, m_fade_opacity) : ImVec4(1, 1, 1, m_fade_opacity));
-    // else {
-    //     ImGui::Image((ImTextureID)(intptr_t)m_placeholder_texture->get_id(), size, ImVec2(0, 0), ImVec2(1, 1), m_is_dark ? ImVec4(0.8, 0.8, 0.8, m_fade_opacity) : ImVec4(1, 1, 1, m_fade_opacity));
-    // }
-}
 
-bool has_cjk(const std::string &text)
-{
-    for (size_t i = 0; i < text.size() - 2; ++i) {
-        unsigned char c1 = text[i];
-        unsigned char c2 = text[i + 1];
-        unsigned char c3 = text[i + 2];
-
-        if ((c1 & 0xF0) == 0xE0 && (c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
-            int codepoint = ((c1 & 0x0F) << 12 | ((c2 & 0x3F) << 6) | (c3 & 0x3F));
-            if (codepoint >= 0x3000 && codepoint <= 0x9FFF) { return true; }
-        }
-    }
-    return false;
 }
 
 void DailyTipsDataRenderer::render_text(const ImVec2& start_pos, const ImVec2& size) const
 {
     ImGuiWrapper& imgui = *wxGetApp().imgui();
-
-    ImGui::PushStyleColor(ImGuiCol_Text, m_is_dark ? ImVec4(1.0f, 1.0f, 1.0f, 0.88f * m_fade_opacity) : ImVec4(38 / 255.0f, 46 / 255.0f, 48 / 255.0f, m_fade_opacity));
-    // main text
-    // first line is headline (for hint notification it must be divided by \n)
-    std::string title_line;
-    std::string content_lines;
-    size_t end_pos = m_data.main_text.find_first_of('\n');
-    if (end_pos != std::string::npos) {
-        title_line = m_data.main_text.substr(0, end_pos);
-        title_line = ImGui::ColorMarkerStart + title_line + ImGui::ColorMarkerEnd;
-        content_lines = m_data.main_text.substr(end_pos + 1);
-    }
-
+    const float scale = imgui.get_font_size() / 15.0f;
+    const auto text = tip_text(m_data.main_text);
     ImGui::SetCursorPos(start_pos);
-    imgui.text(title_line);
-    
-    bool is_zh = has_cjk(content_lines);
-    if (!is_zh) {
-        // problem in Chinese with spaces
+    ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::Ink, m_is_dark, m_fade_opacity));
+    imgui.push_bold_font();
+    imgui.text_wrapped(text.first, size.x);
+    imgui.pop_bold_font();
+    if (!text.second.empty()) {
+        ImGui::Dummy(ImVec2(0, 8.0f * scale));
         ImGui::SetCursorPosX(start_pos.x);
-        imgui.text_wrapped(content_lines, size.x);
-    }
-    else {
-        Label* wrapped_text = new Label(wxGetApp().GetTopWindow());
-        wrapped_text->Hide();
-        wrapped_text->SetLabelText(wxString::FromUTF8(content_lines));
-        float wrap_width = size.x + ImGui::CalcTextSize("A").x * 5.0f;
-#ifdef __APPLE__
-        wrap_width /= 2.0f;
-#endif
-        wrapped_text->Wrap(wrap_width);
-        std::string wrapped_content_lines = wrapped_text->GetLabel().ToUTF8().data();
-        wrapped_text->Destroy();
-        ImGui::SetCursorPosX(start_pos.x);
-        imgui.text(wrapped_content_lines);
-    }
-
-    // wiki
-    if (!m_data.wiki_url.empty()) {
-        std::string tips_line = _u8L("For more information, please check out our Wiki");
-        std::string wiki_part_text = _u8L("Wiki");
-        std::string first_part_text = tips_line.substr(0, tips_line.find(wiki_part_text));
-        ImVec2 wiki_part_size = ImGui::CalcTextSize(wiki_part_text.c_str());
-        ImVec2 first_part_size = ImGui::CalcTextSize(first_part_text.c_str());
-
-        //text
-        ImGui::SetCursorPosX(start_pos.x);
-        ImVec2 link_start_pos = ImGui::GetCursorScreenPos();
-        imgui.text(first_part_text);
-
-        ImColor HyperColor = ImColor(0, 150, 136, (int)(255 * m_fade_opacity)).Value; // ORCA match color of hyperlinks
-        ImVec2 wiki_part_rect_min = ImVec2(link_start_pos.x + first_part_size.x, link_start_pos.y);
-        ImVec2 wiki_part_rect_max = wiki_part_rect_min + wiki_part_size;
-        ImGui::PushStyleColor(ImGuiCol_Text, HyperColor.Value);
-        ImGui::SetCursorScreenPos(wiki_part_rect_min);
-        imgui.text(wiki_part_text.c_str());
-        ImGui::PopStyleColor();
-
-        //click behavior
-        if (ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), true))
-        {
-            //underline
-            ImVec2 lineEnd = ImGui::GetItemRectMax();
-            lineEnd.y -= 2.0f;
-            ImVec2 lineStart = lineEnd;
-            lineStart.x = ImGui::GetItemRectMin().x;
-            ImGui::GetWindowDrawList()->AddLine(lineStart, lineEnd, HyperColor);
-
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-                open_wiki();
-        }
+        imgui.text_wrapped(text.second, size.x);
     }
     ImGui::PopStyleColor();
+
+    if (!m_data.wiki_url.empty()) {
+        ImGui::Dummy(ImVec2(0, 12.0f * scale));
+        ImGui::SetCursorPosX(start_pos.x);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 4.0f * scale));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::AccentInk, m_is_dark, m_fade_opacity));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tip_color(DesignSystem::ColorRole::AccentSoft, m_is_dark, m_fade_opacity));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, tip_color(DesignSystem::ColorRole::AccentSoft, m_is_dark, m_fade_opacity));
+        if (imgui.button(_L("Read more")))
+            open_wiki();
+        ImGui::PopStyleColor(4);
+        ImGui::PopStyleVar(2);
+    }
 }
 
 int DailyTipsPanel::uid = 0;
@@ -276,6 +249,14 @@ void DailyTipsPanel::set_position(const ImVec2& pos)
 void DailyTipsPanel::set_size(const ImVec2& size)
 {
     m_width = size.x;
+    if (!m_can_expand) {
+        const float scale = wxGetApp().imgui()->get_font_size() / 15.0f;
+        m_footer_height = 40.0f * scale;
+        m_height = std::min(size.y, std::max(140.0f * scale,
+            m_dailytips_renderer->preferred_height(size.x) + m_footer_height));
+        m_content_height = std::max(1.0f, m_height - m_footer_height);
+        return;
+    }
     //Orca: Keep the requested content height so expanding a collapsed panel restores its full size.
     m_content_height = size.y - m_footer_height;
     m_height = m_can_expand && !m_is_expanded ? m_footer_height : size.y;
@@ -358,6 +339,7 @@ void DailyTipsPanel::retrieve_data_from_hint_database(HintDataNavigation nav)
                             hint_data->callback
         };
         m_dailytips_renderer->update_data(data);
+        wxGetApp().imgui()->set_requires_extra_frame();
     }
 }
 
@@ -420,6 +402,39 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
     std::string name = "##DailyTipsPanelControllers" + std::to_string(parent_window->ID);
     ImGui::SetNextWindowPos(pos);
     if (ImGui::BeginChild(name.c_str(), size, false, window_flags)) {
+        if (!m_can_expand) {
+            ImGui::GetWindowDrawList()->AddLine(pos, pos + ImVec2(size.x, 0),
+                ImColor(tip_color(DesignSystem::ColorRole::Line, m_is_dark)));
+            m_pages_count = HintDatabase::get_instance().get_count();
+            m_page_index = m_pages_count > 0 ? HintDatabase::get_instance().get_index() + 1 : 0;
+            const std::string count = std::to_string(m_page_index) + " / " + std::to_string(m_pages_count);
+            ImGui::SetCursorScreenPos(pos + ImVec2(0, (size.y - ImGui::GetFontSize()) / 2));
+            ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::InkMuted, m_is_dark));
+            imgui.text(count);
+            ImGui::PopStyleColor();
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8) * scale);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f * scale);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * scale);
+            ImGui::PushStyleColor(ImGuiCol_Button, tip_color(DesignSystem::ColorRole::Field, m_is_dark));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tip_color(DesignSystem::ColorRole::SurfaceHover, m_is_dark));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, tip_color(DesignSystem::ColorRole::AccentSoft, m_is_dark));
+            ImGui::PushStyleColor(ImGuiCol_Border, tip_color(DesignSystem::ColorRole::LineControl, m_is_dark));
+            const float button = ImGui::GetFrameHeight();
+            ImGui::SetCursorScreenPos(pos + ImVec2(size.x - 2 * button - 8 * scale, (size.y - button) / 2));
+            if (imgui.button(wxString(ImGui::PrevArrowBtnIcon), ImVec2(button, button), m_pages_count > 1))
+                retrieve_data_from_hint_database(HintDataNavigation::Prev);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", _u8L("Previous tip").c_str());
+            ImGui::SameLine(0, 8 * scale);
+            if (imgui.button(wxString(ImGui::NextArrowBtnIcon), ImVec2(button, button), m_pages_count > 1))
+                retrieve_data_from_hint_database(HintDataNavigation::Next);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", _u8L("Next tip").c_str());
+            ImGui::PopStyleColor(4);
+            ImGui::PopStyleVar(3);
+            ImGui::EndChild();
+            return;
+        }
         ImVec2 button_size = ImVec2(38.0f, 38.0f) * scale;
         float button_margin_x = 8.0f * scale;
         std::wstring button_text;
@@ -432,7 +447,7 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.0f, .0f, .0f, .0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(.0f, .0f, .0f, .0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(.0f, .0f, .0f, .0f));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImColor(144, 144, 144, (int)(255 * m_fade_opacity)).Value);
+                ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::InkMuted, m_is_dark, m_fade_opacity));
 
                 button_text = ImGui::CollapseArrowIcon;
                 imgui.button((_L("Collapse") + button_text));
@@ -446,7 +461,7 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
                     lineEnd.y -= 2;
                     ImVec2 lineStart = lineEnd;
                     lineStart.x = ImGui::GetItemRectMin().x;
-                    ImGui::GetWindowDrawList()->AddLine(lineStart, lineEnd, ImColor(144, 144, 144));
+                    ImGui::GetWindowDrawList()->AddLine(lineStart, lineEnd, ImColor(tip_color(DesignSystem::ColorRole::InkMuted, m_is_dark, m_fade_opacity)));
 
                     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                         collapse();
@@ -458,7 +473,7 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.0f, .0f, .0f, .0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(.0f, .0f, .0f, .0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(.0f, .0f, .0f, .0f));
-                ImGui::PushStyleColor(ImGuiCol_Text, m_is_dark ? ImColor(230, 230, 230, (int)(255 * m_fade_opacity)).Value : ImColor(38, 46, 48, (int)(255 * m_fade_opacity)).Value);
+                ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::Ink, m_is_dark, m_fade_opacity));
 
                 // for bold font text, split text and icon-font button
                 imgui.push_bold_font();
@@ -477,7 +492,7 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
                     lineEnd.y -= 2;
                     ImVec2 lineStart = lineEnd;
                     lineStart.x = ImGui::GetItemRectMin().x - expand_btn_size.x;
-                    ImGui::GetWindowDrawList()->AddLine(lineStart, lineEnd, m_is_dark ? ImColor(230, 230, 230, (int)(255 * m_fade_opacity)) : ImColor(38, 46, 48, (int)(255 * m_fade_opacity)));
+                    ImGui::GetWindowDrawList()->AddLine(lineStart, lineEnd, ImColor(tip_color(DesignSystem::ColorRole::Ink, m_is_dark, m_fade_opacity)));
 
                     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                         expand();
@@ -499,7 +514,7 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
         float text_pos_x = (pos + size).x - button_margin_x * 2 - button_size.x * 2 - text_item_width;
         float text_pos_y = pos.y + (size.y - ImGui::CalcTextSize("A").y) / 2;
         ImGui::SetCursorScreenPos(ImVec2(text_pos_x, text_pos_y));
-        ImGui::PushStyleColor(ImGuiCol_Text, m_is_dark ? ImColor(230, 230, 230, (int)(255 * m_fade_opacity)).Value : ImColor(38, 46, 48, (int)(255 * m_fade_opacity)).Value);
+        ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::Ink, m_is_dark, m_fade_opacity));
         imgui.text(text_str);
         ImGui::PopStyleColor();
         ImGui::PopItemWidth();
@@ -510,13 +525,13 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
         ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(.0f, .0f, .0f, .0f));
 
         // prev button
-        ImColor button_text_color = m_is_dark ? ImColor(228, 228, 228, (int)(255 * m_fade_opacity)) : ImColor(38, 46, 48, (int)(255 * m_fade_opacity));
+        ImColor button_text_color = ImColor(tip_color(DesignSystem::ColorRole::InkMuted, m_is_dark, m_fade_opacity));
         ImVec2 prev_button_pos = pos + size + ImVec2(-button_margin_x - button_size.x * 2, -size.y + (size.y - button_size.y) / 2);
         ImGui::SetCursorScreenPos(prev_button_pos);
         button_text = ImGui::PrevArrowBtnIcon;
         if (ImGui::IsMouseHoveringRect(prev_button_pos, prev_button_pos + button_size, true))
         {
-            button_text_color = ImColor(0, 150, 136, (int)(255 * m_fade_opacity));
+            button_text_color = ImColor(tip_color(DesignSystem::ColorRole::Accent, m_is_dark, m_fade_opacity));
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 retrieve_data_from_hint_database(HintDataNavigation::Prev);
         }
@@ -525,13 +540,13 @@ void DailyTipsPanel::render_controller_buttons(const ImVec2& pos, const ImVec2& 
         ImGui::PopStyleColor();
 
         // next button
-        button_text_color = m_is_dark ? ImColor(228, 228, 228, (int)(255 * m_fade_opacity)) : ImColor(38, 46, 48, (int)(255 * m_fade_opacity));
+        button_text_color = ImColor(tip_color(DesignSystem::ColorRole::InkMuted, m_is_dark, m_fade_opacity));
         ImVec2 next_button_pos = pos + size + ImVec2(-button_size.x, -size.y + (size.y - button_size.y) / 2);
         ImGui::SetCursorScreenPos(next_button_pos);
         button_text = ImGui::NextArrowBtnIcon;
         if (ImGui::IsMouseHoveringRect(next_button_pos, next_button_pos + button_size, true))
         {
-            button_text_color = ImColor(0, 150, 136, (int)(255 * m_fade_opacity));
+            button_text_color = ImColor(tip_color(DesignSystem::ColorRole::Accent, m_is_dark, m_fade_opacity));
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 retrieve_data_from_hint_database(HintDataNavigation::Next);
         }
@@ -556,10 +571,13 @@ void DailyTipsPanel::push_styles()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 4.0f * scale);
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, m_is_dark ? ImGuiWrapper::COL_WINDOW_BG_DARK : ImGuiWrapper::COL_WINDOW_BG);
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.42f, 0.42f, 0.42f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(0.93f, 0.93f, 0.93f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, ImVec4(0.93f, 0.93f, 0.93f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, tip_color(DesignSystem::ColorRole::SurfaceRaised, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::Ink, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_Border, tip_color(DesignSystem::ColorRole::LineControl, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, tip_color(DesignSystem::ColorRole::SurfaceRaised, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, tip_color(DesignSystem::ColorRole::InkDisabled, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, tip_color(DesignSystem::ColorRole::InkMuted, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, tip_color(DesignSystem::ColorRole::InkMuted, m_is_dark));
 }
 
 void DailyTipsPanel::pop_styles()
@@ -567,13 +585,14 @@ void DailyTipsPanel::pop_styles()
     ImGuiWrapper& imgui = *wxGetApp().imgui();
     imgui.pop_common_window_style();
     ImGui::PopStyleVar(6);
-    ImGui::PopStyleColor(4);
+    ImGui::PopStyleColor(7);
 }
 
 
 DailyTipsWindow::DailyTipsWindow()
 {
     m_panel = new DailyTipsPanel(false, DailyTipsLayout::Vertical);
+    on_change_color_mode(wxGetApp().dark_mode());
 }
 
 void DailyTipsWindow::open()
@@ -591,54 +610,53 @@ void DailyTipsWindow::render()
 {
     if (!m_show)
         return;
-    //if (m_show)
-    //    ImGui::OpenPopup((_u8L("Daily Tips")).c_str());
-
     ImGuiWrapper& imgui = *wxGetApp().imgui();
-    float scale = imgui.get_font_size() / 15.0f;
+    const float scale = imgui.get_font_size() / 15.0f;
+    const Size& canvas = wxGetApp().plater()->get_current_canvas3D()->get_canvas_size();
+    const ImVec2 padding = ImVec2(24, 24) * scale;
+    const float margin = 16.0f * scale;
+    const ImVec2 content(std::max(1.0f, std::min(420.0f * scale, canvas.get_width() - 2 * (margin + padding.x))),
+                         std::max(1.0f, canvas.get_height() - 2 * (margin + padding.y) - 32.0f * scale));
+    m_panel->set_size(content);
+    const ImVec2 panel_size = m_panel->get_size();
 
-    const Size& cnv_size = wxGetApp().plater()->get_current_canvas3D()->get_canvas_size();
-    ImVec2 center = ImVec2(cnv_size.get_width() * 0.5f, cnv_size.get_height() * 0.5f);
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-
-    ImVec2 padding = ImVec2(25, 25) * scale;
     imgui.push_menu_style(scale);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.f * scale);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 3) * scale);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 7) * scale);
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, m_is_dark ? ImVec4(54 / 255.0f, 54 / 255.0f, 60 / 255.0f, 1.00f) : ImVec4(245 / 255.0f, 245 / 255.0f, 245 / 255.0f, 1.00f));
-    ImGui::GetCurrentContext()->DimBgRatio = 1.0f;
-    int windows_flag =
-        ImGuiWindowFlags_NoCollapse
-        | ImGuiWindowFlags_AlwaysAutoResize
-        | ImGuiWindowFlags_NoResize
-        | ImGuiWindowFlags_NoScrollbar
-        | ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6) * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8) * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, tip_color(DesignSystem::ColorRole::SurfaceRaised, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, tip_color(DesignSystem::ColorRole::SurfaceRaised, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, tip_color(DesignSystem::ColorRole::SurfaceRaised, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, tip_color(DesignSystem::ColorRole::SurfaceRaised, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, tip_color(DesignSystem::ColorRole::SurfaceRaised, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_Text, tip_color(DesignSystem::ColorRole::Ink, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_Border, tip_color(DesignSystem::ColorRole::LineControl, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_Button, tip_color(DesignSystem::ColorRole::Field, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tip_color(DesignSystem::ColorRole::SurfaceHover, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, tip_color(DesignSystem::ColorRole::AccentSoft, m_is_dark));
+    ImGui::PushStyleColor(ImGuiCol_NavHighlight, tip_color(DesignSystem::ColorRole::Focus, m_is_dark));
     imgui.push_bold_font();
-    //if (ImGui::BeginPopupModal((_u8L("Daily Tips")).c_str(), NULL, windows_flag))
-    if (ImGui::Begin((_u8L("Daily Tips")).c_str(), &m_show, windows_flag))
-    {
-        imgui.pop_bold_font();
-
-        ImVec2 panel_pos = ImGui::GetWindowPos() + ImGui::GetWindowContentRegionMin();
-        ImVec2 panel_size = ImVec2(400.0f, 435.0f) * scale;
-        m_panel->set_position(panel_pos);
-        m_panel->set_size(panel_size);
+    const float title_height = ImGui::GetFrameHeight();
+    ImGui::SetNextWindowPos(ImVec2(canvas.get_width(), canvas.get_height()) * 0.5f,
+                           ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(panel_size + padding * 2 + ImVec2(0, title_height));
+    const int flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    const bool visible = ImGui::Begin(_u8L("Daily Tips").c_str(), &m_show, flags);
+    imgui.pop_bold_font();
+    if (visible) {
+        m_panel->set_position(ImGui::GetWindowPos() + ImGui::GetWindowContentRegionMin());
         m_panel->render();
-
-        if (ImGui::IsKeyDown(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
+        if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape)))
             m_show = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::End();
-        //ImGui::EndPopup();
     }
-    else {
-        imgui.pop_bold_font();
-    }
-    ImGui::PopStyleVar(4);
-    ImGui::PopStyleColor();
+    ImGui::End();
+    ImGui::PopStyleColor(11);
+    ImGui::PopStyleVar(7);
     imgui.pop_menu_style();
 }
 

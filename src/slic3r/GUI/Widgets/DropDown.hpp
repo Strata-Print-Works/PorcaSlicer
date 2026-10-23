@@ -6,18 +6,22 @@
 #include <vector>
 #include <cstddef>
 #include <utility>
+#include <functional>
 #include <wx/gdicmn.h>
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include <boost/date_time/posix_time/ptime.hpp>
 #include <wx/dc.h>
 #include <wx/stattext.h>
 #include <wx/string.h>
+#include <wx/weakref.h>
+#include <wx/window.h>
 #include "../wxExtensions.hpp"
 #include "StateHandler.hpp"
 #include "PopupWindow.hpp"
 
 class wxDC;
 class wxWindow;
+class PrinterDropDownDialog;
 
 #define DD_NO_CHECK_ICON    0x0001
 #define DD_NO_TEXT          0x0002
@@ -33,6 +37,11 @@ wxDECLARE_EVENT(EVT_DROPDOWN_ITEM_ACTION, wxCommandEvent);
 class DropDown : public PopupWindow
 {
 public:
+    struct ItemStatus {
+        enum class Indicator { neutral, positive, negative };
+        wxString subtitle;
+        Indicator indicator = Indicator::neutral;
+    };
     struct Item
     {
         wxString text;
@@ -47,6 +56,9 @@ public:
         wxString tip{};
         int      flag{0};
         int      style{ 0 };// the style of item
+        wxString popup_label{}; // presentation only; selection still uses text and original index
+        // Optional cached-state reader, called on the UI thread. Never performs I/O.
+        std::function<ItemStatus()> status_provider;
     };
 
 private:
@@ -84,10 +96,18 @@ private:
     wxPoint                  offset; // x not used
     wxPoint                  dragStart;
 
+    bool printer_popup_style = false;
+    PrinterDropDownDialog* printer_popup = nullptr;
+    wxWeakRef<wxWindow> printer_popup_anchor;
+    int printer_footer_index = -1;
+    std::function<void()> printer_edit_action;
+    std::function<void()> printer_manage_action;
+
 public:
     DropDown(std::vector<Item> &items);
 
     DropDown(wxWindow *parent, std::vector<Item> &items, long style = 0);
+    ~DropDown() override;
 
     void Create(wxWindow * parent, long style = 0);
 
@@ -116,6 +136,14 @@ public:
 
     void SetAlignIcon(bool align);
 
+    // Opt-in search host: a frameless dialog gives the search field typing focus on every port.
+    void SetPrinterPopupStyle(bool enabled = true);
+    bool HasPrinterPopupStyle() const { return printer_popup_style; }
+    void SetPrinterPopupActions(std::function<void()> edit, std::function<void()> manage);
+    void SetPrinterPopupFooterIndex(int index) { printer_footer_index = index; }
+    void SetPrinterPopupAnchor(wxWindow* anchor) { printer_popup_anchor = anchor; }
+    bool IsPopupShown() const;
+
 public:
     void Rescale();
 
@@ -142,6 +170,7 @@ private:
     std::pair<int, int> actionColumn() const;
 
     friend class ComboBox;
+    friend class PrinterDropDownDialog;
     void messureSize();
     void autoPosition();
 

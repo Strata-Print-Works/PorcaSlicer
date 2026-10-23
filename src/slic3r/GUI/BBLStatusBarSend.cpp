@@ -1,6 +1,8 @@
 #include "BBLStatusBarSend.hpp"
 
 #include <wx/event.h>
+#include <wx/dialog.h>
+#include <wx/window.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/string.h>
@@ -38,7 +40,8 @@ BBLStatusBarSend::BBLStatusBarSend(wxWindow *parent, int id)
     m_status_text = new wxStaticText(m_self, wxID_ANY, wxEmptyString);
     m_status_text->SetForegroundColour(wxColour(107, 107, 107));
     m_status_text->SetFont(::Label::Body_13);
-    m_status_text->SetMaxSize(wxSize(m_self->FromDIP(360), m_self->FromDIP(40)));
+    m_status_text->SetMinSize(wxSize(m_self->FromDIP(360), -1));
+    m_status_text->SetMaxSize(wxSize(m_self->FromDIP(360), -1));
 
     m_prog = new wxGauge(m_self, wxID_ANY, 100, wxDefaultPosition, wxSize(-1, m_self->FromDIP(6)), wxGA_HORIZONTAL);
     m_prog->SetMinSize(wxSize(m_self->FromDIP(300),m_self->FromDIP(6)));
@@ -59,7 +62,7 @@ BBLStatusBarSend::BBLStatusBarSend(wxWindow *parent, int id)
     m_stext_percent->Wrap(-1);
 
     m_sizer_status_text = new wxBoxSizer(wxHORIZONTAL);
-    m_link_show_error = new Label(m_self, _L("Check the reason"));
+    m_link_show_error = new Label(m_self, _L("Error details"));
     m_link_show_error->SetForegroundColour(wxColour("#6b6b6b"));
     m_link_show_error->SetFont(::Label::Head_13);
 
@@ -150,8 +153,8 @@ void BBLStatusBarSend::set_range(int val)
 
 void BBLStatusBarSend::clear_percent()
 {
-    //set_percent_text(wxEmptyString);
-    m_cancelbutton->Hide();
+    if (!m_link_show_error->IsShown())
+        m_cancelbutton->Hide();
 }
 
 void BBLStatusBarSend::show_error_info(wxString msg, int code, wxString description, wxString extra)
@@ -162,9 +165,15 @@ void BBLStatusBarSend::show_error_info(wxString msg, int code, wxString descript
     m_link_show_error->Show();
     m_static_bitmap_show_error->Show();
 
+    m_cancelbutton->SetLabel(_L("Back"));
     m_cancelbutton->Show();
     m_self->Layout();
     m_sizer->Layout();
+    m_self->GetParent()->InvalidateBestSize();
+    if (auto* dialog = dynamic_cast<wxDialog*>(wxGetTopLevelParent(m_self)); dialog && dialog->GetSizer()) {
+        dialog->GetSizer()->SetSizeHints(dialog);
+        dialog->Layout();
+    }
 
     wxCommandEvent* evt = new wxCommandEvent(EVT_SHOW_ERROR_FAIL_SEND);
     wxQueueEvent(this->m_self->GetParent(), evt);
@@ -277,20 +286,10 @@ bool BBLStatusBarSend::format_text(wxStaticText* dc, int width, const wxString& 
 
 void BBLStatusBarSend::set_status_text(const wxString& txt)
 {
-    //auto txtss = "Sending the printing task has timed out.\nPlease try again!";
-    //auto txtss = "The printing project is being uploaded... 25%%";
-    //m_status_text->SetLabelText(txtss);
-    //wxString str;
-    //format_text(m_status_text, m_self->FromDIP(300), txt, str);
-
-    if (m_status_text->GetTextExtent(txt).x > m_self->FromDIP(360)) {
-        m_status_text->SetSize(m_self->FromDIP(360), m_self->FromDIP(40));
-    }
     m_status_text->SetLabelText(txt);
+    m_status_text->Wrap(-1);
     m_status_text->Wrap(m_self->FromDIP(360));
-    m_status_text->Layout();
     m_self->Layout();
-    //if (is_english_text(str)) m_status_text->Wrap(m_self->FromDIP(280));
 }
 
 void BBLStatusBarSend::set_percent_text(const wxString &txt)
@@ -334,6 +333,9 @@ bool BBLStatusBarSend::update_status(wxString &msg, bool &was_cancel, int percen
 
 void BBLStatusBarSend::reset()
 {
+    m_show_error_info_state = false;
+    m_static_bitmap_show_error->SetBitmap(m_bitmap_show_error_open);
+    m_cancelbutton->SetLabel(_L("Cancel"));
     m_link_show_error->Hide();
     m_static_bitmap_show_error->Hide();
     m_prog->Show();

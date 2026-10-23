@@ -60,3 +60,5 @@ ctest_results.xml
 /artifacts/
 /mockups/
 /base/
+# Separately versioned website checkout and its tool caches.
+/website/

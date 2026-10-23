@@ -3991,7 +3991,7 @@ bool model_has_advanced_features(const Model &model)
     return false;
 }
 
-void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_relocations)
+void remap_object_filament_slots(ModelObject &object, const std::map<int, int> &slot_relocations)
 {
     if (slot_relocations.empty())
         return;
@@ -4011,21 +4011,25 @@ void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_rel
         paint_state_map[size_t(one_based_from)] = EnforcerBlockerType(one_based_to);
     }
 
-    auto remap_extruder_config = [&one_based_slots](ModelConfig &config) -> bool {
-        const auto it = config.has("extruder") ? one_based_slots.find(config.extruder()) : one_based_slots.end();
-        if (it == one_based_slots.end())
-            return false;
-        config.set("extruder", it->second);
-        return true;
-    };
-
-    for (ModelObject *object : model.objects) {
-        remap_extruder_config(object->config);
-        for (ModelVolume *volume : object->volumes) {
-            remap_extruder_config(volume->config);
-            volume->mmu_segmentation_facets.remap_states(*volume, paint_state_map);
+    auto remap_config = [&one_based_slots](ModelConfig &config) {
+        for (const char* key : object_filament_keys) {
+            const auto* value = config.get().option<ConfigOptionInt>(key);
+            if (!value) continue;
+            const auto it = one_based_slots.find(value->value);
+            if (it != one_based_slots.end()) config.set(key, it->second);
         }
+    };
+    remap_config(object.config);
+    for (auto& range : object.layer_config_ranges) remap_config(range.second);
+    for (ModelVolume *volume : object.volumes) {
+        remap_config(volume->config);
+        volume->mmu_segmentation_facets.remap_states(*volume, paint_state_map);
     }
+}
+
+void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_relocations)
+{
+    for (ModelObject *object : model.objects) remap_object_filament_slots(*object, slot_relocations);
 }
 
 #ifndef NDEBUG

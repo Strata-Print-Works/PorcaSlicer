@@ -84,6 +84,7 @@ function(orcaslicer_copy_test_dlls)
 endfunction()
 
 # Register Catch2 tags as CTest labels so `ctest -L`/`-LE` can filter by tag.
+# Additional Catch options (such as TEST_PREFIX for reused sources) pass through.
 function(orcaslicer_discover_tests TARGET)
     if (APPLE)
         # Tests are CLI tools. Inheriting the GUI app's bundle setting makes Xcode
@@ -93,15 +94,16 @@ function(orcaslicer_discover_tests TARGET)
     if (APPLE AND CMAKE_GENERATOR STREQUAL "Xcode")
         # Xcode signs after post-build scripts. Discovering an unsigned arm64 executable
         # there is killed by macOS; CTest discovery runs after signing has completed.
-        catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS DISCOVERY_MODE PRE_TEST)
+        catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS DISCOVERY_MODE PRE_TEST ${ARGN})
     else()
-        catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS)
+        catch_discover_tests(${TARGET} ADD_TAGS_AS_LABELS ${ARGN})
     endif()
 endfunction()
 
 add_subdirectory(libnest2d)
 add_subdirectory(libslic3r)
 add_subdirectory(slic3rutils)
+add_subdirectory(porca_unit)
 add_subdirectory(fff_print)
 add_subdirectory(sla_print)
 add_subdirectory(filament_group)

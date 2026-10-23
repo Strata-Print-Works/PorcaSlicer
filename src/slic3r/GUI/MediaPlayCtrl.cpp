@@ -1,4 +1,5 @@
 #include "MediaPlayCtrl.h"
+#include <wx/string.h>
 #include "PrinterNetworkTypes.hpp"
 #include "WebMediaController.hpp"
 #include "IPrinterAgent.hpp"
@@ -98,7 +99,6 @@ MediaPlayCtrl::MediaPlayCtrl(wxWindow *parent, wxMediaCtrl3 *media_ctrl, const w
     SetLabel("MediaPlayCtrl");
     SetBackgroundColour(*wxWHITE);
     m_media_ctrl->Bind(wxEVT_MEDIA_STATECHANGED, &MediaPlayCtrl::onStateChanged, this);
-    m_media_ctrl->SetIdleImage(from_u8(resources_dir() + "/images/live_stream_default.png"));
 
     m_button_play = new Button(this, "", "media_play", wxBORDER_NONE);
     m_button_play->SetCanFocus(false);
@@ -244,11 +244,28 @@ CameraStreamMode MediaPlayCtrl::current_mode() const
 void MediaPlayCtrl::SetMachineObject(MachineObject* obj)
 {
     const CameraStreamMode mode = current_mode();
-    if (mode != m_last_mode) {
-        if (m_last_state != MEDIASTATE_IDLE) {
-            m_failed_code = 0; // a mode switch is not a stream failure - don't arm back-off
+    const std::string machine = obj ? obj->get_dev_id() : "";
+    if (machine != m_machine || mode != m_last_mode) {
+        m_token = std::make_shared<int>(0);
+        // A target change clears the old picture immediately, even when the
+        // backend is idle or the next printer is still connecting.
+        m_failed_code = 0;
+        m_webrtc_epoch = 0;
+        if (m_last_state != MEDIASTATE_IDLE)
             Stop(" ");
-        }
+        if (m_web_ctrl && m_last_mode == CameraStreamMode::http_snapshot)
+            m_web_ctrl->Stop();
+        m_media_ctrl->Stop();
+        m_web_user_stopped = false;
+        m_failed_retry = 0;
+        m_next_retry = wxDateTime();
+        m_last_failed_codes.clear();
+        m_agent_camera_url.clear();
+        m_url.clear();
+        m_streaming = false;
+        m_disable_lan = false;
+        m_label_stat->SetLabel(wxEmptyString);
+        SetStatus(wxEmptyString, false);
         m_last_mode = mode;
     }
     set_active_media_controller(mode);
@@ -256,12 +273,11 @@ void MediaPlayCtrl::SetMachineObject(MachineObject* obj)
     const bool uses_local_camera_url = mode == CameraStreamMode::http || mode == CameraStreamMode::https ||
                                        mode == CameraStreamMode::http_snapshot || mode == CameraStreamMode::rtsp;
     const bool uses_webrtc = mode == CameraStreamMode::webrtc;
-    const std::string machine = obj ? obj->get_dev_id() : "";
     bool changed = false;
 
     if (uses_local_camera_url) {
         auto agent = wxGetApp().getAgent();
-        std::string url = agent ? agent->get_local_camera_stream_url() : "";
+        std::string url = obj && agent ? agent->get_local_camera_stream_url() : "";
         m_camera_exists = !url.empty();
         Enable(obj && m_camera_exists);
         changed = machine != m_machine || url != m_agent_camera_url;
@@ -532,26 +548,18 @@ void MediaPlayCtrl::Play()
         std::string protocols[] = {"", "\"tutk\"", "\"agora\"", "\"tutk\",\"agora\""};
         agent->get_camera_url(m_machine + "|" + m_dev_ver + "|" + protocols[m_remote_proto],
                 [this, m = m_machine, v = agent_version, dv = m_dev_ver, token = std::weak_ptr(m_token)](std::string url) {
-            if (token.expired()) {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": token has been expired";
-                return;
-            }
-
-            if (boost::algorithm::starts_with(url, "bambu:///")) {
-                url += "&device=" + into_u8(m);
-                url += "&net_ver=" + v;
-                url += "&dev_ver=" + dv;
-                url += "&refresh_url=" + boost::lexical_cast<std::string>(&refresh_agora_url);
-                url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
-                url += "&cli_ver=" + std::string(SLIC3R_VERSION);
-            }
-            BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl: " << hide_passwd(url,
-                    {"?uid=", "authkey=", "passwd=", "license=", "token="});
-            CallAfter([this, m, url] {
-                if (m != m_machine) {
-                    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl drop late ttcode for machine: " << m;
-                    return;
+            wxGetApp().CallAfter([this, m, v, dv, url = std::move(url), token]() mutable {
+                if (token.expired() || m != m_machine) return;
+                if (boost::algorithm::starts_with(url, "bambu:///")) {
+                    url += "&device=" + m;
+                    url += "&net_ver=" + v;
+                    url += "&dev_ver=" + dv;
+                    url += "&refresh_url=" + boost::lexical_cast<std::string>(&refresh_agora_url);
+                    url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
+                    url += "&cli_ver=" + std::string(SLIC3R_VERSION);
                 }
+                BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl: " << hide_passwd(url,
+                    {"?uid=", "authkey=", "passwd=", "license=", "token="});
                 if (m_last_state == MEDIASTATE_INITIALIZING) {
                     if (url.empty() || !boost::algorithm::starts_with(url, "bambu:///")) {
                         m_failed_code = 3;
@@ -800,7 +808,7 @@ void MediaPlayCtrl::ToggleStream()
         }
     }
     if (!url.empty() && wxGetApp().app_config->get("not_show_vcamera_stop_prev") != "1") {
-        MessageDialog dlg(this->GetParent(), _L("Another virtual camera is running.\nOrca Slicer supports only a single virtual camera.\nDo you want to stop this virtual camera?"), _L("Warning"),
+        MessageDialog dlg(this->GetParent(), _L("Another virtual camera is running.\nPorca supports only a single virtual camera.\nDo you want to stop this virtual camera?"), _L("Warning"),
                                  wxYES | wxCANCEL | wxICON_INFORMATION);
         dlg.show_dsa_button();
         auto          res = dlg.ShowModal();
@@ -831,19 +839,19 @@ void MediaPlayCtrl::ToggleStream()
     if (!agent) return;
     std::string protocols[] = {"", "\"tutk\"", "\"agora\"", "\"tutk\",\"agora\""};
     agent->get_camera_url(m_machine + "|" + m_dev_ver + "|" + protocols[m_remote_proto],
-            [this, m = m_machine, v = agent->get_version(), dv = m_dev_ver](std::string url) {
-        if (boost::algorithm::starts_with(url, "bambu:///")) {
-            url += "&device=" + m;
-            url += "&net_ver=" + v;
-            url += "&dev_ver=" + dv;
-            url += "&refresh_url=" + boost::lexical_cast<std::string>(&refresh_agora_url);
-            url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
-            url += "&cli_ver=" + std::string(SLIC3R_VERSION);
-        }
-        BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::ToggleStream: " << hide_passwd(url,
+            [this, m = m_machine, v = agent->get_version(), dv = m_dev_ver, token = std::weak_ptr(m_token)](std::string url) {
+        wxGetApp().CallAfter([this, m, v, dv, url = std::move(url), token]() mutable {
+            if (token.expired() || m != m_machine) return;
+            if (boost::algorithm::starts_with(url, "bambu:///")) {
+                url += "&device=" + m;
+                url += "&net_ver=" + v;
+                url += "&dev_ver=" + dv;
+                url += "&refresh_url=" + boost::lexical_cast<std::string>(&refresh_agora_url);
+                url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
+                url += "&cli_ver=" + std::string(SLIC3R_VERSION);
+            }
+            BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::ToggleStream: " << hide_passwd(url,
                 {"?uid=", "authkey=", "passwd=", "license=", "token="});
-        CallAfter([this, m, url] {
-            if (m != m_machine) return;
             if (url.empty() || !boost::algorithm::starts_with(url, "bambu:///")) {
                 MessageDialog(this->GetParent(), wxString::Format(_L("Virtual camera initialize failed (%s)!"), url.empty() ? _L("Network unreachable") : from_u8(url)), _L("Information"),
                               wxICON_INFORMATION)

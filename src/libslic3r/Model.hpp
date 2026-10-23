@@ -1404,6 +1404,9 @@ public:
     // Whether or not this instance is printable
     bool printable;
     bool auto_drop;
+    // Stable identity of a printable instance in a Porca production project.
+    // Empty outside production; cloning an instance intentionally starts a new identity.
+    std::string production_id;
     bool use_loaded_id_for_label {false};
     int arrange_order = 0; // BBS
     size_t loaded_id = 0; // BBS
@@ -1558,7 +1561,7 @@ private:
 	ModelInstance() : ObjectBase(-1), object(nullptr) { assert(this->id().invalid()); }
     // BBS. Add added members to archive.
     template<class Archive> void serialize(Archive& ar) {
-        ar(m_transformation, print_volume_state, printable, auto_drop, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized);
+        ar(m_transformation, print_volume_state, printable, auto_drop, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized, production_id);
     }
 };
 
@@ -1932,6 +1935,14 @@ bool model_has_advanced_features(const Model &model);
 // slot_relocations maps the author's zero-based slot number to its final zero-based slot;
 // entries are applied simultaneously (no chained lookups), untouched slots keep everything.
 void remap_model_filament_slots(Model &model, const std::map<int, int> &slot_relocations);
+void remap_object_filament_slots(ModelObject &object, const std::map<int, int> &slot_relocations);
+
+// Object, volume and height-range settings holding one-based filament slot numbers.
+inline constexpr const char* object_filament_keys[] = {
+    "extruder", "support_filament", "support_interface_filament",
+    "outer_wall_filament_id", "inner_wall_filament_id", "sparse_infill_filament_id",
+    "internal_solid_filament_id", "top_surface_filament_id", "bottom_surface_filament_id"
+};
 
 #ifndef NDEBUG
 // Verify whether the IDs of Model / ModelObject / ModelVolume / ModelInstance / ModelMaterial are valid and unique.

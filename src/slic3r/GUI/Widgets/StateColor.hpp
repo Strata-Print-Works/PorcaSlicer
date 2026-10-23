@@ -57,7 +57,7 @@ public:
 
     // operator==
     bool operator==(StateColor const& other) const{
-        return statesList_ == other.statesList_ && colors_ == other.colors_ && takeFocusedAsHovered_ == other.takeFocusedAsHovered_;
+        return statesList_ == other.statesList_ && colors_ == other.colors_ && takeFocusedAsHovered_ == other.takeFocusedAsHovered_ && mapDarkMode_ == other.mapDarkMode_;
     };
 
     // operator!=
@@ -92,6 +92,9 @@ public:
 
     void setTakeFocusedAsHovered(bool set);
 
+    // Resolved token colors are reapplied by their owner's theme hook.
+    static StateColor resolved(StateColor color) { color.mapDarkMode_ = false; return color; }
+
 private:
     template<typename Color, typename ...Colors>
     void fill(std::pair<Color, int> color, std::pair<Colors, int>... colors) {
@@ -111,6 +114,7 @@ private:
     std::vector<int> statesList_;
     std::vector<wxColour> colors_;
     bool takeFocusedAsHovered_ = true;
+    bool mapDarkMode_ = true;
 };
 
 #endif // !slic3r_GUI_StateColor_hpp_

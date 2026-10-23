@@ -1,0 +1,10 @@
+@import url("porca-theme.css");
+
+html, body, body.dark-mode, .container { background: var(--porca-surface); color: var(--porca-ink); }
+html.darkmode table, table { color: var(--porca-ink); }
+th, td, html.darkmode th, html.darkmode td, body.dark-mode th, body.dark-mode td { border-color: var(--porca-line-control); }
+thead th, html.darkmode thead th, body.dark-mode thead th { background: var(--porca-surface-raised); color: var(--porca-ink); }
+input, button { font: inherit; accent-color: var(--porca-accent-ink); }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--porca-focus); outline-offset: 2px; }
+::selection { background: var(--porca-accent); color: var(--porca-on-accent); }
+a, .auto-calc-link { color: var(--porca-accent-ink); }

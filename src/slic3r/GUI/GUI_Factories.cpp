@@ -1,3 +1,4 @@
+#include "PlateLayoutDialog.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/PresetBundle.hpp"
@@ -32,6 +33,7 @@
 #include <wx/dataview.h>
 #include <wx/string.h>
 #include <wx/event.h>
+#include <wx/weakref.h>
 #include <cstddef>
 #include <boost/filesystem/path.hpp>
 #include "libslic3r/Utils.hpp"
@@ -619,16 +621,16 @@ wxMenu* MenuFactory::append_submenu_add_generic(wxMenu* menu, ModelVolumeType ty
 const std::vector<MenuFactory::HandyModel>& MenuFactory::handy_models()
 {
     static const std::vector<HandyModel> models = {
-        {"orca_cube",           L("Orca Cube"),           {"OrcaCube_v2.drc", "OrcaPlug_v2.drc"},                    true},
-        {"orcasliced_combo",    L("OrcaSliced Combo"),    {"OrcaSliced.3mf", "OrcaCube_v2.drc", "OrcaPlug_v2.drc"},  true},
-        {"orca_badge",          L("Orca Badge"),          {"OrcaBadge.3mf"}},
-        {"orca_tolerance_test", L("Orca Tolerance Test"), {"OrcaToleranceTest.drc"}},
+        {"orca_cube",           L("Calibration Cube"),    {"OrcaCube_v2.drc", "OrcaPlug_v2.drc"},                    true},
+        {"orcasliced_combo",    L("Calibration Combo"),   {"OrcaSliced.3mf", "OrcaCube_v2.drc", "OrcaPlug_v2.drc"},  true},
+        {"orca_badge",          L("Badge Sample"),        {"OrcaBadge.3mf"}},
+        {"orca_tolerance_test", L("Tolerance Test"),      {"OrcaToleranceTest.drc"}},
         {"3dbenchy",            L("3DBenchy"),            {"3DBenchy.drc"}},
         {"cali_cat",            L("Cali Cat"),            {"calicat.drc"}},
         {"autodesk_fdm_test",   L("Autodesk FDM Test"),   {"ksr_fdmtest_v4.drc"}},
         {"voron_cube",          L("Voron Cube"),          {"Voron_Design_Cube_v7.drc"}},
         {"stanford_bunny",      L("Stanford Bunny"),      {"Stanford_Bunny.drc"}},
-        {"orca_string_hell",    L("Orca String Hell"),    {"Orca_stringhell.drc"},                                   false, true},
+        {"orca_string_hell",    L("Stringing Test"),      {"Orca_stringhell.drc"},                                   false, true},
     };
     return models;
 }
@@ -1977,6 +1979,25 @@ void MenuFactory::create_plate_menu()
 #endif
 
 
+    append_menu_item(menu, wxID_ANY, _L("Change printer…"), "",
+        [](wxCommandEvent&) {
+            const wxWeakRef<Plater> weak(plater());
+            const auto plate_id = weak->get_partplate_list().get_curr_plate()->id();
+            weak->CallAfter([weak, plate_id]() {
+                if (!weak || weak->IsBeingDeleted() || wxGetApp().is_closing() ||
+                    weak->only_gcode_mode() || weak->is_background_process_slicing()) return;
+                auto& plates = weak->get_partplate_list();
+                for (int i = 0; i < plates.get_plate_count(); ++i) {
+                    if (plates.get_plate(i)->id() != plate_id) continue;
+                    if (i != plates.get_curr_plate_index() && weak->select_plate(i) != 0) return;
+                    weak->sidebar().show_printer_picker();
+                    break;
+                }
+            });
+        }, "", nullptr, []() {
+            return !plater()->only_gcode_mode() && !plater()->is_background_process_slicing();
+        }, m_parent);
+
     // add shapes
     menu->AppendSeparator();
     wxMenu* sub_menu_primitives = append_submenu_add_generic(menu, ModelVolumeType::INVALID);
@@ -2120,6 +2141,13 @@ wxMenu* MenuFactory::multi_selection_menu()
         return nullptr;
     wxMenu* menu = new MenuWithSeparators();
     if (!multi_volume) {
+        append_menu_item(menu, wxID_ANY, _L("Align objects") + dots, _L("Align or space selected objects"),
+            [](wxCommandEvent&) { plater()->align_selection(); }, "", nullptr,
+            [] { return can_align_selection(*plater()); }, m_parent);
+        append_menu_item(menu, wxID_ANY, _L("Fill plate") + dots, _L("Fill with complete sets of the selected objects"),
+            [](wxCommandEvent&) { plater()->fill_bed_with_instances(); }, "", nullptr,
+            [] { return can_fill_plate(*plater()); }, m_parent);
+
         int index = 0;
         if (obj_list()->can_merge_to_multipart_object()) {
             append_menu_item_merge_to_multipart_object(menu);
@@ -2217,9 +2245,9 @@ void MenuFactory::append_menu_items_instance_manipulation(wxMenu* menu)
     items_set_number_of_copies[type]    = append_menu_item(menu, wxID_ANY, _L("Set number of instances") + dots, _L("Change the number of instances of the selected object"),
         [](wxCommandEvent&) { plater()->set_number_of_copies();    }, "", nullptr,
         []() { return plater()->can_increase_instances(); }, m_parent);
-    append_menu_item(menu, wxID_ANY, _L("Fill bed with instances") + dots, _L("Fill the remaining area of bed with instances of the selected object"),
+    append_menu_item(menu, wxID_ANY, _L("Fill plate") + dots, _L("Preview copies at the chosen spacing"),
         [](wxCommandEvent&) { plater()->fill_bed_with_instances();    }, "", nullptr, 
-        []() { return plater()->can_increase_instances(); }, m_parent);
+        []() { return can_fill_plate(*plater()); }, m_parent);
 }
 
 wxMenu *MenuFactory::filament_action_menu(int active_filament_menu_id) {

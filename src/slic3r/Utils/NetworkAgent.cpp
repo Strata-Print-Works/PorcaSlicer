@@ -1,11 +1,18 @@
 #include "NetworkAgent.hpp"
+#include "PrinterSessionRegistry.hpp"
 
 #include <map>
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <system_error>
+#include <thread>
 #include "libslic3r/ProjectTask.hpp"
+#include "libslic3r/Utils.hpp"
 #include <stdlib.h>
 
 #include <boost/log/trivial.hpp>
@@ -18,11 +25,95 @@
 #include "ICameraSignalingChannel.hpp"
 #include "IPrinterAgent.hpp"
 #include "BBLNetworkPlugin.hpp"
+#include "BBLPrinterAgent.hpp"
+#include "NetworkAgentFactory.hpp"
 #include "bambu_networking.hpp"
 
 namespace Slic3r {
 
 namespace {
+
+// Stamp the trusted origin into a JSON object payload without parsing and
+// re-serializing every telemetry or discovery message. The key is appended:
+// JSON readers here keep the last duplicate, so a payload cannot name its own
+// origin. Returns false for a payload that is not an object; each caller
+// decides whether to drop or forward it. Other malformed text is rejected by
+// its reader, as before.
+bool stamp_printer_agent_origin(std::string& payload, const std::string& origin_json)
+{
+    const auto first = payload.find_first_not_of(" \t\r\n");
+    const auto last = payload.find_last_not_of(" \t\r\n");
+    if (first == std::string::npos || payload[first] != '{' || payload[last] != '}') return false;
+    const bool empty = payload.find_first_not_of(" \t\r\n", first + 1) == last;
+    payload.insert(last, (empty ? "\"__porca_printer_agent_id\":" : ",\"__porca_printer_agent_id\":") + origin_json);
+    return true;
+}
+
+// Retired transports join their own workers when destroyed (a Moonraker
+// websocket read, a Bambu helper reap), which can take seconds. One owned
+// thread destroys them so the UI never waits. It runs only while work is
+// queued. Callbacks are cleared before hand-off; every NetworkAgent drains this
+// on destruction and the network module drains it before unloading, so no
+// retired transport outlives its owner or the code it calls.
+class RetiredPrinterAgents
+{
+public:
+    static RetiredPrinterAgents& instance()
+    {
+        static RetiredPrinterAgents reaper;
+        return reaper;
+    }
+    ~RetiredPrinterAgents() { drain(); }
+
+    void retire(std::shared_ptr<IPrinterAgent> agent)
+    {
+        // Still shared (a session, the factory cache, queued work): not ours to destroy.
+        if (!agent || agent.use_count() > 1) return;
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_pending.push_back(std::move(agent));
+        if (m_running) return;
+        // A finished worker cleared m_running under this lock and only returns now.
+        if (m_thread.joinable()) m_thread.join();
+        try {
+            m_thread = std::thread([this] { run(); });
+            m_running = true;
+        } catch (const std::system_error&) {
+            // Without a thread, destroy here rather than leak.
+            auto pending = std::move(m_pending);
+            m_pending.clear();
+            lock.unlock();
+        }
+    }
+
+    void drain()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (m_thread.get_id() == std::this_thread::get_id()) return; // A transport destructor.
+        m_idle.wait(lock, [this] { return !m_running; });
+        if (m_thread.joinable()) m_thread.join();
+    }
+
+private:
+    void run()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        while (!m_pending.empty()) {
+            auto batch = std::move(m_pending);
+            m_pending.clear();
+            lock.unlock();
+            batch.clear(); // Destructors run without the lock; they may retire more.
+            lock.lock();
+        }
+        m_running = false;
+        m_idle.notify_all();
+    }
+
+    std::mutex m_mutex;
+    std::condition_variable m_idle;
+    std::vector<std::shared_ptr<IPrinterAgent>> m_pending;
+    std::thread m_thread;
+    bool m_running = false;
+};
 
 template<typename Fn>
 int invoke_on_all_cloud_agents(const std::map<std::string, std::shared_ptr<ICloudServiceAgent>>& cloud_agents, Fn&& fn)
@@ -71,7 +162,14 @@ int NetworkAgent::initialize_network_module(bool using_backup, const std::string
     return BBLNetworkPlugin::instance().initialize(using_backup, version);
 }
 
-int NetworkAgent::unload_network_module() { return BBLNetworkPlugin::instance().unload(); }
+int NetworkAgent::unload_network_module()
+{
+    // A retired Bambu SDK handle is destroyed through the module's own code.
+    RetiredPrinterAgents::instance().drain();
+    return BBLNetworkPlugin::instance().unload();
+}
+
+void NetworkAgent::wait_for_retired_printer_agents() { RetiredPrinterAgents::instance().drain(); }
 
 bool NetworkAgent::is_network_module_loaded() { return BBLNetworkPlugin::instance().is_loaded(); }
 
@@ -114,8 +212,12 @@ NetworkAgent::NetworkAgent(std::shared_ptr<ICloudServiceAgent> cloud_agent, std:
 
 NetworkAgent::~NetworkAgent()
 {
-    // Note: We don't destroy the agent here anymore since it's managed by BBLNetworkPlugin singleton
-    // The singleton manages the agent lifecycle
+    // Collect IDs first: a session snapshot would keep each transport alive here.
+    std::vector<std::string> ids;
+    for (const auto& session : m_printer_sessions.sessions()) ids.push_back(session.params.dev_id);
+    for (const auto& id : ids) forget_printer_session(id);
+    apply_printer_callbacks(m_account_printer, {});
+    RetiredPrinterAgents::instance().drain();
 }
 
 void NetworkAgent::add_cloud_agent(const std::string& provider, std::shared_ptr<ICloudServiceAgent> agent)
@@ -127,24 +229,24 @@ void NetworkAgent::add_cloud_agent(const std::string& provider, std::shared_ptr<
 
 void NetworkAgent::set_printer_agent(std::shared_ptr<IPrinterAgent> printer_agent)
 {
+    auto old_printer_agent = get_printer_agent();
+    if (printer_agent == old_printer_agent) return;
     m_user_machine_list_generation.fetch_add(1);
 
-    // Disconnect all callbacks from the old agent
-    auto old_printer_agent = m_printer_agent;
-
-    m_printer_agent    = std::move(printer_agent);
-    m_printer_agent_id = m_printer_agent ? m_printer_agent->get_agent_info().id : "";
+    std::atomic_store(&m_printer_agent, std::move(printer_agent));
 
     // Disconnect the old agent's connections/threads.
-    if (old_printer_agent && old_printer_agent != m_printer_agent) {
+    bool retained = false;
+    for (const auto& session : m_printer_sessions.sessions())
+        retained = retained || session.agent == old_printer_agent;
+    if (old_printer_agent && !retained) {
         old_printer_agent->disconnect_printer();
         apply_printer_callbacks(old_printer_agent, {});
     }
 
-    if (!m_printer_agent)
-        return;
-
-    apply_printer_callbacks(m_printer_agent, m_printer_callbacks);
+    if (get_printer_agent()) refresh_printer_callbacks();
+    // A session or the factory cache may still own it; if not, it is destroyed off this thread.
+    RetiredPrinterAgents::instance().retire(std::move(old_printer_agent));
 }
 
 void* NetworkAgent::get_network_agent() { return BBLNetworkPlugin::instance().get_agent(); }
@@ -155,15 +257,133 @@ void NetworkAgent::apply_printer_callbacks(const std::shared_ptr<IPrinterAgent>&
         return;
     }
 
-    printer_agent->set_on_ssdp_msg_fn(callbacks.on_ssdp_msg_fn);
-    printer_agent->set_on_printer_connected_fn(callbacks.on_printer_connected_fn);
-    printer_agent->set_on_subscribe_failure_fn(callbacks.on_subscribe_failure_fn);
-    printer_agent->set_on_message_fn(callbacks.on_message_fn);
+    PrinterSessions::Session session;
+    for (const auto& candidate : m_printer_sessions.sessions())
+        if (candidate.agent == printer_agent) { session = candidate; break; }
+    auto connected = callbacks.on_printer_connected_fn;
+    auto subscribe_failure = callbacks.on_subscribe_failure_fn;
+    auto local_connect = callbacks.on_local_connect_fn;
+    auto local_message = callbacks.on_local_message_fn;
+    auto cloud_message = callbacks.on_message_fn;
+    const auto origin = nlohmann::json(printer_agent->get_agent_info().id).dump();
+    // Plain-string SDK notices (wait_info, update_studio, cert_expired) are not
+    // objects and carry no device state; forward them unchanged to the GUI.
+    if (cloud_message) cloud_message = [fn = cloud_message, origin](std::string id, std::string payload) {
+        stamp_printer_agent_origin(payload, origin);
+        fn(id, std::move(payload));
+    };
+    if (session.token) {
+        session.agent.reset(); // Callbacks must not own their own transport.
+        // The wrapper carries the original attempt token through the backend's
+        // queued callbacks. It never interprets a callback using the active view.
+        if (connected) connected = [session, fn = connected](std::string id) {
+            if (PrinterSessions::accepts(session, id) ||
+                (id.rfind("tunnel/", 0) == 0 && PrinterSessions::accepts(session, id.substr(7)))) fn(id);
+        };
+        // State tracking needs no UI handler, but a retired attempt needs neither.
+        if (local_connect || session.token->valid) local_connect = [session, fn = local_connect](int state, std::string id, std::string msg) {
+            if (!PrinterSessions::accepts(session, id)) return;
+            session.token->set_error(state == ConnectStatus::ConnectStatusOk ? std::string() : msg);
+            session.token->state = state == ConnectStatus::ConnectStatusOk ? PrinterControlState::connected :
+                msg == "5" ? PrinterControlState::rejected : PrinterControlState::offline;
+            if (fn) fn(state, id, msg);
+        };
+        if (subscribe_failure) subscribe_failure = [session, fn = subscribe_failure](std::string id) {
+            if (PrinterSessions::accepts(session, id)) fn(id);
+        };
+        if (local_message) local_message = [session, fn = local_message](std::string id, std::string message) {
+            if (PrinterSessions::accepts(session, id)) fn(id, message);
+        };
+    }
+    auto discovery = callbacks.on_ssdp_msg_fn;
+    // Stamp origin before GUI queuing; the selected backend may change before delivery.
+    // Discovery is only meaningful as an object, so an unattributable payload is dropped.
+    if (discovery) discovery = [fn = discovery, origin](std::string payload) {
+        if (stamp_printer_agent_origin(payload, origin)) fn(std::move(payload));
+    };
+    printer_agent->set_on_ssdp_msg_fn(discovery);
+    printer_agent->set_on_printer_connected_fn(connected);
+    printer_agent->set_on_subscribe_failure_fn(subscribe_failure);
+    printer_agent->set_on_message_fn(cloud_message);
     printer_agent->set_on_user_message_fn(callbacks.on_user_message_fn);
-    printer_agent->set_on_local_connect_fn(callbacks.on_local_connect_fn);
-    printer_agent->set_on_local_message_fn(callbacks.on_local_message_fn);
+    printer_agent->set_on_local_connect_fn(local_connect);
+    printer_agent->set_on_local_message_fn(local_message);
     printer_agent->set_queue_on_main_fn(callbacks.queue_on_main_fn);
     printer_agent->set_server_callback(callbacks.on_server_err_fn);
+}
+
+void NetworkAgent::refresh_printer_callbacks()
+{
+    const auto active_printer = get_printer_agent();
+    apply_printer_callbacks(active_printer, m_printer_callbacks);
+    for (const auto& session : m_printer_sessions.sessions())
+        if (session.agent != active_printer) apply_printer_callbacks(session.agent, m_printer_callbacks);
+    // Account messages and discovery keep one callback owner, independent of
+    // which LAN detail panel is visible. No LAN callbacks are installed here.
+    if (BBLNetworkPlugin::instance().is_loaded()) {
+        if (!m_account_printer) m_account_printer = std::make_shared<BBLPrinterAgent>();
+        auto account_callbacks = m_printer_callbacks;
+        account_callbacks.on_local_connect_fn = {};
+        account_callbacks.on_local_message_fn = {};
+        apply_printer_callbacks(m_account_printer, account_callbacks);
+    }
+}
+
+bool NetworkAgent::has_printer_session(const std::string& id) const
+{
+    return bool(m_printer_sessions.find(id).token);
+}
+
+std::shared_ptr<PrinterSessionToken> NetworkAgent::printer_session_token(const std::string& id) const
+{
+    return m_printer_sessions.find(id).token;
+}
+
+std::shared_ptr<IPrinterAgent> NetworkAgent::printer_session_agent(const std::string& id) const
+{
+    return m_printer_sessions.find(id).agent;
+}
+
+void NetworkAgent::forget_printer_session(const std::string& id)
+{
+    auto session = m_printer_sessions.remove(id);
+    if (!session.agent) return;
+    apply_printer_callbacks(session.agent, {});
+    session.agent->disconnect_printer();
+    // A replacement SDK attempt gets a fresh handle and callback storage. Queued
+    // SDK work cannot be reinterpreted using callbacks installed on an old handle.
+    NetworkAgentFactory::release_printer_agent(session.agent);
+    RetiredPrinterAgents::instance().retire(std::move(session.agent));
+}
+
+void NetworkAgent::forget_printer_sessions_for_agent(const std::string& agent_id)
+{
+    std::vector<std::string> ids;
+    for (const auto& session : m_printer_sessions.sessions())
+        if (session.agent->get_agent_info().id == agent_id) ids.push_back(session.params.dev_id);
+    for (const auto& id : ids) forget_printer_session(id);
+}
+
+bool NetworkAgent::expire_printer_session(const std::string& id)
+{
+    const auto session = m_printer_sessions.find(id);
+    if (!session.token || !session.token->expire_if_idle()) return false;
+    session.token->state = PrinterControlState::offline;
+    apply_printer_callbacks(session.agent, {});
+    session.agent->disconnect_printer();
+    NetworkAgentFactory::release_printer_agent(session.agent);
+    // Retain identity until replacement so an active view follows its new
+    // transport without selecting a different machine or changing Prepare.
+    return true;
+}
+
+std::shared_ptr<IPrinterAgent> NetworkAgent::printer_agent_for(const std::string& id) const
+{
+    const auto session = m_printer_sessions.find(id);
+    if (session.agent && session.token->valid) return session.agent;
+    // Unknown LAN targets never fall through to the active transport. Cloud
+    // APIs explicitly retain their separate, device-addressed dispatch below.
+    return nullptr;
 }
 
 std::shared_ptr<ICloudServiceAgent> NetworkAgent::get_cloud_agent(const std::string& provider) const
@@ -185,8 +405,7 @@ int NetworkAgent::set_queue_on_main_fn(QueueOnMainFn fn, const std::string& prov
     int ret = -1;
     if (cloud_agent)
         ret = cloud_agent->set_queue_on_main_fn(fn);
-    if (m_printer_agent)
-        m_printer_agent->set_queue_on_main_fn(fn);
+    refresh_printer_callbacks();
     return ret;
 }
 
@@ -446,7 +665,8 @@ int NetworkAgent::check_user_task_report(int* task_id, bool* printable, const st
 
 int NetworkAgent::get_user_print_info(unsigned int* http_code, std::string* http_body, const std::string& provider)
 {
-    const std::string request_agent_id = m_printer_agent_id;
+    const auto request_printer = get_printer_agent();
+    const std::string request_agent_id = request_printer ? request_printer->get_agent_info().id : "";
     const std::uint64_t request_generation = m_user_machine_list_generation.fetch_add(1) + 1;
     const auto cloud_agent = get_cloud_agent(provider);
     if (!cloud_agent)
@@ -737,236 +957,316 @@ int NetworkAgent::get_mw_user_4ulist(int seed, int limit, std::function<void(std
 
 int NetworkAgent::set_on_ssdp_msg_fn(OnMsgArrivedFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_ssdp_msg_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_ssdp_msg_fn(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::set_on_printer_connected_fn(OnPrinterConnectedFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_printer_connected_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_printer_connected_fn(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::set_on_subscribe_failure_fn(GetSubscribeFailureFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_subscribe_failure_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_subscribe_failure_fn(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::set_on_message_fn(OnMessageFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_message_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_message_fn(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::set_on_user_message_fn(OnMessageFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_user_message_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_user_message_fn(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::set_on_local_connect_fn(OnLocalConnectedFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_local_connect_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_local_connect_fn(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::set_on_local_message_fn(OnMessageFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_local_message_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_on_local_message_fn(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::set_server_callback(OnServerErrFn fn)
 {
+    const auto active_printer = get_printer_agent();
     m_printer_callbacks.on_server_err_fn = fn;
-    if (m_printer_agent)
-        return m_printer_agent->set_server_callback(fn);
-    return -1;
+    refresh_printer_callbacks();
+    return active_printer ? 0 : -1;
 }
 
 int NetworkAgent::send_message(std::string dev_id, std::string json_str, int qos, int flag)
 {
-    if (m_printer_agent)
-        return m_printer_agent->send_message(dev_id, json_str, qos, flag);
+    const auto active_printer = get_printer_agent();
+    auto printer = printer_agent_for(dev_id);
+    if (!printer) printer = active_printer;
+    if (printer)
+        return printer->send_message(dev_id, json_str, qos, flag);
     return -1;
+}
+
+std::shared_ptr<IPrinterAgent> NetworkAgent::command_printer(const std::string& dev_id, bool routed, int& error) const
+{
+    const auto active_printer = get_printer_agent();
+    auto printer = routed ? printer_agent_for(dev_id) : active_printer;
+    error = !printer ? -1 : printer != active_printer ? ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE : 0;
+    return error == 0 ? printer : nullptr;
 }
 
 int NetworkAgent::command_ams_refresh_rfid(std::string dev_id, int ams_id, int slot_id, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_ams_refresh_rfid(dev_id, ams_id, slot_id, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_ams_refresh_rfid(dev_id, ams_id, slot_id, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_ams_calibrate(std::string dev_id, int ams_id, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_ams_calibrate(dev_id, ams_id, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_ams_calibrate(dev_id, ams_id, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_ams_select_tray(std::string dev_id, std::string tray_id, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_ams_select_tray(dev_id, tray_id, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_ams_select_tray(dev_id, tray_id, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_start_camera(std::string dev_id)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_start_camera(dev_id);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, has_printer_session(dev_id), error);
+    return printer ? printer->command_start_camera(dev_id) : error;
 }
 
 int NetworkAgent::command_xyz_abs(std::string dev_id, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_xyz_abs(dev_id, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_xyz_abs(dev_id, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_auto_leveling(std::string dev_id, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_auto_leveling(dev_id, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_auto_leveling(dev_id, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_go_home(std::string dev_id, bool is_printing, bool supports_mqtt_homing, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_go_home(dev_id, is_printing, supports_mqtt_homing, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_go_home(dev_id, is_printing, supports_mqtt_homing, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_set_bed(std::string dev_id, int temp, bool supports_mqtt_bed_ctrl, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_set_bed(dev_id, temp, supports_mqtt_bed_ctrl, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_set_bed(dev_id, temp, supports_mqtt_bed_ctrl, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_set_nozzle(std::string dev_id, int temp, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_set_nozzle(dev_id, temp, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_set_nozzle(dev_id, temp, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::command_axis_control(std::string dev_id, std::string axis, double unit, double input_val, int speed,
                                         bool is_core_xy, bool supports_mqtt_axis_control, int sequence_id, bool lan_mode)
 {
-    if (m_printer_agent)
-        return m_printer_agent->command_axis_control(dev_id, axis, unit, input_val, speed, is_core_xy, supports_mqtt_axis_control, sequence_id, lan_mode);
-    return -1;
+    int error = 0;
+    const auto printer = command_printer(dev_id, lan_mode, error);
+    return printer ? printer->command_axis_control(dev_id, axis, unit, input_val, speed, is_core_xy, supports_mqtt_axis_control, sequence_id, lan_mode) : error;
 }
 
 int NetworkAgent::connect_printer(const PrinterConnectionParams& params)
 {
-    if (m_printer_agent)
-        return m_printer_agent->connect_printer(params);
-    return -1;
+    auto printer = get_printer_agent();
+    if (!printer || params.dev_id.empty()) return -1;
+    const auto existing = m_printer_sessions.find(params.dev_id);
+    if (existing.agent && existing.agent->get_agent_info().id == printer->get_agent_info().id)
+        printer = existing.agent;
+    // The ordinary LAN picker changes devices within the same backend too.
+    // Resolve that device's transport before acquiring a session, so the
+    // previous view's handle can never be retargeted or evict another session.
+    if (auto* bambu = dynamic_cast<BBLPrinterAgent*>(printer.get()); bambu &&
+        (!bambu->owns_device_connection() || !bambu->can_connect_to(params.dev_id) ||
+         (existing.token && (!PrinterSessions::reusable(*existing.token) || !(existing.params == params))))) {
+        if (existing.agent) NetworkAgentFactory::release_printer_agent(existing.agent);
+        printer = NetworkAgentFactory::create_printer_agent_by_id("bbl", get_cloud_agent(BBL_CLOUD_PROVIDER), data_dir(), params.dev_id);
+        if (!printer) return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+    }
+    if (printer != get_printer_agent()) set_printer_agent(printer);
+    return connect_printer(params, std::move(printer));
+}
+
+int NetworkAgent::connect_printer(const PrinterConnectionParams& params, std::shared_ptr<IPrinterAgent> printer)
+{
+    if (!printer || params.dev_id.empty()) return -1;
+    auto previous = m_printer_sessions.find(params.dev_id);
+    auto change = m_printer_sessions.acquire(std::move(printer), params);
+    if (change.reused) return 0;
+    if (previous.agent && previous.agent == get_printer_agent())
+        std::atomic_store(&m_printer_agent, change.session.agent);
+    previous = {}; // Only the reaper may hold the last reference to a retired transport.
+    for (auto& retired : change.retired) {
+        // Retrying a device on its own transport keeps that transport; the new
+        // attempt supersedes the old one. A singleton moved to another device
+        // still disconnects its previous target.
+        if (retired.agent == change.session.agent && retired.params.dev_id == params.dev_id) continue;
+        apply_printer_callbacks(retired.agent, {});
+        retired.agent->disconnect_printer();
+        NetworkAgentFactory::release_printer_agent(retired.agent);
+        RetiredPrinterAgents::instance().retire(std::move(retired.agent));
+    }
+    refresh_printer_callbacks();
+    const int result = change.session.agent->connect_printer(params);
+    if (result != 0) change.session.token->state = PrinterControlState::offline;
+    return result;
 }
 
 int NetworkAgent::disconnect_printer()
 {
-    if (m_printer_agent)
-        return m_printer_agent->disconnect_printer();
-    return -1;
+    const auto active_printer = get_printer_agent();
+    for (const auto& session : m_printer_sessions.sessions()) {
+        if (session.agent == active_printer) {
+            forget_printer_session(session.params.dev_id);
+            return 0;
+        }
+    }
+    return active_printer ? active_printer->disconnect_printer() : -1;
 }
 
 int NetworkAgent::send_message_to_printer(std::string dev_id, std::string json_str, int qos, int flag)
 {
-    if (m_printer_agent)
-        return m_printer_agent->send_message_to_printer(dev_id, json_str, qos, flag);
+    const auto active_printer = get_printer_agent();
+    if (auto printer = printer_agent_for(dev_id)) {
+        if (printer != active_printer) {
+            const auto message = nlohmann::json::parse(json_str, nullptr, false);
+            const auto is_request = [&](const char* section, const char* command) {
+                if (!message.is_object() || message.size() != 1) return false;
+                const auto part = message.find(section);
+                return part != message.end() && part->is_object() && part->contains("command") &&
+                       (*part)["command"] == command;
+            };
+            // Background sessions may only refresh status. An access-code echo
+            // would copy the saved credential into telemetry and app config.
+            if (!is_request("info", "get_version") && !is_request("pushing", "pushall"))
+                return ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE;
+        }
+        return printer->send_message_to_printer(dev_id, json_str, qos, flag);
+    }
     return -1;
 }
 
 std::string NetworkAgent::default_lan_username() const
 {
-    if (m_printer_agent)
-        return m_printer_agent->default_lan_username();
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->default_lan_username();
     return {};
 }
 
 int NetworkAgent::check_cert()
 {
-    if (m_printer_agent)
-        return m_printer_agent->check_cert();
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->check_cert();
     return -1;
 }
 
 void NetworkAgent::install_device_cert(std::string dev_id, bool lan_only)
 {
-    if (m_printer_agent)
-        m_printer_agent->install_device_cert(dev_id, lan_only);
+    const auto active_printer = get_printer_agent();
+    if (auto printer = has_printer_session(dev_id) ? printer_agent_for(dev_id) : active_printer)
+        printer->install_device_cert(dev_id, lan_only);
 }
 
 bool NetworkAgent::start_discovery(bool start, bool sending)
 {
-    if (m_printer_agent)
-        return m_printer_agent->start_discovery(start, sending);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->start_discovery(start, sending);
     return false;
 }
 
 int NetworkAgent::ping_bind(std::string ping_code)
 {
-    if (m_printer_agent)
-        return m_printer_agent->ping_bind(ping_code);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->ping_bind(ping_code);
     return -1;
 }
 
 int NetworkAgent::bind_detect(std::string dev_ip, std::string sec_link, detectResult& detect)
 {
-    if (m_printer_agent)
-        return m_printer_agent->bind_detect(dev_ip, sec_link, detect);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->bind_detect(dev_ip, sec_link, detect);
     return -1;
 }
 
 int NetworkAgent::bind(
     std::string dev_ip, std::string dev_id, std::string dev_model, std::string sec_link, std::string timezone, bool improved, OnUpdateStatusFn update_fn)
 {
-    if (m_printer_agent)
-        return m_printer_agent->bind(dev_ip, dev_id, dev_model, sec_link, timezone, improved, update_fn);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->bind(dev_ip, dev_id, dev_model, sec_link, timezone, improved, update_fn);
     return -1;
 }
 
 int NetworkAgent::unbind(std::string dev_id)
 {
-    if (m_printer_agent)
-        return m_printer_agent->unbind(dev_id);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->unbind(dev_id);
     return -1;
 }
 
 std::string NetworkAgent::get_user_selected_machine()
 {
-    if (m_printer_agent)
-        return m_printer_agent->get_user_selected_machine();
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->get_user_selected_machine();
     return "";
 }
 
 int NetworkAgent::set_user_selected_machine(std::string dev_id)
 {
+    const auto active_printer = get_printer_agent();
     BOOST_LOG_TRIVIAL(trace) << "NetworkAgent::set_user_selected_machine: dev_id=" << dev_id
-                            << " printer_agent=" << (m_printer_agent ? m_printer_agent->get_agent_info().id : "<null>");
-    if (m_printer_agent) {
-        const int result = m_printer_agent->set_user_selected_machine(dev_id);
+                            << " printer_agent=" << (active_printer ? active_printer->get_agent_info().id : "<null>");
+    if (active_printer) {
+        const int result = active_printer->set_user_selected_machine(dev_id);
         BOOST_LOG_TRIVIAL(trace) << "NetworkAgent::set_user_selected_machine: result=" << result;
         return result;
     }
@@ -976,24 +1276,27 @@ int NetworkAgent::set_user_selected_machine(std::string dev_id)
 
 int NetworkAgent::start_subscribe(std::string module)
 {
-    if (m_printer_agent)
-        return m_printer_agent->start_subscribe(std::move(module));
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->start_subscribe(std::move(module));
     return -1;
 }
 
 int NetworkAgent::stop_subscribe(std::string module)
 {
-    if (m_printer_agent)
-        return m_printer_agent->stop_subscribe(std::move(module));
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->stop_subscribe(std::move(module));
     return -1;
 }
 
 int NetworkAgent::add_subscribe(std::vector<std::string> dev_list)
 {
+    const auto active_printer = get_printer_agent();
     BOOST_LOG_TRIVIAL(trace) << "NetworkAgent::add_subscribe: count=" << dev_list.size()
-                            << " printer_agent=" << (m_printer_agent ? m_printer_agent->get_agent_info().id : "<null>");
-    if (m_printer_agent) {
-        const int result = m_printer_agent->add_subscribe(std::move(dev_list));
+                            << " printer_agent=" << (active_printer ? active_printer->get_agent_info().id : "<null>");
+    if (active_printer) {
+        const int result = active_printer->add_subscribe(std::move(dev_list));
         BOOST_LOG_TRIVIAL(trace) << "NetworkAgent::add_subscribe: result=" << result;
         return result;
     }
@@ -1003,10 +1306,11 @@ int NetworkAgent::add_subscribe(std::vector<std::string> dev_list)
 
 int NetworkAgent::del_subscribe(std::vector<std::string> dev_list)
 {
+    const auto active_printer = get_printer_agent();
     BOOST_LOG_TRIVIAL(trace) << "NetworkAgent::del_subscribe: count=" << dev_list.size()
-                            << " printer_agent=" << (m_printer_agent ? m_printer_agent->get_agent_info().id : "<null>");
-    if (m_printer_agent) {
-        const int result = m_printer_agent->del_subscribe(std::move(dev_list));
+                            << " printer_agent=" << (active_printer ? active_printer->get_agent_info().id : "<null>");
+    if (active_printer) {
+        const int result = active_printer->del_subscribe(std::move(dev_list));
         BOOST_LOG_TRIVIAL(trace) << "NetworkAgent::del_subscribe: result=" << result;
         return result;
     }
@@ -1016,93 +1320,121 @@ int NetworkAgent::del_subscribe(std::vector<std::string> dev_list)
 
 int NetworkAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    if (m_printer_agent)
-        return m_printer_agent->start_print(params, update_fn, cancel_fn, wait_fn);
+    const bool lan = params.connection_type == "lan";
+    const auto session = m_printer_sessions.find(params.dev_id);
+    PrinterSessionTransfer transfer(lan ? session.token : nullptr);
+    if (lan && !transfer) return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+    if (auto printer = lan ? session.agent : get_printer_agent())
+        return printer->start_print(params, update_fn, cancel_fn, wait_fn);
     return -1;
 }
 
 int NetworkAgent::start_local_print_with_record(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    if (m_printer_agent)
-        return m_printer_agent->start_local_print_with_record(params, update_fn, cancel_fn, wait_fn);
+    const bool lan = params.connection_type == "lan";
+    const auto session = m_printer_sessions.find(params.dev_id);
+    PrinterSessionTransfer transfer(lan ? session.token : nullptr);
+    if (lan && !transfer) return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+    if (auto printer = lan ? session.agent : get_printer_agent())
+        return printer->start_local_print_with_record(params, update_fn, cancel_fn, wait_fn);
     return -1;
 }
 
 int NetworkAgent::start_send_gcode_to_sdcard(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    if (m_printer_agent)
-        return m_printer_agent->start_send_gcode_to_sdcard(params, update_fn, cancel_fn, wait_fn);
+    const bool lan = params.connection_type == "lan";
+    const auto session = m_printer_sessions.find(params.dev_id);
+    PrinterSessionTransfer transfer(lan ? session.token : nullptr);
+    if (lan && !transfer) return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+    if (auto printer = lan ? session.agent : get_printer_agent())
+        return printer->start_send_gcode_to_sdcard(params, update_fn, cancel_fn, wait_fn);
     return -1;
 }
 
 int NetworkAgent::start_local_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn)
 {
-    if (m_printer_agent)
-        return m_printer_agent->start_local_print(params, update_fn, cancel_fn);
+    const bool lan = params.connection_type == "lan";
+    const auto session = m_printer_sessions.find(params.dev_id);
+    PrinterSessionTransfer transfer(lan ? session.token : nullptr);
+    if (lan && !transfer) return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+    if (auto printer = lan ? session.agent : get_printer_agent())
+        return printer->start_local_print(params, update_fn, cancel_fn);
     return -1;
 }
 
 int NetworkAgent::start_sdcard_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn)
 {
-    if (m_printer_agent)
-        return m_printer_agent->start_sdcard_print(params, update_fn, cancel_fn);
+    const bool lan = params.connection_type == "lan";
+    const auto session = m_printer_sessions.find(params.dev_id);
+    PrinterSessionTransfer transfer(lan ? session.token : nullptr);
+    if (lan && !transfer) return BAMBU_NETWORK_ERR_CONNECTION_TO_PRINTER_FAILED;
+    if (auto printer = lan ? session.agent : get_printer_agent())
+        return printer->start_sdcard_print(params, update_fn, cancel_fn);
     return -1;
 }
 
 FilamentSyncMode NetworkAgent::get_filament_sync_mode() const
 {
-    if (m_printer_agent)
-        return m_printer_agent->get_filament_sync_mode();
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->get_filament_sync_mode();
     return FilamentSyncMode::none;
 }
 
 bool NetworkAgent::fetch_filament_info(std::string dev_id, FilamentSyncMode sync_mode)
 {
-    if (m_printer_agent) {
-        return m_printer_agent->fetch_filament_info(dev_id, sync_mode);
+    const auto active_printer = get_printer_agent();
+    if (auto printer = has_printer_session(dev_id) ? printer_agent_for(dev_id) : active_printer) {
+        return printer->fetch_filament_info(dev_id, sync_mode);
     }
     return false;
 }
 
 std::string NetworkAgent::to_orca_filament_id(const std::string& printer_filament_id) const
 {
-    if (m_printer_agent)
-        return m_printer_agent->to_orca_filament_id(printer_filament_id);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->to_orca_filament_id(printer_filament_id);
     return printer_filament_id;
 }
 
 std::string NetworkAgent::from_orca_filament_id(const std::string& orca_filament_id) const
 {
-    if (m_printer_agent)
-        return m_printer_agent->from_orca_filament_id(orca_filament_id);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->from_orca_filament_id(orca_filament_id);
     return orca_filament_id;
 }
 
 CameraStreamMode NetworkAgent::get_camera_stream_mode() const
 {
-    if (m_printer_agent)
-        return m_printer_agent->get_camera_stream_mode();
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->get_camera_stream_mode();
     return CameraStreamMode::none;
 }
 
 std::string NetworkAgent::get_local_camera_stream_url() const
 {
-    if (m_printer_agent)
-        return m_printer_agent->get_camera_url();
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->get_camera_url();
     return {};
 }
 
 int NetworkAgent::request_bind_ticket(std::string* ticket)
 {
-    if (m_printer_agent)
-        return m_printer_agent->request_bind_ticket(ticket);
+    const auto active_printer = get_printer_agent();
+    if (active_printer)
+        return active_printer->request_bind_ticket(ticket);
     return -1;
 }
 
 int NetworkAgent::get_hms_snapshot(std::string dev_id, std::string file_name, std::function<void(std::string, int)> callback)
 {
-    if (m_printer_agent)
-        return m_printer_agent->get_hms_snapshot(dev_id, file_name, callback);
+    const auto active_printer = get_printer_agent();
+    if (auto printer = has_printer_session(dev_id) ? printer_agent_for(dev_id) : active_printer)
+        return printer->get_hms_snapshot(dev_id, file_name, callback);
     return -1;
 }
 

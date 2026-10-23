@@ -80,11 +80,19 @@ void register_fonts()
     wxFontEnumerator::InvalidateCache();
 }
 
+double font_points(double logical_pixels)
+{
+#ifdef __APPLE__
+    return logical_pixels;
+#else
+    return logical_pixels * 72.0 / 96.0;
+#endif
+}
+
 wxFont font(TypeStyle style)
 {
     const auto& token = type_token(style);
-    // CSS logical pixels are 96/inch, native point sizes are 72/inch.
-    return make_font(token.family, token.size * 72.0 / 96.0, token.weight);
+    return make_font(token.family, font_points(token.size), token.weight);
 }
 
 wxFont interface_font(double points, bool strong)

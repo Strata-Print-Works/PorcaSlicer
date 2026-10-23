@@ -255,6 +255,15 @@ void MonitorPanel::set_default()
 
     /* reset status panel*/
     m_status_info_panel->set_default();
+    if (m_media_file_panel)
+        m_media_file_panel->UpdateByObj(nullptr);
+    if (m_upgrade_panel)
+        m_upgrade_panel->update(nullptr);
+    if (m_hms_panel) {
+        m_hms_panel->clear_hms_tag();
+        m_hms_panel->update(nullptr);
+        m_tabpanel->GetBtnsListCtrl()->showNewTag(3, false);
+    }
 
     /* reset side tool*/
     //m_bitmap_wifi_signal->SetBitmap(wxNullBitmap);
@@ -397,7 +406,10 @@ void MonitorPanel::update_all()
     NetworkAgent* m_agent = wxGetApp().getAgent();
     Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
     if (!dev) return;
-    obj = dev->get_selected_machine();
+    MachineObject* selected = dev->get_selected_machine();
+    if (obj != selected)
+        set_default();
+    obj = selected;
 
     if (!obj) {
         show_status((int)MONITOR_NO_PRINTER);
@@ -491,7 +503,7 @@ bool MonitorPanel::Show(bool show)
             obj = dev->get_selected_machine();
             if (obj == nullptr) {
                 dev->load_last_machine();
-            } else {
+            } else if (!scanned_printer_control_config()) {
                 obj->reset_update_time();
             }
         }

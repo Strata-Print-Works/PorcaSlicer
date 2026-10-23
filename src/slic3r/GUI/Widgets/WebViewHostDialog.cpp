@@ -59,7 +59,7 @@ std::string host_theme_vars_css()
     s += "--orca-muted:" + css_color(muted) + ";";
     s += "--orca-border:" + css_color(border) + ";";
     s += "--orca-accent:" + css_color(accent) + ";";
-    s += "--orca-accent-fg:#ffffff;";
+    s += "--orca-accent-fg:" + css_color(wxColour(app.dark_mode() ? "#1E1E1E" : "#FAF7F2")) + ";";
     s += "--orca-font:" + (font.empty() ? std::string() : "'" + font + "',") +
          "system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;";
     s += "color-scheme:" + host_theme_name() + ";";

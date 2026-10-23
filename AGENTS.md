@@ -31,7 +31,7 @@ Read [the independent-plate design](docs/HLSD/independent-plate-setups.md) for t
 
 The user reported repeated Wi-Fi driver crashes on this Mac and explicitly restricted testing. Until the user changes that restriction:
 
-- Keep Porca and other suspect apps closed. Do not launch an older build or another fork as a workaround.
+- After each completed native UI change, the user authorizes and expects a Release rebuild and restart of Porca for visual review. Save the current project first and use this checkout's current app at `build/prototype/src/OrcaSlicer.app`; do not ask again for routine restarts. This launch authorization does not permit network tests, printer commands, or launching an older build or another fork as a workaround.
 - Do not run tests or scripts that send network packets on this Mac. Use static analysis, builds and pure/fake tests that never open real sockets.
 - Authorization to edit code, commit, push or move files does not lift this restriction.
 - Offline checks do not establish working live discovery, a resolved driver crash or physical printer qualification. Report those limits clearly. macOS build evidence does not verify the Windows or Linux build.
@@ -45,41 +45,24 @@ Preserve the discovery hardening: eligible physical LAN interfaces, bounded prob
 - `origin` currently points to the local OrcaSlicer repository; `upstream` is the original public Orca remote. Inspect remotes before pushing. A local push is not a GitHub publication, and pushing to upstream requires explicit user direction.
 - `artifacts/` holds app bundles, saved projects, device data, backups and verification records. `mockups/` holds local UI studies, and `base/` holds generated test presets. These directories and build outputs are ignored. Keep credentials, personal printer data and optional vendor binaries out of source commits.
 
-## Build Commands
+## Build and verification
 
-Build the Release configuration unless asked otherwise.
-
-```bash
-# macOS: current Porca Release build
-cmake --build build/prototype --config Release --target OrcaSlicer libslic3r_tests -j6
-
-# Linux
-cmake --build build --config Release --target all --
-
-# Windows
-cmake --build . --config Release --target ALL_BUILD -- -m
-```
-
-## Testing
-
-Catch2 framework. Tests in `tests/`; see [tests/AGENTS.md](tests/AGENTS.md) for where a new test belongs and the conventions to follow.
-
-While the current local validation restriction applies, run only inspected offline tests that never open real sockets. The verified filter for plate persistence, discovery policy and protocol parsing is:
+Build Release using the guarded wrapper. On this Mac the configured tree is `build/prototype`:
 
 ```bash
-build/prototype/tests/libslic3r/libslic3r_tests \
-  '[PlatePrintSetup],[DiscoveryPolicy],[DiscoveredPrinter]' --order rand
+python3 scripts/build_porca.py OrcaSlicer libslic3r_tests slic3rutils_tests porca_unit_tests
+python3 scripts/verify_offline.py all
 ```
 
-Run tests that generate local presets from an isolated temporary working directory, using the absolute path to the executable. Rebuild after moving a checkout: some test fixtures have their source path compiled into the executable. Add targeted format and actual slicing regressions when the change requires them, after confirming they remain offline. Do not run a blanket suite without checking it against the current restriction.
+For another configured tree, pass `--build-dir <path>` to both scripts. Local builds sharing a configured tree must use the wrapper; direct `cmake --build` and Ninja commands bypass its lock and must not overlap.
 
-The usual suite commands, subject to that restriction, are:
+The verification runner only runs existing binaries and explicitly listed offline test groups. It never configures, builds, installs dependencies or launches Porca. Rebuild affected targets first; results describe the binaries tested, not proof that they match unbuilt edits. Use `--list` for groups or `--dry-run` to inspect a selection. See [local builds and verification](docs/development-builds.md) for prerequisites, cache diagnostics and live toolbar styling.
 
-```bash
-cd build && ctest -C Release --output-on-failure    # all tests
-ctest --test-dir ./tests/libslic3r -C Release       # individual suite
-ctest --test-dir ./tests/fff_print -C Release
-```
+For panel allocation, filament totals, slice queue or discovery policy logic, build `porca_unit_tests` and run `python3 scripts/verify_offline.py quick` first. This small target reuses pure tests without linking the application libraries; full integration coverage remains in the existing groups.
+
+Do not run blanket suites under the current restriction. `scripts/run_unit_tests.sh` can install dependencies and run network tests. `scripts/run_clang_tidy.sh` can fetch and install even when used for static analysis; `--no-fetch` alone does not make it offline. Use an existing compile database and local tools as described in the build guide.
+
+Catch2 conventions and test placement are in [tests/AGENTS.md](tests/AGENTS.md). Rebuild after moving a checkout: some fixtures have source paths compiled into the executable. Add targeted format and actual slicing regressions when required, after inspecting their setup and dependencies for network activity. The runner does not replace those additional checks.
 
 ## Documentation
 
@@ -92,9 +75,8 @@ ctest --test-dir ./tests/fff_print -C Release
 
 - C++17, selective C++20. PascalCase classes, snake_case functions/variables
 - `#pragma once` for headers. Smart pointers and RAII preferred
-- Include what you use: include the header for every symbol a file uses, and keep headers compilable on their own. Never rely on the precompiled header or a transitive include. The `clang-tidy` CI job enforces this on changed lines; run the same check locally with `scripts/run_clang_tidy.sh` (`scripts\run_clang_tidy.ps1` on Windows), which sets up everything it needs
+- Include what you use: include the header for every symbol a file uses, and keep headers compilable on their own. Never rely on the precompiled header or a transitive include. The `clang-tidy` CI job enforces this on changed lines; local checks must follow the offline workflow in the build guide.
 - Parallelization via TBB — be mindful of shared state
-- Always use `SetSizerAndFit(sizer)` instead of `SetSizer(sizer)` on top level window. Unless `SetSizer` must be called before the full layout is built, call `sizer->SetSizeHints(window)` afterwards in this case.
 
 ## Key Entry Points
 
@@ -121,36 +103,13 @@ ctest --test-dir ./tests/fff_print -C Release
 - Keep code concise and clear. Manually simplify AI generated bloated codes before review.
 - Include targeted tests or documented verification for behavior changes, especially in slicing logic, profiles, formats, and GUI defaults.
 - For profile changes (`resources/profiles/<Vendor>/**`), check that `version` in the sibling `resources/profiles/<Vendor>.json` was bumped.
-- For translation changes (`localization/i18n/**/*.po`), check that recurring terms match the [Localization glossary](https://github.com/OrcaSlicer/OrcaSlicer_WIKI/blob/main/developer_reference/localization_glossary.md) for that language.
+- For translation changes, follow the glossary and preservation rules in [localization/AGENTS.md](localization/AGENTS.md).
 
-## Localization & translations
+## Scoped guidance
 
-Catalogs live in `localization/i18n/<lang>/OrcaSlicer_<lang>.po`; the template is `OrcaSlicer.pot`.
-See the [Localization guide](https://github.com/OrcaSlicer/OrcaSlicer_WIKI/blob/main/developer_reference/localization_guide.md) for the human-facing version of these principles.
-
-### Terminology
-
-- Use the [Localization glossary](https://github.com/OrcaSlicer/OrcaSlicer_WIKI/blob/main/developer_reference/localization_glossary.md) as the source of truth for recurring terms, so the same English term is always rendered the same way within a language, and terms that must stay in English (brand/product names, acronyms, materials, file formats, G-code tokens, macros/variables/identifiers) are not translated.
-- If a term's established translation changes, update both the affected `.po` files and the glossary (`localization_glossary.tsv`, then regenerate) so they stay in sync.
-- Translate the *meaning*, not the words. Check what the string actually controls before translating it — English reuses one word for different things. `Flow ratio` (multiplier), `Flow Rate` (throughput) and `Flow Dynamics` (pressure compensation) are three different terms; `extruder` may mean the toolhead, the feeder motor, or the nozzle depending on the string.
-- Reuse one template per recurring message shape (`Failed to connect to …`, `Are you sure you want to …?`), even where the English wording varies.
-
-### Editing rules
-
-- Only edit `msgstr` — **never** change `msgid`, and never "fix" wrong English in the translation alone. Report the source string instead.
-- Preserve exactly: placeholders (`%s`, `%d`, `%1%`, `%zu`, `%%`), every `\n` (count *and* position, including leading/trailing), leading/trailing spaces, HTML tags, `℃`, and the file's encoding and line endings.
-- **Never reorder positional arguments** in a `c-format` string. If the msgid is `%d` then `%s`, that order must hold — swapping them breaks at runtime.
-- `msgctxt` separates homonyms — always read it. `Back`/`Camera View` is the rear view of the 3D navigator, while `Back`/`Navigation` is the go-back button; `Top` exists in the *Alignment*, *Layers* and *Camera View* senses.
-- When a string needs disambiguating, add context in the source (`_L_CONTEXT`/`_u8L_CONTEXT`), don't work around it in the translation.
-- A literal `%` inside a string xgettext flagged `possible-c-format` will fail `msgfmt`. Fix it with a `// xgettext:no-c-format, no-boost-format` comment above the string in the source — do not mangle the translation or use `%%` in text that is never passed through printf.
-- Plural entries: read `nplurals` from the catalog's `Plural-Forms` header (it is **not** always 2 — ja/ko/zh/th/vi use 1, ru/cs/pl/lt use 3, uk uses 4). Each form must be genuinely inflected for its quantity; repeating one sentence across all forms is a bug in Slavic/Baltic languages, though it is correct for Turkish and Hungarian.
-- An entry whose `msgstr` equals its `msgid` is untranslated even though it is not empty; a plural entry with any empty form is likewise incomplete.
-- Mark machine-produced translations with an `# AI Translated` translator comment. Don't add it to a human translation you didn't actually rewrite.
-- When you can't be sure of a machine translation's meaning or UI wording, also add `# Needs human review: <what to check>`. Never use `fuzzy` for this — fuzzy entries are hidden from users.
-- Don't reflow or re-wrap unrelated entries — keep the diff limited to the strings you changed.
-
-### Verifying
-
-- `scripts/run_gettext.bat --full` (Windows) regenerates the template, merges every catalog and compiles the `.mo` files. It must exit 0.
-- Or check a single catalog with `msgfmt --check-format -o <out>.mo localization/i18n/<lang>/OrcaSlicer_<lang>.po`.
-- Fuzzy entries are not shown to users. If you correct one, clear its `fuzzy` flag, otherwise the fix never ships.
+- Start with [the feature map](docs/feature-map.md) to find implementation owners, design constraints and verification groups.
+- GUI work: [src/slic3r/GUI/AGENTS.md](src/slic3r/GUI/AGENTS.md) and its linked wxWidgets skill.
+- Tests: [tests/AGENTS.md](tests/AGENTS.md).
+- Translation catalogs: [localization/AGENTS.md](localization/AGENTS.md). Also read it when changing translation extraction or disambiguation in source.
+- System profiles: [.claude/skills/orca-profiles/SKILL.md](.claude/skills/orca-profiles/SKILL.md).
+- Keep shared instructions here or in the relevant scoped file; `CLAUDE.md` files only import them.

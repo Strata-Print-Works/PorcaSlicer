@@ -284,6 +284,7 @@ public:
 
     virtual void msw_rescale();
     virtual void sys_color_changed();
+    void apply_compact_sidebar();
 
     bool get_enter_pressed() const { return bEnterPressed; }
     void set_enter_pressed(bool pressed) { bEnterPressed = pressed; }

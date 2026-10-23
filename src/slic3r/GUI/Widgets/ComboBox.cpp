@@ -3,6 +3,7 @@
 
 #include "slic3r/GUI/Widgets/TextInput.hpp"
 #include <utility>
+#include <functional>
 #include "slic3r/GUI/Widgets/DropDown.hpp"
 #include <wx/clntdata.h>
 #include <vector>
@@ -59,6 +60,7 @@ ComboBox::ComboBox(wxWindow *parent,
     text_off = style & CB_NO_TEXT;
     TextInput::Create(parent, "", value, (style & CB_NO_DROP_ICON) ? "" : "drop_down", pos, size,
                       style | wxTE_PROCESS_ENTER);
+    SetSidebarDropdown((style & CB_NO_DROP_ICON) == 0);
     drop.Create(this, style & DD_STYLE_MASK);
 
     if (style & wxCB_READONLY) {
@@ -218,6 +220,8 @@ wxString ComboBox::GetTextLabel() const
 
 bool ComboBox::SetFont(wxFont const& font)
 {
+    if (HasSidebarStyle())
+        return TextInput::SetFont(font);
     if (GetTextCtrl() && GetTextCtrl()->IsShown())
         return GetTextCtrl()->SetFont(font);
     else
@@ -304,7 +308,7 @@ void ComboBox::ForceDropdownOpen()
 
 void ComboBox::CloseDropdown()
 {
-    if (drop.IsShown())
+    if (drop.IsPopupShown())
         drop.DismissAndNotify();
 }
 
@@ -352,6 +356,27 @@ void ComboBox::SetItemAlias(unsigned int n, wxString const &value)
     items[n].alias = value;
 }
 
+void ComboBox::SetItemSubtitle(unsigned int n, const wxString& subtitle)
+{
+    if (n >= items.size()) return;
+    items[n].text_static_tips = subtitle;
+    drop.Invalidate();
+}
+
+void ComboBox::SetItemStatusProvider(unsigned int n, std::function<DropDown::ItemStatus()> provider)
+{
+    if (n >= items.size()) return;
+    items[n].status_provider = std::move(provider);
+    drop.Invalidate();
+}
+
+void ComboBox::SetPrinterPopupItemLabel(unsigned int n, const wxString& label)
+{
+    if (n >= items.size()) return;
+    items[n].popup_label = label;
+    drop.Invalidate();
+}
+
 wxBitmap ComboBox::GetItemBitmap(unsigned int n) { return items[n].icon; }
 
 void ComboBox::SetItemBitmap(unsigned int n, wxBitmap const &bitmap)
@@ -397,7 +422,10 @@ void ComboBox::mouseDown(wxMouseEvent &event)
 
     SetFocus();
     if (drop_down) {
-        drop.Hide();
+        if (drop.HasPrinterPopupStyle())
+            drop.DismissAndNotify();
+        else
+            drop.Hide();
     } else if (drop.HasDismissLongTime()) {
         drop.autoPosition();
         drop_down = true;
@@ -421,6 +449,11 @@ void ComboBox::mouseWheelMoved(wxMouseEvent &event)
 
 void ComboBox::keyDown(wxKeyEvent& event)
 {
+    if (drop.HasPrinterPopupStyle() &&
+        (event.GetKeyCode() == WXK_UP || event.GetKeyCode() == WXK_DOWN)) {
+        ForceDropdownOpen();
+        return;
+    }
     switch (event.GetKeyCode()) {
         case WXK_RETURN:
         case WXK_SPACE:
@@ -461,7 +494,10 @@ void ComboBox::keyDown(wxKeyEvent& event)
 void ComboBox::onMove(wxMoveEvent &event)
 {
     event.Skip();
-    drop.Hide();
+    if (drop.HasPrinterPopupStyle())
+        CloseDropdown();
+    else
+        drop.Hide();
 }
 
 void ComboBox::OnEdit()

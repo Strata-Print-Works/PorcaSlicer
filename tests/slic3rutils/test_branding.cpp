@@ -7,6 +7,7 @@
 #include "slic3r/GUI/ToolbarStyle.hpp"
 #include <vector>
 #include <string>
+#include <utility>
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 
 namespace Brand = Slic3r::GUI::Branding;
@@ -60,6 +61,21 @@ TEST_CASE("Native text stays readable through repeated theme changes", "[Brandin
 }
 
 namespace DS = Slic3r::GUI::DesignSystem;
+
+TEST_CASE("Resolved sidebar palettes preserve exact colors without changing legacy mapping", "[DesignSystem]")
+{
+    RestoreLightTheme restore;
+    StateColor legacy(std::make_pair(wxColour("#FF7B7B"), static_cast<int>(StateColor::Focused)),
+                      std::make_pair(wxColour("#FFFFFF"), static_cast<int>(StateColor::Normal)));
+    auto resolved = StateColor::resolved(legacy);
+    CHECK(resolved != legacy);
+    for (bool dark : {false, true, false}) {
+        StateColor::SetDarkMode(dark);
+        CHECK(resolved.colorForStates(StateColor::Normal) == wxColour("#FFFFFF"));
+        CHECK(resolved.colorForStates(StateColor::Focused) == wxColour("#FF7B7B"));
+        CHECK(legacy.colorForStates(StateColor::Normal) == StateColor::darkModeColorFor(wxColour("#FFFFFF")));
+    }
+}
 
 TEST_CASE("Porca tokens retain distinct light and dark roles", "[DesignSystem]")
 {

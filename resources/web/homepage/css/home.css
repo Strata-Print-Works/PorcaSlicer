@@ -590,7 +590,7 @@ body
 
 .MenuItem:hover
 {
-	border-color: #009688;		/*ORCA color*/
+	border-color: var(--porca-accent-ink, #B43F48);		/*ORCA color*/
 	background-color: #E5F0EE; /*ORCA color with %25 opacity*/
 }
 
@@ -774,7 +774,7 @@ body
 	font-size: 10px;
 	font-weight: 600;
 	color: #FFFFFF;
-	background-color: #009688;
+	background-color: var(--porca-accent-ink, #B43F48);
 	border-radius: 2px;
 	white-space: nowrap;
 }
@@ -811,7 +811,7 @@ body
 .CT_Item:hover
 {
 	cursor: pointer;
-	background-color:#009688; /*ORCA color*/
+	background-color:var(--porca-accent-ink, #B43F48); /*ORCA color*/
 	border-radius: 4px;
 	color: #fff;
 }
@@ -1047,7 +1047,7 @@ body
 #HotModel_RIGHT_Title:hover
 {
 	cursor: pointer;	
-	color:#009688;	
+	color:var(--porca-accent-ink, #B43F48);
 }
 
 .HotModelPiece

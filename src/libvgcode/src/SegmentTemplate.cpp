@@ -34,12 +34,28 @@ static constexpr const std::array<uint16_t, 24> INDEX_DATA = {
     5, 7, 6, // back spike
 };
 
+// Keep the eight shared corners per segment, but give each GPU instance enough
+// vertices to fill a workgroup instead of dispatching millions of tiny instances.
+static constexpr auto BATCH_VERTICES = [] {
+    std::array<uint8_t, 8 * SegmentTemplate::SEGMENTS_PER_INSTANCE> data{};
+    for (size_t i = 0; i < data.size(); ++i)
+        data[i] = VERTEX_DATA[i % VERTEX_DATA.size()];
+    return data;
+}();
+static constexpr auto BATCH_INDICES = [] {
+    std::array<uint16_t, 24 * SegmentTemplate::SEGMENTS_PER_INSTANCE> data{};
+    for (size_t i = 0; i < data.size(); ++i)
+        data[i] = static_cast<uint16_t>(8 * (i / INDEX_DATA.size()) + INDEX_DATA[i % INDEX_DATA.size()]);
+    return data;
+}();
+static_assert(BATCH_VERTICES.size() <= 65536, "Segment batch indices must fit in 16 bits");
+
 void SegmentTemplate::init()
 {
     if (m_vao_id != 0)
         return;
 
-    m_size_in_bytes_gpu += VERTEX_DATA.size() * sizeof(uint8_t) + INDEX_DATA.size() * sizeof(uint16_t);
+    m_size_in_bytes_gpu += BATCH_VERTICES.size() * sizeof(uint8_t) + BATCH_INDICES.size() * sizeof(uint16_t);
 
     int curr_vertex_array;
     glsafe(glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &curr_vertex_array));
@@ -51,7 +67,7 @@ void SegmentTemplate::init()
 
     glsafe(glGenBuffers(1, &m_vbo_id));
     glsafe(glBindBuffer(GL_ARRAY_BUFFER, m_vbo_id));
-    glsafe(glBufferData(GL_ARRAY_BUFFER, VERTEX_DATA.size() * sizeof(uint8_t), VERTEX_DATA.data(), GL_STATIC_DRAW));
+    glsafe(glBufferData(GL_ARRAY_BUFFER, BATCH_VERTICES.size() * sizeof(uint8_t), BATCH_VERTICES.data(), GL_STATIC_DRAW));
     glsafe(glEnableVertexAttribArray(0));
 #ifdef ENABLE_OPENGL_ES
     glsafe(glVertexAttribPointer(0, 1, GL_UNSIGNED_BYTE, GL_FALSE, 0, (const void*)0));
@@ -63,7 +79,7 @@ void SegmentTemplate::init()
     // and restored together with the vao.
     glsafe(glGenBuffers(1, &m_ibo_id));
     glsafe(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ibo_id));
-    glsafe(glBufferData(GL_ELEMENT_ARRAY_BUFFER, INDEX_DATA.size() * sizeof(uint16_t), INDEX_DATA.data(), GL_STATIC_DRAW));
+    glsafe(glBufferData(GL_ELEMENT_ARRAY_BUFFER, BATCH_INDICES.size() * sizeof(uint16_t), BATCH_INDICES.data(), GL_STATIC_DRAW));
 
     glsafe(glBindBuffer(GL_ARRAY_BUFFER, curr_array_buffer));
     glsafe(glBindVertexArray(curr_vertex_array));
@@ -96,8 +112,8 @@ void SegmentTemplate::render(size_t count)
     glsafe(glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &curr_vertex_array));
 
     glsafe(glBindVertexArray(m_vao_id));
-    glsafe(glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(INDEX_DATA.size()), GL_UNSIGNED_SHORT,
-                                   nullptr, static_cast<GLsizei>(count)));
+    glsafe(glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(BATCH_INDICES.size()), GL_UNSIGNED_SHORT,
+                                   nullptr, static_cast<GLsizei>((count + SEGMENTS_PER_INSTANCE - 1) / SEGMENTS_PER_INSTANCE)));
     glsafe(glBindVertexArray(curr_vertex_array));
 }
 

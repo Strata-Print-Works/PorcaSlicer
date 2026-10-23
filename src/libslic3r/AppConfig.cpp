@@ -59,7 +59,9 @@ using namespace nlohmann;
 
 namespace Slic3r {
 
-static const std::string VERSION_CHECK_URL = "https://check-version.orcaslicer.com/latest";
+// Porca releases must have their own update feed. An inherited Orca feed
+// advertises unrelated versions and displays upstream text as Porca notes.
+static const std::string VERSION_CHECK_URL;
 static const std::string PROFILE_UPDATE_URL = "https://check-version.orcaslicer.com/profile";
 
 constexpr const char* CONFIG_ORCA_UPDATER_URL = "orca_updater_url";
@@ -248,12 +250,21 @@ void AppConfig::set_defaults()
     // picked last, any other value is a fixed view type name, see GCodeViewer::view_type_to_config_name().
     if (get("preview_default_view_type").empty())
         set("preview_default_view_type", "auto");
+    if (get("preview_toolpath_palette") != "high_contrast")
+        set("preview_toolpath_palette", "standard");
+    const std::string preview_color_vision = get("preview_color_vision");
+    if (preview_color_vision != "protan" && preview_color_vision != "deutan" &&
+        preview_color_vision != "tritan" && preview_color_vision != "monochrome")
+        set("preview_color_vision", "standard");
 
     if (get("filaments_area_preferred_count").empty())
         set("filaments_area_preferred_count", "10");
 
     if (get("use_perspective_camera").empty())
         set_bool("use_perspective_camera", true);
+
+    if (get("fixed_perspective_zoom").empty())
+        set_bool("fixed_perspective_zoom", false);
 
     if (get("auto_perspective").empty())
         set_bool("auto_perspective", false);
@@ -394,8 +405,10 @@ void AppConfig::set_defaults()
 //#endif
     if (get("enable_multi_machine").empty())
         set_bool("enable_multi_machine", false);
+    // New installations start with independent plates. An upgraded configuration
+    // without the setting keeps Orca's shared setup until the user enables it.
     if (get("independent_plate_setups").empty())
-        set_bool("independent_plate_setups", false);
+        set_bool("independent_plate_setups", get("version").empty());
 
     if (get("drc_bits").empty())
         set("drc_bits", DRC_BITS_DEFAULT_STR);
@@ -676,7 +689,7 @@ void AppConfig::set_defaults()
         set_bool("allow_ip_resolve", true);
 
     if (get("presets", "filament_colors").empty()) {
-        set_str("presets", "filament_colors", "#F2754E");
+        set_str("presets", "filament_colors", "#FF7B7B");
     }
 
     if (get("print", "bed_leveling").empty()) {
@@ -1899,6 +1912,8 @@ std::string AppConfig::config_path()
 std::string AppConfig::version_check_url() const
 {
     auto from_settings = get("version_check_url");
+    if (from_settings.find("check-version.orcaslicer.com") != std::string::npos)
+        return VERSION_CHECK_URL; // discard a saved override from an older Porca install
     return from_settings.empty() ? VERSION_CHECK_URL : from_settings;
 }
 

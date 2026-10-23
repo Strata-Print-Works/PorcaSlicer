@@ -17,6 +17,7 @@
 #include "libslic3r/MultiNozzleUtils.hpp"
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/PublishSettings.hpp"
+#include "libslic3r/ProductionLedger.hpp"
 
 #include "test_utils.hpp"
 
@@ -1703,6 +1704,9 @@ SCENARIO("Minimal published 3MF omits project config, preset dumps and slicer ta
         model.model_info->metadata_items[ORCA_PUBLISHED_TAG]      = "1";
         model.model_info->metadata_items[ORCA_PUBLISHED_KEYS_TAG] = R"(["layer_height","retraction_length"])";
         model.model_info->metadata_items[ORCA_PUBLISHED_CONFIG_TAG] = payload;
+        model.model_info->metadata_items[ProductionLedger::metadata_key] =
+            R"({"version":1,"project_id":"22222222-2222-2222-2222-222222222222","parts":[],"runs":[]})";
+        model.objects.front()->instances.front()->production_id = "11111111-1111-1111-1111-111111111111";
 
         ScopedTemporaryDir backup_dir("orca_min_pub");
         model.set_backup_path(backup_dir.string());
@@ -1757,6 +1761,11 @@ SCENARIO("Minimal published 3MF omits project config, preset dumps and slicer ta
                 REQUIRE(dst_model.model_info->metadata_items[ORCA_PUBLISHED_TAG] == "1");
                 REQUIRE(dst_model.model_info->metadata_items[ORCA_PUBLISHED_KEYS_TAG] == R"(["layer_height","retraction_length"])");
                 REQUIRE(dst_model.model_info->metadata_items[ORCA_PUBLISHED_CONFIG_TAG] == payload);
+            }
+            THEN("production history and part identities are left out of a published model") {
+                REQUIRE(dst_model.model_info != nullptr);
+                REQUIRE(dst_model.model_info->metadata_items.count(ProductionLedger::metadata_key) == 0);
+                REQUIRE(dst_model.objects.front()->instances.front()->production_id.empty());
             }
             THEN("the payload parses back to the published values") {
                 DynamicPrintConfig parsed_payload;
@@ -2244,4 +2253,57 @@ TEST_CASE("Loading a gcode.3mf from a stream keeps the plate's pick and pattern 
     CHECK(dst_plates.front()->pick_file == "Metadata/pick_1.png");
     CHECK(dst_plates.front()->pattern_bbox_file == "Metadata/plate_1.json");
     release_PlateData_list(dst_plates);
+}
+TEST_CASE("Production part identities and progress survive a 3MF round-trip", "[3mf][ProductionLedger]")
+{
+    Model source;
+    const std::string src_file = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+    REQUIRE(load_stl(src_file.c_str(), &source));
+    source.add_default_instances();
+    source.objects.front()->instances.front()->production_id = "11111111-1111-1111-1111-111111111111";
+    ProductionLedger ledger;
+    ledger.project_id = "22222222-2222-2222-2222-222222222222";
+    ledger.parts = {{source.objects.front()->instances.front()->production_id, "Part", 2}};
+    ledger.runs = {{"run", "Plate 1", "Printer", "2026-10-17T00:00:00Z", "manual", "accepted",
+                    {{ledger.parts.front().key, 1, 1}}}};
+    source.model_info = std::make_shared<ModelInfo>();
+    source.model_info->metadata_items[ProductionLedger::metadata_key] = ledger.serialize();
+    ScopedTemporaryDir backup_dir("porca_production");
+    source.set_backup_path(backup_dir.string());
+    ScopedTemporaryFile temp(".3mf");
+    const std::string path = temp.string();
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    StoreParams params;
+    params.path = path.c_str();
+    params.model = &source;
+    params.config = &config;
+    params.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence;
+    REQUIRE(store_bbs_3mf(params));
+
+    Model restored;
+    DynamicPrintConfig restored_config;
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    PlateDataPtrs plates;
+    std::vector<Preset*> presets;
+    bool bambu = false, orca = false;
+    Semver version;
+    REQUIRE(load_bbs_3mf(path.c_str(), &restored_config, &context, &restored, &plates,
+                         &presets, &bambu, &orca, &version, nullptr,
+                         LoadStrategy::LoadModel | LoadStrategy::LoadConfig));
+    REQUIRE(restored.objects.front()->instances.front()->production_id == ledger.parts.front().key);
+    REQUIRE(restored.model_info != nullptr);
+    const auto saved = ProductionLedger::deserialize(restored.model_info->metadata_items.at(ProductionLedger::metadata_key));
+    REQUIRE(saved.ready_total() == 1);
+    REQUIRE(saved.required_total() == 2);
+    release_PlateData_list(plates);
+
+    Model geometry_only;
+    PlateDataPtrs imported_plates;
+    std::vector<Preset*> imported_presets;
+    REQUIRE(load_bbs_3mf(path.c_str(), &restored_config, &context, &geometry_only, &imported_plates,
+                         &imported_presets, &bambu, &orca, &version, nullptr, LoadStrategy::LoadModel));
+    REQUIRE(geometry_only.objects.front()->instances.front()->production_id.empty());
+    REQUIRE(geometry_only.model_info != nullptr);
+    REQUIRE(geometry_only.model_info->metadata_items.count(ProductionLedger::metadata_key) == 0);
+    release_PlateData_list(imported_plates);
 }

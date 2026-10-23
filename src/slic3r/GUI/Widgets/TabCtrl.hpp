@@ -12,6 +12,9 @@
 #include <wx/string.h>
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include <wx/dc.h>
+#include <wx/colour.h>
+#include <optional>
+#include "slic3r/GUI/DesignTokens.hpp"
 
 wxDECLARE_EVENT(wxEVT_TAB_SEL_CHANGING, wxCommandEvent);
 wxDECLARE_EVENT(wxEVT_TAB_SEL_CHANGED, wxCommandEvent);
@@ -24,6 +27,9 @@ class TabCtrl : public StaticBox
 
     int sel = -1;
     wxFont bold;
+    wxColour sidebar_indicator;
+    // A token indicator is resolved for the current theme each time it is painted.
+    std::optional<Slic3r::GUI::DesignSystem::ColorRole> sidebar_indicator_role;
 
 public:
     TabCtrl(wxWindow* parent, wxWindowID id, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxDefaultSize, long style = 0);
@@ -57,6 +63,7 @@ public:
 
     // Show/hide the small "has selection" dot next to a tab's text.
     void SetItemIndicator(unsigned int item, bool on);
+    void EnableItem(unsigned int item, bool enabled);
 
     bool GetItemBold(unsigned int item) const;
     void SetItemBold(unsigned int item, bool bold);
@@ -67,6 +74,8 @@ public:
     void AssignImageList(wxImageList* imageList);
 
     void SetItemTextColour(unsigned int item, const StateColor& col);
+    void SetSidebarStyle(const wxColour& indicator);
+    void SetSidebarStyle(Slic3r::GUI::DesignSystem::ColorRole indicator);
 
     /* fakes */
     int GetFirstVisibleItem() const;

@@ -124,3 +124,24 @@ TEST_CASE("Web media controller tears down a snapshot lifecycle", "[WebMediaCont
     controller.Play();
     CHECK(view.page.find("http://camera.example/frame.jpg") == std::string::npos);
 }
+
+TEST_CASE("Switching snapshot cameras replaces the previous printer image", "[WebMediaController][integration]")
+{
+    StubWebView view;
+    WebMediaController controller(&view);
+    controller.set_mode(CameraStreamMode::http_snapshot);
+    controller.Load(wxURI("http://first-printer.example/frame.jpg"));
+    controller.Play();
+    REQUIRE(view.page.find("first-printer.example") != std::string::npos);
+
+    controller.Stop();
+    CHECK(view.page.empty());
+    controller.Load(wxURI("http://second-printer.example/frame.jpg"));
+    controller.Play();
+    CHECK(view.page.find("first-printer.example") == std::string::npos);
+    CHECK(view.page.find("second-printer.example") != std::string::npos);
+
+    controller.Stop();
+    CHECK(view.page.empty());
+    CHECK(view.page_base == "about:blank");
+}

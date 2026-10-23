@@ -2,7 +2,9 @@
 #include "NetworkAgent.hpp"
 
 #include <mutex>
+#include <memory>
 #include <boost/filesystem/path.hpp>
+#include <boost/nowide/convert.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <exception>
 #include <boost/filesystem/file_status.hpp>
@@ -159,6 +161,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         memset(lib_wstr, 0, sizeof(lib_wstr));
         ::MultiByteToWideChar(CP_UTF8, NULL, library_path.c_str(), strlen(library_path.c_str())+1, lib_wstr, sizeof(lib_wstr) / sizeof(lib_wstr[0]));
         m_networking_module = LoadLibrary(lib_wstr);
+        if (m_networking_module) library = library_path;
     }
 #else
     m_networking_module = dlopen(library.c_str(), RTLD_LAZY);
@@ -171,6 +174,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
             library
         );
     }
+
 #endif
 
     if (!m_networking_module) {
@@ -184,6 +188,7 @@ int BBLNetworkPlugin::initialize(bool using_backup, const std::string& version)
         return -1;
     }
 
+    m_library_path = library;
     // Load file transfer interface
     InitFTModule(m_networking_module);
 
@@ -222,7 +227,8 @@ int BBLNetworkPlugin::unload()
     // DLL dereferences the old-DLL handle -> access violation.
     destroy_agent();
 
-    UnloadFTModule();
+    // LAN instances do not own the process-wide file-transfer interface.
+    if (!m_device_instance) UnloadFTModule();
 
 #if defined(_MSC_VER) || defined(_WIN32)
     if (m_networking_module) {
@@ -291,9 +297,15 @@ void* BBLNetworkPlugin::create_agent(const std::string& log_dir)
         return m_agent;
     }
 
-    if (m_create_agent) {
-        m_agent = m_create_agent(log_dir);
+    m_agent_error = BambuAgentError::missing_symbols;
+    if (m_create_agent && m_destroy_agent) {
+        void* handle = m_create_agent(log_dir);
+        m_agent_error = !handle ? BambuAgentError::null_handle :
+            m_agent_owner.acquire(handle, m_destroy_agent) ? BambuAgentError::none : BambuAgentError::duplicate_handle;
+        if (m_agent_error == BambuAgentError::none) m_agent = m_agent_owner.get();
     }
+    if (m_agent_error != BambuAgentError::none)
+        BOOST_LOG_TRIVIAL(error) << "Bambu agent creation failed: " << int(m_agent_error);
 
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": created agent " << m_agent;
     return m_agent;
@@ -301,12 +313,59 @@ void* BBLNetworkPlugin::create_agent(const std::string& log_dir)
 
 int BBLNetworkPlugin::destroy_agent()
 {
-    int ret = 0;
-    if (m_agent && m_destroy_agent) {
-        ret = m_destroy_agent(m_agent);
+    if (m_device_instance && m_agent) {
+        // Clear callbacks before the SDK joins its owned workers. Never clear
+        // account callbacks or another device's callbacks during this teardown.
+        if (m_set_on_local_connect_fn) m_set_on_local_connect_fn(m_agent, {});
+        if (m_set_on_local_message_fn) m_set_on_local_message_fn(m_agent, {});
+        if (m_set_on_printer_connected_fn) m_set_on_printer_connected_fn(m_agent, {});
+        if (m_set_on_message_fn) m_set_on_message_fn(m_agent, {});
+        if (m_set_on_user_message_fn) m_set_on_user_message_fn(m_agent, {});
+        if (m_set_queue_on_main_fn) m_set_queue_on_main_fn(m_agent, {});
+        if (m_disconnect_printer) m_disconnect_printer(m_agent);
     }
     m_agent = nullptr;
-    return ret;
+    return m_agent_owner.reset();
+}
+
+std::shared_ptr<BBLNetworkPlugin> BBLNetworkPlugin::create_device_plugin(const std::string& log_dir)
+{
+    if (!is_loaded() || m_network_abi == NetworkAbi::Unsupported || m_library_path.empty()) return {};
+    return load_device_plugin(m_library_path, log_dir);
+}
+
+std::shared_ptr<BBLNetworkPlugin> BBLNetworkPlugin::load_device_plugin(const std::string& library_path, const std::string& log_dir, BambuAgentError* error)
+{
+    auto fail = [error](BambuAgentError reason) -> std::shared_ptr<BBLNetworkPlugin> {
+        if (error) *error = reason;
+        return {};
+    };
+    if (error) *error = BambuAgentError::none;
+    auto device = std::shared_ptr<BBLNetworkPlugin>(new BBLNetworkPlugin,
+                                                   [](BBLNetworkPlugin* plugin) { delete plugin; });
+    device->m_device_instance = true;
+    // A loader reference keeps all function pointers valid until this device's
+    // SDK agent has been destroyed, even if the account plugin is hot-reloaded.
+#if defined(_MSC_VER) || defined(_WIN32)
+    const auto path = boost::nowide::widen(library_path);
+    device->m_networking_module = LoadLibraryW(path.c_str());
+#else
+    device->m_networking_module = dlopen(library_path.c_str(), RTLD_LAZY);
+#endif
+    if (!device->m_networking_module) return fail(BambuAgentError::library_load);
+    device->m_library_path = library_path;
+    device->load_all_function_pointers();
+    device->m_network_abi = network_plugin_abi(device->m_get_version ? device->m_get_version() : std::string());
+    if (device->m_network_abi == NetworkAbi::Unsupported) return fail(BambuAgentError::unsupported_version);
+    if (!device->m_connect_printer || !device->m_disconnect_printer || !device->m_send_message_to_printer ||
+        !device->m_set_on_local_connect_fn || !device->m_set_on_local_message_fn || !device->m_start) return fail(BambuAgentError::missing_symbols);
+    // A singleton-returning SDK fails closed here: acquire refuses to own or
+    // destroy the account's (or another device's) existing opaque handle.
+    if (!device->create_agent(log_dir)) return fail(device->m_agent_error);
+    // Match the account context: disable vendor analytics before start() can
+    // create any workers. Do not remove files shared with account services.
+    if (device->m_track_enable) device->m_track_enable(device->m_agent, false);
+    return device;
 }
 
 // ============================================================================

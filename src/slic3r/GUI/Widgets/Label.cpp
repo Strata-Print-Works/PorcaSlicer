@@ -1,5 +1,7 @@
+#include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Utils.hpp"
 #include "Label.hpp"
+#include "../GUI_App.hpp"
 #include "../Typography.hpp"
 #include "StaticBox.hpp"
 #include <wx/font.h>
@@ -21,9 +23,25 @@
 #include <boost/log/trivial.hpp>
 #include <wx/string.h>
 #include <wx/stattext.h>
+#include <wx/app.h>
 #ifdef __linux__
 #include <fontconfig/fontconfig.h>
 #endif
+
+namespace {
+// The interface language chooses the face, not the OS locale. Fonts are created
+// before the translation loads, so read the saved choice; until one is saved the
+// application follows the system language as well.
+wxString interface_language()
+{
+    if (const auto* app = dynamic_cast<const Slic3r::GUI::GUI_App*>(wxApp::GetInstance()); app && app->app_config) {
+        const std::string code = app->app_config->get("language");
+        if (!code.empty()) return wxString::FromUTF8(code);
+    }
+    const auto* language = wxLocale::GetLanguageInfo(wxLocale::GetSystemLanguage());
+    return language ? language->CanonicalName : wxString();
+}
+} // namespace
 
 
 wxFont Label::sysFont(int size, bool bold)
@@ -36,16 +54,13 @@ wxFont Label::sysFont(int size, bool bold)
 #endif
 
     wxString face = "HarmonyOS Sans SC";
-    const auto* language = wxLocale::GetLanguageInfo(wxLocale::GetSystemLanguage());
-    const bool cjk = language && (language->CanonicalName.StartsWith("zh") ||
-        language->CanonicalName.StartsWith("ja") || language->CanonicalName.StartsWith("ko"));
-    if (!cjk)
+    const wxString language = interface_language();
+    const bool korean = language.StartsWith("ko");
+    if (!language.StartsWith("zh") && !language.StartsWith("ja") && !korean)
         return Slic3r::GUI::DesignSystem::interface_font(size, bold);
 
-    // Check if the current locale is Korean
-    if (wxLocale::GetSystemLanguage() == wxLANGUAGE_KOREAN) {
+    if (korean)
         face = "NanumGothic";
-    }
 
     wxFont font{size, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL, false, face};
     font.SetFaceName(face);

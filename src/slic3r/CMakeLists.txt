@@ -62,6 +62,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Typography.cpp
     GUI/ToolbarStyle.hpp
     GUI/ToolbarStyle.cpp
+    GUI/LiveToolbarStyle.hpp
+    GUI/LiveToolbarStyle.cpp
     GUI/Branding.hpp
     GUI/BitmapComboBox.cpp
     GUI/BitmapComboBox.hpp
@@ -99,6 +101,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/CameraUtils.hpp
     GUI/CloneDialog.cpp
     GUI/CloneDialog.hpp
+    GUI/PlateLayoutDialog.cpp
+    GUI/PlateLayoutDialog.hpp
+    GUI/PlateTransfer.cpp
+    GUI/PlateTransfer.hpp
+    GUI/FilamentUsageReport.cpp
+    GUI/FilamentUsageReport.hpp
     GUI/ConfigManipulation.cpp
     GUI/ConfigManipulation.hpp
     GUI/ConfigValueFormatter.cpp
@@ -111,6 +119,9 @@ set(SLIC3R_GUI_SOURCES
     GUI/PrinterScanDialog.cpp
     GUI/PrinterScanDialog.hpp
     Utils/PrinterDiscovery.cpp
+    Utils/PrinterConnectionStatus.cpp
+    Utils/PrinterConnectionStatus.hpp
+    Utils/PrinterSessionRegistry.hpp
     Utils/PrinterDiscovery.hpp
     GUI/CreatePresetsDialog.cpp
     GUI/CreatePresetsDialog.hpp
@@ -135,6 +146,7 @@ set(SLIC3R_GUI_SOURCES
     GUI/PluginsDialog.hpp
     GUI/Shortcuts.cpp
     GUI/Shortcuts.hpp
+    GUI/SelectAllSequence.hpp
     GUI/SpeedDialDialog.cpp
     GUI/SpeedDialDialog.hpp
     GUI/ActionRegistry.cpp
@@ -178,6 +190,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/format.hpp
     GUI/GCodeViewer.cpp
     GUI/GCodeViewer.hpp
+    GUI/PreviewEstimate.hpp
+    GUI/PreviewLayout.hpp
     GUI/Gizmos/GizmoObjectManipulation.cpp
     GUI/Gizmos/GizmoObjectManipulation.hpp
     GUI/Gizmos/GLGizmoAssembly.cpp
@@ -226,6 +240,7 @@ set(SLIC3R_GUI_SOURCES
     GUI/Gizmos/GLGizmoUtils.hpp
     GUI/ViewportLighting.cpp
     GUI/ViewportLightingGL.cpp
+    GUI/WorkspaceStyle.hpp
     GUI/ViewportLighting.hpp
     GUI/StudioEnvironment.cpp
     GUI/StudioEnvironment.hpp
@@ -494,6 +509,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/ProjectDirtyStateManager.cpp
     GUI/ProjectDirtyStateManager.hpp
     GUI/Project.hpp
+    GUI/ProductionPanel.cpp
+    GUI/ProductionPanel.hpp
     GUI/PublishSettingsDialog.cpp
     GUI/PublishSettingsDialog.hpp
     GUI/PurgeModeDialog.cpp
@@ -689,6 +706,8 @@ set(SLIC3R_GUI_SOURCES
     plugin/host/PluginHostBindings.hpp
     plugin/host/PluginHostApp.cpp
     plugin/host/PluginHostGeometry.cpp
+    plugin/host/PluginHostWorkspace.cpp
+    plugin/host/PluginHostWorkspace.hpp
     plugin/host/PluginHostMeasure.cpp
     plugin/host/PluginHostMesh.cpp
     plugin/host/PluginHostMesh.hpp
@@ -758,7 +777,11 @@ set(SLIC3R_GUI_SOURCES
     Utils/Duet.cpp
     Utils/Duet.hpp
     Utils/ElegooLink.cpp
+    Utils/ElegooCanvas.cpp
+    Utils/ElegooCanvas.hpp
     Utils/ElegooLink.hpp
+    Utils/ElegooLinkProtocol.hpp
+    Utils/SavedPrinterConnection.hpp
     Utils/EmbossStyleManager.cpp
     Utils/EmbossStyleManager.hpp
     Utils/ESP3D.cpp
@@ -806,10 +829,14 @@ set(SLIC3R_GUI_SOURCES
     Utils/Moonraker.hpp
     Utils/BBLCloudServiceAgent.cpp
     Utils/BBLCloudServiceAgent.hpp
+    Utils/BambuLanProcess.cpp
+    Utils/BambuLanProcess.hpp
+    Utils/BambuLanProtocol.hpp
     Utils/BBLPrinterAgent.cpp
     Utils/BBLPrinterAgent.hpp
     Utils/BBLNetworkPlugin.cpp
     Utils/BBLNetworkPlugin.hpp
+    Utils/PluginAgentOwner.hpp
     Utils/Obico.cpp
     Utils/Obico.hpp
     Utils/OctoPrint.cpp

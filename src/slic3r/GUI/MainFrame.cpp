@@ -10,10 +10,13 @@
 #include "slic3r/GUI/BBLTopbar.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
 #include <boost/lexical_cast.hpp>
+#include <boost/filesystem/path.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <optional>
 #include "slic3r/GUI/GLToolbar.hpp"
 #include "libslic3r/Preset.hpp"
 #include <functional>
+#include <iterator>
 #include <wx/busycursor.h>
 #include <cstddef>
 #include "slic3r/GUI/Project.hpp"
@@ -57,10 +60,12 @@
 #include <wx/icon.h>
 #include <wx/sizer.h>
 #include <wx/menu.h>
+#include <wx/control.h>
+#include <wx/weakref.h>
 #include <wx/string.h>
 #include <wx/progdlg.h>
 #include <wx/tooltip.h>
-//#include <wx/glcanvas.h>
+#include <wx/glcanvas.h>
 #include <wx/filename.h>
 #include <wx/debug.h>
 #include <wx/toplevel.h>
@@ -89,6 +94,7 @@
 //#include "RemovableDriveManager.hpp"
 #include "InstanceCheck.hpp"
 #include "I18N.hpp"
+#include "format.hpp"
 #include "GLCanvas3D.hpp"
 #include "Plater.hpp"
 #ifdef SLIC3R_CAD
@@ -134,7 +140,6 @@
 
 #ifdef __WXGTK__
 #include <gtk/gtk.h>
-#include <wx/glcanvas.h>
 #endif // __WXGTK__
 #include <slic3r/GUI/CreatePresetsDialog.hpp>
 #include "libslic3r/AppConfig.hpp"
@@ -204,6 +209,14 @@ bool focus_keeps_space(wxWindow* focus)
         return true; // custom composites (ComboBox, SpinInput, ...) activate with Space and are wxWindow
     if (dynamic_cast<wxControl*>(focus) && !dynamic_cast<Notebook*>(focus))
         return true; // stock button/checkbox/choice/list/etc. keep Space
+    return false;
+}
+
+bool focus_keeps_select_all(wxWindow* focus)
+{
+    for (auto* window = focus; window; window = window->GetParent())
+        if (dynamic_cast<wxTextEntryBase*>(window) || dynamic_cast<wxWebView*>(window))
+            return true;
     return false;
 }
 
@@ -797,8 +810,24 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
             }
             return;}
 #endif
-        if (!handle_global_shortcut(KeyChord::from_event(evt)))
-            evt.Skip();
+        const auto chord = KeyChord::from_event(evt);
+        if (handle_global_shortcut(chord)) return;
+        // Selecting in the sidebar or project overview must use the same gesture
+        // as the viewport. Leave actual text selection to its focused editor.
+        if (can_select() && !focus_keeps_select_all(wxWindow::FindFocus()) &&
+            wxGetApp().shortcuts().lookup(ShortcutContext::Plater, chord) == Shortcut::SelectAll) {
+            auto* canvas = m_plater->get_view3D_canvas3D()->get_wxglcanvas();
+            if (wxWindow::FindFocus() != canvas) {
+                canvas->SetFocus();
+                wxKeyEvent forwarded(evt);
+                forwarded.SetEventType(wxEVT_KEY_DOWN);
+                forwarded.SetEventObject(canvas);
+                forwarded.SetId(canvas->GetId());
+                canvas->ProcessWindowEvent(forwarded);
+                return;
+            }
+        }
+        evt.Skip();
     });
 
     Bind(wxEVT_SHOW, [](wxShowEvent &evt) {
@@ -824,7 +853,8 @@ bool MainFrame::handle_global_shortcut(const KeyChord& chord)
 
     switch (*shortcut) {
     case Shortcut::SlicePlate:
-        if (m_slice_enable) {
+        if (!m_plater->slice_batch_running() && !m_plater->is_background_process_slicing() &&
+            !m_plater->only_gcode_mode() && !m_plater->using_exported_file()) {
             wxGetApp().plater()->update(true, true);
             wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SLICE_PLATE));
             m_tabpanel->SelectPageByName(TAB_ID_PREVIEW);
@@ -1377,6 +1407,8 @@ void MainFrame::update_title_colour_after_set_title()
 
 void MainFrame::show_option(bool show)
 {
+    if (m_slice_cancel_btn)
+        m_slice_cancel_btn->Show(show && m_plater->slice_batch_running());
     if (!show) {
         if (m_slice_btn->IsShown()) {
             m_slice_btn->Hide();
@@ -1561,6 +1593,10 @@ void MainFrame::init_tabpanel() {
     m_lazy_pages.push_back(m_project_page);
     m_tabpanel->AddPage(TAB_ID_PROJECT, m_project_page, _L("Project"), "tab_auxiliary_active");
 
+    m_production_page = new LazyPage<ProductionPanel>(m_tabpanel, TAB_ID_PRODUCTION, 65);
+    m_lazy_pages.push_back(m_production_page);
+    m_tabpanel->AddPage(TAB_ID_PRODUCTION, m_production_page, _L("Production"), "tab_auxiliary_active");
+
     // show_device() removes this tab for printers without the Bambu device tab, and the page
     // then never builds its panel.
     m_calibration_page = new LazyPage<CalibrationPanel>(m_tabpanel, TAB_ID_CALIBRATION, 30);
@@ -1632,7 +1668,7 @@ void MainFrame::show_device(bool should_use_native) {
         }
         if (!m_calibration_page->in_book()) {
             m_calibration_page->Show(false);
-            m_tabpanel->InsertPage(m_tabpanel->PositionAfter({TAB_ID_PROJECT}), TAB_ID_CALIBRATION, m_calibration_page,
+            m_tabpanel->InsertPage(m_tabpanel->PositionAfter({TAB_ID_PRODUCTION, TAB_ID_PROJECT}), TAB_ID_CALIBRATION, m_calibration_page,
                                    _L("Calibration"), "tab_calibration_active");
         }
 
@@ -1683,7 +1719,7 @@ void MainFrame::show_device(bool should_use_native) {
         m_calibration_page->Show(false);
         // Last of the built-in tabs, but plugin tabs already sit past it — anchor rather than
         // append, so its position doesn't depend on the relayout() below running afterwards.
-        m_tabpanel->InsertPage(m_tabpanel->PositionAfter({TAB_ID_PROJECT}), TAB_ID_CALIBRATION, m_calibration_page,
+        m_tabpanel->InsertPage(m_tabpanel->PositionAfter({TAB_ID_PRODUCTION, TAB_ID_PROJECT}), TAB_ID_CALIBRATION, m_calibration_page,
                                _L("Calibration"), "tab_calibration_active");
 
 #ifdef _MSW_DARK_MODE
@@ -1740,7 +1776,7 @@ void MainFrame::fit_tab_labels()
 
     // Compact (last to first)
     for (size_t i = count - 1; i >= 1; --i) {
-        int right = ScreenToClient(m_slice_option_btn->ClientToScreen({})).x;
+        int right = ScreenToClient(m_slice_btn->ClientToScreen({})).x;
         int left  = sizer->GetSize().GetWidth();
         if (right - left - FromDIP(15) > 0) return;
         ctrl->SetCompact(i, true);
@@ -2245,6 +2281,15 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     m_slice_btn = new SideButton(slice_panel, _L("Slice plate"), "");
     m_slice_option_btn = new SideButton(slice_panel, "", "sidebutton_dropdown", 0, 14);
+    m_slice_option_btn->SetToolTip(_L("Choose what to slice"));
+    m_slice_cancel_btn = new ::Button(slice_panel, _L("Cancel"));
+    m_slice_cancel_btn->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
+    m_slice_cancel_btn->Hide();
+    m_slice_cancel_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event) {
+        event.Skip();
+        m_plater->cancel_slice_batch();
+        update_slice_print_status(eEventSliceUpdate);
+    });
     m_print_btn = new SideButton(print_panel, _L("Print plate"), "");
     m_print_option_btn = new SideButton(print_panel, "", "sidebutton_dropdown", 0, 14);
 
@@ -2257,8 +2302,9 @@ wxBoxSizer* MainFrame::create_side_tools()
     }
 
     auto slice_sizer = new wxBoxSizer(wxHORIZONTAL);
-    slice_sizer->Add(m_slice_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
-    slice_sizer->Add(m_slice_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
+    slice_sizer->Add(m_slice_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
+    slice_sizer->Add(m_slice_option_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
+    slice_sizer->Add(m_slice_cancel_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(8));
     slice_panel->SetSizer(slice_sizer);
 
     auto print_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -2297,7 +2343,7 @@ wxBoxSizer* MainFrame::create_side_tools()
 // in linux plateform, the pop up will taker over the mouse event and make the slice button cannot handle click event
     // this pannel is used to trigger hover when button is disabled
     slice_panel->Bind(wxEVT_ENTER_WINDOW, [this,try_hover_pop_up](auto& event) {
-        if(!m_slice_option_pop_up || !m_slice_option_pop_up->IsShown())
+        if (!m_slice_menu_open)
             try_hover_pop_up();
         });
 
@@ -2306,7 +2352,7 @@ wxBoxSizer* MainFrame::create_side_tools()
         });
 
     m_slice_btn->Bind(wxEVT_ENTER_WINDOW, [this, try_hover_pop_up](auto& event) {
-        if (!m_slice_option_pop_up || !m_slice_option_pop_up->IsShown())
+        if (!m_slice_menu_open)
             try_hover_pop_up();
         });
 
@@ -2315,35 +2361,31 @@ wxBoxSizer* MainFrame::create_side_tools()
         });
 #endif
 
-    m_slice_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
-        {
-
-            //this->m_plater->select_view_3D("Preview");
-            m_plater->exit_gizmo();
-            m_plater->update(true, true);
-
-            bool slice = true;
-
-            auto curr_plate = m_plater->get_partplate_list().get_curr_plate();
-            #ifdef __linux__
-                PresetBundle* preset = wxGetApp().preset_bundle;
-                bool force_show_fila_group_dlg        = (preset && preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2);
-                slice = try_pop_up_before_slice(m_slice_select == eSliceAll, m_plater, curr_plate, force_show_fila_group_dlg);
-            #else
-                slice = try_pop_up_before_slice(m_slice_select == eSliceAll, m_plater, curr_plate, false);
-            #endif
-
-            if (slice) {
-                if (m_slice_select == eSliceAll)
-                    wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SLICE_ALL));
-                else
-                    wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SLICE_PLATE));
-                this->m_tabpanel->SelectPageByName(TAB_ID_PREVIEW);
-            }
-        });
+    m_slice_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event) {
+        event.Skip();
+        if (!get_enable_slice_status()) return;
+        m_plater->exit_gizmo();
+        m_plater->update(true, true);
+        // Preserve the existing single-plate filament grouping prompt. Batch
+        // validation belongs to each queued plate's own setup, not the active palette.
+        if (m_plater->slice_scope() == Plater::SliceScope::Plate) {
+            auto* plate = m_plater->get_partplate_list().get_curr_plate();
+#ifdef __linux__
+            const auto* preset = wxGetApp().preset_bundle;
+            const bool force_grouping = preset && preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2;
+#else
+            const bool force_grouping = false;
+#endif
+            if (!try_pop_up_before_slice(false, m_plater, plate, force_grouping)) return;
+        }
+        m_plater->slice_selected_scope();
+        update_slice_print_status(eEventSliceUpdate);
+    });
 
     m_print_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
         {
+            event.Skip();
+            if (m_plater->slice_batch_running()) return;
             //this->m_plater->select_view_3D("Preview");
             if (m_print_select == ePrintAll || m_print_select == ePrintPlate || m_print_select == ePrintMultiMachine)
             {
@@ -2378,45 +2420,65 @@ wxBoxSizer* MainFrame::create_side_tools()
                  wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_MULTI_MACHINE));*/
         });
 
-    m_slice_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
-        {
-            if(m_slice_option_pop_up)
-                delete m_slice_option_pop_up;
-            m_slice_option_pop_up = new SidePopup(this);
-            SideButton* slice_all_btn = new SideButton(m_slice_option_pop_up, _L("Slice all"), "");
-            slice_all_btn->SetCornerRadius(0);
-            SideButton* slice_plate_btn = new SideButton(m_slice_option_pop_up, _L("Slice plate"), "");
-            slice_plate_btn->SetCornerRadius(0);
-
-            slice_all_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-                m_slice_btn->SetLabel(_L("Slice all"));
-                m_slice_select = eSliceAll;
-                m_slice_enable = get_enable_slice_status();
-                m_slice_btn->Enable(m_slice_enable);
-                this->Layout();
-                fit_tab_labels(); // ORCA on label change
-                if(m_slice_option_pop_up)
-                    m_slice_option_pop_up->Dismiss();
-                });
-
-            slice_plate_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-                m_slice_btn->SetLabel(_L("Slice plate"));
-                m_slice_select = eSlicePlate;
-                m_slice_enable = get_enable_slice_status();
-                m_slice_btn->Enable(m_slice_enable);
-                this->Layout();
-                fit_tab_labels(); // ORCA on label change
-                if(m_slice_option_pop_up)
-                    m_slice_option_pop_up->Dismiss();
-                });
-            m_slice_option_pop_up->append_button(slice_all_btn);
-            m_slice_option_pop_up->append_button(slice_plate_btn);
-            m_slice_option_pop_up->Popup(m_slice_btn);
+    m_slice_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event) {
+        event.Skip();
+        if (m_plater->slice_batch_running() || m_plater->is_background_process_slicing()) return;
+        wxWeakRef<MainFrame> weak(this);
+        const auto defer = [weak](std::function<void(MainFrame&)> action) {
+            if (weak && !weak->IsBeingDeleted()) weak->CallAfter([weak, action = std::move(action)]() {
+                if (weak && !weak->IsBeingDeleted()) action(*weak);
+            });
+        };
+        wxMenu menu;
+        const auto choose = [defer](Plater::SliceScope scope, const std::string& stage_id = std::string()) {
+            defer([scope, stage_id](MainFrame& frame) {
+                frame.m_plater->set_slice_scope(scope, stage_id);
+                frame.update_slice_print_status(eEventPlateUpdate);
+            });
+        };
+        auto* plate = append_menu_check_item(&menu, wxID_ANY, _L("Slice plate"), _L("Slice the active plate"),
+            [choose](wxCommandEvent&) { choose(Plater::SliceScope::Plate); }, &menu, []() { return true; },
+            [weak]() { return weak && weak->m_plater->slice_scope() == Plater::SliceScope::Plate; });
+        plate->Check(m_plater->slice_scope() == Plater::SliceScope::Plate);
+        auto* stages = new wxMenu();
+        wxInfoDC menu_dc(m_slice_option_btn);
+        menu_dc.SetFont(m_slice_option_btn->GetFont());
+        for (const auto& stage : m_plater->get_partplate_list().stages()) {
+            wxString name = wxControl::Ellipsize(from_u8(stage.name), menu_dc, wxELLIPSIZE_END, FromDIP(320));
+            name.Replace("&", "&&");
+            auto* item = append_menu_check_item(stages, wxID_ANY, name, from_u8(stage.name),
+                [choose, id = stage.id](wxCommandEvent&) { choose(Plater::SliceScope::Stage, id); }, stages, []() { return true; },
+                [weak, id = stage.id]() { return weak && weak->m_plater->slice_scope() == Plater::SliceScope::Stage &&
+                    weak->m_plater->slice_scope_stage_id() == id; });
+            item->Check(m_plater->slice_scope() == Plater::SliceScope::Stage && m_plater->slice_scope_stage_id() == stage.id);
         }
-    );
+        auto* stage_choice = menu.AppendSubMenu(stages, _L("Slice stage"));
+        stage_choice->Enable(!m_plater->get_partplate_list().stages().empty());
+        auto* project = append_menu_check_item(&menu, wxID_ANY, _L("Slice project"), _L("Slice every plate in this project"),
+            [choose](wxCommandEvent&) { choose(Plater::SliceScope::Project); }, &menu, []() { return true; },
+            [weak]() { return weak && weak->m_plater->slice_scope() == Plater::SliceScope::Project; });
+        project->Check(m_plater->slice_scope() == Plater::SliceScope::Project);
+        menu.AppendSeparator();
+        if (m_plater->printer_technology() == ptFFF && !m_plater->only_gcode_mode() && !m_plater->using_exported_file()) {
+            const wxString reslice_label = m_plater->slice_scope() == Plater::SliceScope::Plate ? _L("Reslice plate") :
+                m_plater->slice_scope() == Plater::SliceScope::Stage ? _L("Reslice stage") : _L("Reslice everything");
+            auto* reslice = append_menu_item(&menu, wxID_ANY, reslice_label,
+                _L("Recalculate these plates, including their current results"),
+                [defer](wxCommandEvent&) { defer([](MainFrame& frame) { frame.m_plater->slice_selected_scope(true); }); }, "", &menu);
+            reslice->Enable(m_plater->can_slice_scope(true));
+            append_menu_item(&menu, wxID_ANY, _L("Filament needed…"), _L("See the filament needed for this choice"),
+                [defer](wxCommandEvent&) { defer([](MainFrame& frame) { frame.m_plater->show_filament_usage_report(); }); }, "", &menu);
+        }
+        m_filament_group_popup->tryClose();
+        m_slice_menu_open = true;
+        m_slice_option_btn->PopupMenu(&menu, wxPoint(0, m_slice_option_btn->GetSize().y));
+        if (weak && !weak->IsBeingDeleted()) m_slice_menu_open = false;
+    });
 
     m_print_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
         {
+            event.Skip();
+            if (m_plater->slice_batch_running()) return;
             SidePopup* p = new SidePopup(this);
             for (PrintSelectType type : available_print_actions()) {
                 SideButton* btn = new SideButton(p, print_select_type_label(type), "");
@@ -2446,57 +2508,14 @@ wxBoxSizer* MainFrame::create_side_tools()
 
 bool MainFrame::get_enable_slice_status()
 {
-    bool enable = true;
-
-    bool on_slicing = m_plater->is_background_process_slicing();
-    if (on_slicing) {
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": on slicing, return false directly!");
-        return false;
-    }
-    else if  (m_plater->only_gcode_mode() || m_plater->using_exported_file()) {
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": in gcode/exported 3mf mode, return false directly!");
-        return false;
-    }
-
-    PartPlateList &part_plate_list = m_plater->get_partplate_list();
-    PartPlate *current_plate = part_plate_list.get_curr_plate();
-
-    if (m_slice_select == eSliceAll)
-    {
-        /*if (part_plate_list.is_all_slice_results_valid())
-        {
-            enable = false;
-        }
-        else if (!part_plate_list.is_all_plates_ready_for_slice())
-        {
-            enable = false;
-        }*/
-        //always enable slice_all button
-        enable = true;
-    }
-    else if (m_slice_select == eSlicePlate)
-    {
-        if (current_plate->is_slice_result_valid())
-        {
-            enable = false;
-        }
-        else if (!current_plate->can_slice())
-        {
-            enable = false;
-        }
-    }
-
-    // A mixed filament whose components were deleted, or whose components disagree in type,
-    // cannot be resolved at slicing time. Block the slice until the user fixes it.
-    if (enable && m_plater->sidebar().has_broken_mixed_filament())
-        enable = false;
-
-    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": m_slice_select %1%, enable= %2% ")%m_slice_select %enable;
-    return enable;
+    if (!m_plater || m_plater->slice_batch_running() || m_plater->is_background_process_slicing() ||
+        m_plater->only_gcode_mode() || m_plater->using_exported_file()) return false;
+    return m_plater->can_slice_scope();
 }
 
 bool MainFrame::get_enable_print_status()
 {
+    if (m_plater->slice_batch_running()) return false;
     bool enable = true;
 
     PartPlateList &part_plate_list = m_plater->get_partplate_list();
@@ -2599,7 +2618,7 @@ void MainFrame::update_side_button_style()
     StateColor m_btn_bg_enable = StateColor(
         std::pair<wxColour, int>(wxColour(0, 137, 123), StateColor::Pressed),
         std::pair<wxColour, int>(wxColour(48, 221, 112), StateColor::Hovered),
-        std::pair<wxColour, int>(wxColour(0, 150, 136), StateColor::Normal)
+        std::pair<wxColour, int>(wxColour("#009688"), StateColor::Normal)
     );
 
     // m_publish_btn->SetMinSize(wxSize(FromDIP(125), FromDIP(24)));
@@ -2610,11 +2629,13 @@ void MainFrame::update_side_button_style()
     // m_publish_btn->SetTextColor(StateColor::darkModeColorFor("#FFFFFE"));
 
     m_slice_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Left, FromDIP(15));
+    m_slice_btn->SetLayoutStyle(2);
     m_slice_btn->SetCornerRadius(FromDIP(12));
     m_slice_btn->SetExtraSize(wxSize(FromDIP(38), FromDIP(10)));
     m_slice_btn->SetMinSize(wxSize(-1, FromDIP(24)));
 
     m_slice_option_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center);
+    m_slice_option_btn->SetLayoutStyle(2);
     m_slice_option_btn->SetCornerRadius(FromDIP(12));
     m_slice_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
     m_slice_option_btn->SetIconOffset(FromDIP(2));
@@ -2639,6 +2660,23 @@ void MainFrame::update_side_button_style()
 
 void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
 {
+    if (!m_plater || !m_slice_btn || !m_print_btn) return;
+    const auto scope = m_plater->slice_scope();
+    m_slice_select = scope == Plater::SliceScope::Project ? eSliceAll :
+        scope == Plater::SliceScope::Stage ? eSliceStage : eSlicePlate;
+    const bool running = m_plater->slice_batch_running();
+    const wxString full_label = running ? m_plater->slice_batch_label() :
+        scope == Plater::SliceScope::Plate ? _L("Slice plate") :
+        scope == Plater::SliceScope::Project ? _L("Slice project") : format_wxstr(_L("Slice %1%"), m_plater->slice_scope_label());
+    wxInfoDC dc(m_slice_btn);
+    dc.SetFont(m_slice_btn->GetFont());
+    const wxString label = wxControl::Ellipsize(full_label, dc, running ? wxELLIPSIZE_MIDDLE : wxELLIPSIZE_END, FromDIP(250));
+    const bool label_changed = m_slice_btn->GetLabel() != label;
+    if (label_changed) m_slice_btn->SetLabel(label);
+    m_slice_btn->SetToolTip(full_label);
+    const bool cancel_changed = m_slice_cancel_btn && m_slice_cancel_btn->IsShown() != (running && m_slice_btn->IsShown());
+    if (m_slice_cancel_btn) m_slice_cancel_btn->Show(running && m_slice_btn->IsShown());
+    if (m_slice_option_btn) m_slice_option_btn->Enable(!running && !m_plater->is_background_process_slicing());
     bool enable_print = true, enable_slice = true;
 
     if (!can_slice)
@@ -2667,11 +2705,18 @@ void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_sl
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(" m_slice_select %1%: can_slice= %2%, can_print %3%, enable_slice %4%, enable_print %5% ")%m_slice_select % can_slice %can_print %enable_slice %enable_print;
     m_print_btn->Enable(enable_print);
     m_slice_btn->Enable(enable_slice);
+    m_print_option_btn->Enable(!running);
     m_slice_enable = enable_slice;
     m_print_enable = enable_print;
 
     if (!old_slice_status && enable_slice)
         m_plater->reset_check_status();
+
+    if (label_changed || cancel_changed) {
+        m_slice_btn->GetParent()->Layout();
+        Layout();
+        fit_tab_labels();
+    }
 
     if (wxGetApp().mainframe)
         wxGetApp().plater()->update_title_dirty_status();
@@ -2701,6 +2746,7 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
     m_slice_btn->Rescale();
     m_print_btn->Rescale();
     m_slice_option_btn->Rescale();
+    if (m_slice_cancel_btn) m_slice_cancel_btn->Rescale();
     m_print_option_btn->Rescale();
 
     // update Plater
@@ -2865,11 +2911,21 @@ wxMenu* MainFrame::generate_help_menu()
         });
 
     // Report a bug
-    //append_menu_item(helpMenu, wxID_ANY, _L("Report Bug(TODO)"), _L("Report a bug of OrcaSlicer"),
+    //append_menu_item(helpMenu, wxID_ANY, _L("Report Bug(TODO)"), _L("Report a bug of Porca"),
     //    [](wxCommandEvent&) {
     //        //TODO
     //    });
     // Check New Version
+    append_menu_item(helpMenu, wxID_ANY, _L("Porca Release Notes"),
+        _L("See what changed in Porca"), [](wxCommandEvent&) {
+            const auto path = (boost::filesystem::path(resources_dir()) / "porca-release-notes.txt").string();
+            boost::nowide::ifstream input(path);
+            std::string notes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+            MessageDialog dialog(wxGetApp().mainframe,
+                notes.empty() ? _L("Porca release notes are unavailable.") : from_u8(notes),
+                _L("Porca Release Notes"), wxOK);
+            dialog.ShowModal();
+        });
     append_menu_item(helpMenu, wxID_ANY, _L("Check for Updates"), _L("Check for Updates"),
         [](wxCommandEvent&) {
             wxGetApp().check_new_version_sf(true, 1);
@@ -3065,7 +3121,7 @@ void MainFrame::init_menubar_as_editor()
             [this](){return can_add_models(); }, this);
 #else
         append_shortcut_item(import_menu, Shortcut::ImportModel, true, _L("Import 3MF/STL/STEP/SVG/OBJ/AMF") + dots, _L("Load a model"),
-            [this](wxCommandEvent&) { if (m_plater) { m_plater->add_model(); } }, "", nullptr,
+            [this](wxCommandEvent&) { if (m_plater) { m_plater->add_file(); } }, "", nullptr,
             [this](){return can_add_models(); }, this);
 #endif
         append_menu_item(import_menu, wxID_ANY, _L("Import ZIP Archive") + dots, _L("Load models contained within a ZIP archive"),
@@ -3326,7 +3382,7 @@ void MainFrame::init_menubar_as_editor()
 
         // BBS Select All
         append_shortcut_item(editMenu, Shortcut::SelectAll, false, _L("Select All"),
-            _L("Selects all objects"), [this, handle_key_event](wxCommandEvent&) {
+            _L("Select models on the current plate. Repeat quickly to select models on all plates."), [this, handle_key_event](wxCommandEvent& event) {
                 wxKeyEvent e;
                 e.SetEventType(wxEVT_KEY_DOWN);
                 e.SetControlDown(true);
@@ -3334,7 +3390,7 @@ void MainFrame::init_menubar_as_editor()
                 if (handle_key_event(e)) {
                     return;
                 }
-                m_plater->select_all(); },
+                m_plater->get_view3D_canvas3D()->select_all_from_shortcut(event.GetTimestamp()); },
             "", nullptr, [this](){return can_select(); }, this);
         // BBS Deslect All
         append_menu_item(editMenu, wxID_ANY, _L("Deselect All") + sep + _L_CONTEXT("Esc", "Keyboard Shortcut"),

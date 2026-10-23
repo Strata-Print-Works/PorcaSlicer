@@ -6,12 +6,15 @@
 #include <functional>
 #include <string>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <nlohmann/json.hpp>
 #include <vector>
 
 namespace Slic3r { class ICloudServiceAgent; }
 
 namespace Slic3r {
+class BBLNetworkPlugin;
 
 /**
  * BBLPrinterAgent - BBL DLL wrapper implementation of IPrinterAgent.
@@ -22,6 +25,10 @@ namespace Slic3r {
 class BBLPrinterAgent : public IPrinterAgent {
 public:
     BBLPrinterAgent();
+    explicit BBLPrinterAgent(std::shared_ptr<BBLNetworkPlugin> plugin, std::optional<bool> mqtt_ssl = {});
+    static bool uses_ssl_for_mqtt(const std::string& id);
+    virtual bool owns_device_connection() const { return bool(m_plugin); }
+    virtual bool can_connect_to(const std::string& id) const;
     ~BBLPrinterAgent() override;
 
     // Cloud Agent Dependency (not used by BBL - tokens managed internally)
@@ -110,6 +117,13 @@ public:
     static std::string from_orca_payload(std::string json_text);
 
 private:
+    BBLNetworkPlugin& plugin() const;
+    bool owns_target(const std::string& id) const;
+    std::shared_ptr<BBLNetworkPlugin> m_plugin;
+    std::optional<bool> m_mqtt_ssl;
+    mutable std::mutex m_target_mutex;
+    std::string m_device_id;
+    bool m_started = false;
     int publish(const std::string& dev_id, const nlohmann::json& j, bool lan_mode);
 };
 

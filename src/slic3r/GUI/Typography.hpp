@@ -5,6 +5,7 @@
 
 namespace Slic3r::GUI::DesignSystem {
 void register_fonts();
+double font_points(double logical_pixels);
 wxFont font(TypeStyle style);
 // Existing controls retain their measured point sizes while adopting Figtree.
 wxFont interface_font(double points, bool strong);

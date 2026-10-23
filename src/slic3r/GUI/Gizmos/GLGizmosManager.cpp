@@ -1,4 +1,5 @@
 #include "../ToolbarStyle.hpp"
+#include "../LiveToolbarStyle.hpp"
 #include "GLGizmosManager.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/3DScene.hpp"
@@ -394,8 +395,9 @@ bool GLGizmosManager::init_arrow(const std::string& filename)
 void GLGizmosManager::set_overlay_icon_size(float size)
 {
     if (m_parent.get_canvas_type() == GLCanvas3D::CanvasView3D && !m_parent.is_design_canvas()) {
-        m_layout.border = DesignSystem::space_4 * m_parent.get_scale();
-        m_layout.gap_x = DesignSystem::space_4 * m_parent.get_scale();
+        const auto& style = DesignSystem::live_toolbar_style().snapshot();
+        m_layout.border = style.border * m_parent.get_scale();
+        m_layout.gap_x = style.gap * m_parent.get_scale();
     }
     if (m_layout.icons_size != size)
     {

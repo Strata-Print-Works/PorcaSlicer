@@ -5,6 +5,8 @@
 #include "GUI_Factories.hpp"
 //#include "GUI_ObjectLayers.hpp"
 #include "GUI_App.hpp"
+#include "DesignTokens.hpp"
+#include "Typography.hpp"
 #include "Shortcuts.hpp"
 #include "I18N.hpp"
 #include "Plater.hpp"
@@ -201,7 +203,9 @@ ObjectList::ObjectList(wxWindow* parent) :
     this->SetForegroundColour(*wxBLACK);
 #endif
 
-    SetFont(Label::sysFont(13));
+    SetFont(DesignSystem::font(DesignSystem::TypeStyle::Body));
+    SetForegroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Ink, wxGetApp().dark_mode())));
+    SetIndent(FromDIP(16));
 #ifdef __WXMSW__
     static auto render = new wxRenderer;
     wxRendererNative::Set(render);
@@ -540,7 +544,7 @@ void ObjectList::create_objects_ctrl()
     // and merge into adjacent rows); on Windows/Linux the generic control normally
     // derives the height from the renderers, but we set it here too so all
     // platforms match.
-    SetRowHeight(2 * em + FromDIP(2));
+    SetRowHeight(std::max(FromDIP(32), 2 * em + FromDIP(6)));
 }
 
 void ObjectList::get_selected_item_indexes(int& obj_idx, int& vol_idx, const wxDataViewItem& input_item/* = wxDataViewItem(nullptr)*/)
@@ -1197,11 +1201,19 @@ void ObjectList::update_filament_in_config(const wxDataViewItem& item)
 void ObjectList::update_name_in_model(const wxDataViewItem& item) const
 {
     if (m_objects_model->GetItemType(item) & itPlate) {
-        std::string name = m_objects_model->GetName(item).ToUTF8().data();
+        const wxString edited_name = m_objects_model->GetName(item);
+        const std::string name = into_u8(edited_name);
         int plate_idx = -1;
-        const ItemType type0 = m_objects_model->GetItemType(item, plate_idx);
+        m_objects_model->GetItemType(item, plate_idx);
         if (plate_idx >= 0) {
             auto plate = wxGetApp().plater()->get_partplate_list().get_plate(plate_idx);
+            // Focus changes can commit an unchanged display label. Its plate
+            // number is decoration, not part of the project's editable name.
+            wxString display_name = _L("Plate") + wxString::Format(" %d", plate_idx + 1);
+            if (!plate->get_plate_name().empty())
+                display_name += " (" + from_u8(plate->get_plate_name()) + ")";
+            if (edited_name == display_name)
+                return;
             if (plate->get_plate_name() != name) {
                 plate->set_plate_name(name);
             }
@@ -1880,7 +1892,7 @@ bool ObjectList::dispatch_shortcut(Shortcut shortcut)
 {
     switch (shortcut) {
     case Shortcut::DeleteSelected:  remove(); break;
-    case Shortcut::SelectAll:       select_item_all_children(); break;
+    case Shortcut::SelectAll:       wxGetApp().plater()->get_view3D_canvas3D()->select_all_from_shortcut(); break;
     case Shortcut::Copy:            copy(); break;
     case Shortcut::Paste:           paste(); break;
     case Shortcut::Cut:             cut(); break;
@@ -6582,7 +6594,7 @@ void ObjectList::msw_rescale()
     // Keep the explicit row height (see create_objects_ctrl) in sync with the
     // rescaled em so the filament colour badge keeps fitting after a DPI or theme
     // change.
-    SetRowHeight(2 * em + FromDIP(2));
+    SetRowHeight(std::max(FromDIP(32), 2 * em + FromDIP(6)));
 
     // rescale/update existing items with bitmaps
     m_objects_model->Rescale();
@@ -6593,7 +6605,10 @@ void ObjectList::msw_rescale()
 void ObjectList::sys_color_changed()
 {
     wxGetApp().UpdateDVCDarkUI(this, true);
-    
+    SetBackgroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Surface, wxGetApp().dark_mode())));
+    SetForegroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Ink, wxGetApp().dark_mode())));
+    SetFont(DesignSystem::font(DesignSystem::TypeStyle::Body));
+    SetIndent(FromDIP(16));
     msw_rescale();
 
     if (m_objects_model) { m_objects_model->sys_color_changed(); }
