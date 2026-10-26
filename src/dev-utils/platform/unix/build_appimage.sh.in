@@ -13,8 +13,13 @@ APP_IMAGE="@SLIC3R_APP_KEY@_Linux_V@SoftFever_VERSION@.AppImage"
 download() {
   local url="$1" destination="$2"
   if [ -s "$destination" ]; then return; fi
-  wget --tries=6 --waitretry=5 --timeout=60 --retry-connrefused \
-    --retry-on-http-error=429,500,502,503,504 -O "$destination.partial" "$url"
+  if ! wget --tries=6 --waitretry=5 --timeout=60 --retry-connrefused \
+    --retry-on-http-error=429,500,502,503,504 -O "$destination.partial" "$url"; then
+    # A release edge can retain a failed redirect; request a fresh one.
+    wget --tries=6 --waitretry=5 --timeout=60 --retry-connrefused \
+      --retry-on-http-error=429,500,502,503,504 -O "$destination.partial" \
+      "${url}?porca_download=$(date +%s)"
+  fi
   mv "$destination.partial" "$destination"
 }
 

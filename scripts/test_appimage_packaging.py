@@ -43,7 +43,7 @@ assert '--tries=6' in args and '--timeout=60' in args
 assert '--retry-on-http-error=429,500,502,503,504' in args
 with open(os.environ['DOWNLOAD_LOG'], 'a') as log:
     log.write(args[-1] + '\\n')
-if os.environ.get('FAIL_DOWNLOAD'):
+if os.environ.get('FAIL_DOWNLOAD') or (os.environ.get('FAIL_FIRST_URL') and '?' not in args[-1]):
     pathlib.Path(args[args.index('-O') + 1]).write_bytes(b'partial transfer')
     sys.exit(18)
 output = pathlib.Path(args[args.index('-O') + 1])
@@ -102,6 +102,14 @@ else:
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.build / "appimagetool.AppImage").exists())
         self.assertFalse((appdir / "OrcaSlicer_Linux_Vtest.AppImage").exists())
+
+    def test_failed_release_redirect_gets_a_fresh_url(self):
+        result, appdir = self.package("fresh redirect", {**self.env, "FAIL_FIRST_URL": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((appdir / "OrcaSlicer_Linux_Vtest.AppImage").is_file())
+        urls = (self.root / "downloads").read_text().splitlines()
+        self.assertEqual(len(urls), 4)
+        self.assertEqual(sum("?porca_download=" in url for url in urls), 2)
 
     def test_outer_packager_propagates_appimage_failure(self):
         (self.build / "package").mkdir()
