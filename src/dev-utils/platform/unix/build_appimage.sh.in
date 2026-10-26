@@ -13,8 +13,8 @@ APP_IMAGE="@SLIC3R_APP_KEY@_Linux_V@SoftFever_VERSION@.AppImage"
 download() {
   local url="$1" destination="$2"
   if [ -s "$destination" ]; then return; fi
-  curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
-    --connect-timeout 30 --max-time 600 --output "$destination.partial" "$url"
+  wget --tries=6 --waitretry=5 --timeout=60 --retry-connrefused \
+    --retry-on-http-error=429,500,502,503,504 -O "$destination.partial" "$url"
   mv "$destination.partial" "$destination"
 }
 

@@ -35,18 +35,18 @@ class AppImagePackagingTests(unittest.TestCase):
         self.bin = self.root / "fake tools"
         self.bin.mkdir()
         self.write_tool("uname", '#!/bin/sh\nprintf "%s\\n" "$FAKE_ARCH"\n')
-        self.write_tool("wget", "#!/bin/sh\necho 'Real downloads are prohibited in this test.' >&2\nexit 97\n")
-        self.write_tool("curl", """#!/usr/bin/env python3
+        self.write_tool("curl", "#!/bin/sh\necho 'Real downloads are prohibited in this test.' >&2\nexit 97\n")
+        self.write_tool("wget", """#!/usr/bin/env python3
 import os, pathlib, sys
 args = sys.argv[1:]
-assert '--retry-all-errors' in args and '--fail' in args
-assert '--max-time' in args and '--connect-timeout' in args
+assert '--tries=6' in args and '--timeout=60' in args
+assert '--retry-on-http-error=429,500,502,503,504' in args
 with open(os.environ['DOWNLOAD_LOG'], 'a') as log:
     log.write(args[-1] + '\\n')
 if os.environ.get('FAIL_DOWNLOAD'):
-    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'partial transfer')
+    pathlib.Path(args[args.index('-O') + 1]).write_bytes(b'partial transfer')
     sys.exit(18)
-output = pathlib.Path(args[args.index('--output') + 1])
+output = pathlib.Path(args[args.index('-O') + 1])
 if 'appimagetool-' in args[-1]:
     output.write_text(""" + repr(MOCK_TOOL) + """ )
 else:
