@@ -187,10 +187,10 @@ bool system_bonjour_lookup(const std::string& service, const std::string& protoc
 {
     SystemBrowser browser(keys, reply);
     bool started = false;
-    for (const auto& interface : discovery_interfaces()) {
+    for (const auto& lan_interface : discovery_interfaces()) {
         if (cancelled.load()) break;
         started = browser.browse(enumerate_types ? "_services._dns-sd._udp." : "_" + service + "._" + protocol + ".",
-                                 interface.index, enumerate_types) || started;
+                                 lan_interface.index, enumerate_types) || started;
     }
     if (started) browser.run(cancelled, timeout);
     return started;
@@ -206,7 +206,7 @@ void system_bonjour_resolve(const std::string& hostname, const std::atomic<bool>
     };
     SystemBrowser browser(keys, collect);
     const std::string host = hostname.find('.') == std::string::npos ? hostname + ".local." : hostname;
-    for (const auto& interface : discovery_interfaces()) browser.address({}, host, 0, {}, interface.index);
+    for (const auto& lan_interface : discovery_interfaces()) browser.address({}, host, 0, {}, lan_interface.index);
     browser.run(cancelled, timeout);
     if (!cancelled.load() && reply) reply(replies);
 }

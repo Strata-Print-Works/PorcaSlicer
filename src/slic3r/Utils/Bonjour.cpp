@@ -911,9 +911,9 @@ void Bonjour::priv::lookup_perform()
 
 	std::vector<std::unique_ptr<LookupSocket>> sockets;
 
-    for (const auto& interface : discovery_interfaces())
+    for (const auto& lan_interface : discovery_interfaces())
         sockets.emplace_back(std::make_unique<LookupSocket>(txt_keys, service, service_dn, protocol, replyfn, BonjourRequest::MCAST_IP4,
-                                                            asio::ip::address_v4(interface.address), io_service));
+                                                            asio::ip::address_v4(lan_interface.address), io_service));
     {
         std::lock_guard<std::mutex> lock(io_mutex);
         active_io = io_service;
@@ -976,9 +976,9 @@ void Bonjour::priv::resolve_perform()
 	std::shared_ptr< boost::asio::io_service > io_service(new boost::asio::io_service);
 	std::vector<std::unique_ptr<ResolveSocket>> sockets;
 
-    for (const auto& interface : discovery_interfaces())
+    for (const auto& lan_interface : discovery_interfaces())
         sockets.emplace_back(std::make_unique<ResolveSocket>(hostname, reply_callback, BonjourRequest::MCAST_IP4,
-                                                            asio::ip::address_v4(interface.address), io_service));
+                                                            asio::ip::address_v4(lan_interface.address), io_service));
     {
         std::lock_guard<std::mutex> lock(io_mutex);
         active_io = io_service;

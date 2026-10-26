@@ -77,8 +77,9 @@ permissions:
 
 concurrency:
   # cancel_closed_pr_builds.yml joins this group by name, so update that file
-  # with any change here.
-  group: build-all-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # with any change to the pull-request group here. Manual runs have separate
+  # groups per platform so an investigation does not wait for another platform.
+  group: build-all-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', inputs.platform) || '' }}
   # Pushes don't cancel a running build, because only a finished branch build
   # saves caches every pull request can restore.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
