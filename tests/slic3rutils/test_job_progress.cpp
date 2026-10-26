@@ -3,6 +3,7 @@
 #include "slic3r/GUI/Jobs/BoostThreadWorker.hpp"
 #include "slic3r/GUI/Jobs/Job.hpp"
 #include "slic3r/GUI/Jobs/ProgressIndicator.hpp"
+#include "slic3r/GUI/Jobs/Worker.hpp"
 
 #include <chrono>
 #include <exception>
@@ -87,8 +88,8 @@ TEST_CASE("Transfer errors reach the UI thread after queued progress", "[JobProg
 
 TEST_CASE("Waiting for short jobs drains every finalization", "[JobProgress]")
 {
-    Slic3r::GUI::BoostThreadWorker worker(nullptr, "offline-completion");
     unsigned finished = 0;
+    Slic3r::GUI::BoostThreadWorker worker(nullptr, "offline-completion");
     for (unsigned count = 1; count <= 512; ++count) {
         REQUIRE(Slic3r::GUI::queue_job(worker, [](Slic3r::GUI::Job::Ctl&) {},
             [&](bool, std::exception_ptr&) { ++finished; }));
