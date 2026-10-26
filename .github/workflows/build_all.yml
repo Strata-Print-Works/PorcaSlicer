@@ -15,6 +15,7 @@ on:
      - 'localization/**'
      - 'resources/**'
      - ".github/workflows/build_*.yml"
+     - ".github/actions/apt-install-deps/**"
      - ".github/workflows/unit_tests*.yml"
      - 'build_linux.sh'
      - 'build_win.bat'
@@ -40,6 +41,7 @@ on:
      - '**/CMakeLists.txt'
      - 'version.inc'
      - ".github/workflows/build_*.yml"
+     - ".github/actions/apt-install-deps/**"
      - ".github/workflows/unit_tests*.yml"
      - 'build_linux.sh'
      - 'build_win.bat'

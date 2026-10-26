@@ -3,6 +3,17 @@ description: 'Install the packages needed for building and deploying'
 runs:
   using: 'composite'
   steps:
+    - name: Use the Ubuntu archive mirror
+      if: runner.arch == 'X64'
+      shell: bash
+      run: |
+        # Avoid the slow Azure mirror on hosted x64 images. Keep the signed
+        # Ubuntu repositories and their existing suites/components intact.
+        for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+          if [ -f "$sources" ]; then
+            sudo sed -i 's|://azure\.archive\.ubuntu\.com/ubuntu|://archive.ubuntu.com/ubuntu|g' "$sources"
+          fi
+        done
     - name: Install dependencies from build_linux.sh
       shell: bash
       run: |
