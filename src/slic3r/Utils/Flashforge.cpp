@@ -227,8 +227,8 @@ bool Flashforge::discover_printers(std::vector<FlashforgeDiscoveredPrinter>& pri
         struct Probe { std::unique_ptr<udp::socket> socket; udp::endpoint destination; };
         boost::asio::io_context io;
         std::vector<Probe> probes;
-        for (const auto& interface : discovery_interfaces()) {
-            if (!interface.broadcast || !discovery_netmask_valid(interface.netmask)) continue;
+        for (const auto& lan_interface : discovery_interfaces()) {
+            if (!lan_interface.broadcast || !discovery_netmask_valid(lan_interface.netmask)) continue;
             boost::system::error_code ec;
             auto socket = std::make_unique<udp::socket>(io);
             socket->open(udp::v4(), ec);
@@ -237,11 +237,11 @@ bool Flashforge::discover_printers(std::vector<FlashforgeDiscoveredPrinter>& pri
             if (ec) continue;
             socket->set_option(boost::asio::socket_base::reuse_address(true), ec);
             if (ec) continue;
-            socket->bind(udp::endpoint(boost::asio::ip::address_v4(interface.address), FLASHFORGE_DISCOVERY_LISTEN_PORT), ec);
-            if (ec || !constrain_discovery_socket(*socket, interface.index)) continue;
+            socket->bind(udp::endpoint(boost::asio::ip::address_v4(lan_interface.address), FLASHFORGE_DISCOVERY_LISTEN_PORT), ec);
+            if (ec || !constrain_discovery_socket(*socket, lan_interface.index)) continue;
             socket->non_blocking(true, ec);
             if (ec) continue;
-            probes.push_back({std::move(socket), udp::endpoint(boost::asio::ip::address_v4(interface.address | ~interface.netmask), FLASHFORGE_DISCOVERY_PORT)});
+            probes.push_back({std::move(socket), udp::endpoint(boost::asio::ip::address_v4(lan_interface.address | ~lan_interface.netmask), FLASHFORGE_DISCOVERY_PORT)});
         }
         if (probes.empty()) {
             msg = _L("Could not search for Flashforge printers. Check your network connection.");
