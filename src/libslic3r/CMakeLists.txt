@@ -49,6 +49,9 @@ set(lisbslic3r_sources
     PlateSliceBatch.hpp
     ProductionLedger.cpp
     ProductionLedger.hpp
+    SliceComparison.cpp
+    SliceComparison.hpp
+    SliceComparisonSnapshot.cpp
     FilamentUsage.cpp
     FilamentUsage.hpp
     DiscoveredPrinter.cpp

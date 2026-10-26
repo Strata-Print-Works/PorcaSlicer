@@ -284,6 +284,20 @@ TEST_CASE("A reloaded plugin page is recognised by its base URL, fragment aside"
     CHECK_FALSE(is_content_url(""));
 }
 
+TEST_CASE("Going back to the bootstrap page is recognised so the plugin page can be restored", "[PluginHost]")
+{
+    using namespace Slic3r::GUI::web_hosting;
+
+    const Slic3r::ScopedResourcesDir resources("web bootstrap check");
+
+    CHECK(is_bootstrap_url(bootstrap_url()));
+    CHECK(is_bootstrap_url(wxURI::Unescape(bootstrap_url())));
+    CHECK_FALSE(is_bootstrap_url(content_base_url()));
+    CHECK_FALSE(is_bootstrap_url("https://example.com/"));
+    CHECK_FALSE(is_bootstrap_url(""));
+    CHECK_FALSE(is_content_url(bootstrap_url()));
+}
+
 TEST_CASE("A reloaded plugin page is recognised when the resources path holds a '#'", "[PluginHost]")
 {
     using namespace Slic3r::GUI::web_hosting;

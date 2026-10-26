@@ -238,24 +238,31 @@ wxWindow* BitmapTextRenderer::CreateEditorCtrl(wxWindow* parent, wxRect labelRec
 
 bool BitmapTextRenderer::GetValueFromEditorCtrl(wxWindow* ctrl, wxVariant& value)
 {
-    wxTextCtrl* text_editor = wxDynamicCast(ctrl, wxTextCtrl);
-    auto item = GetView()->GetModel()->GetParent(m_item);
-    if (!text_editor || (item.IsOk() && text_editor->GetValue().IsEmpty()))
+    // Cocoa focus/accessibility callbacks can finish an editor after a nested
+    // cancellation has cleared its item. There is no value to commit then.
+    if (!m_item.IsOk() || !GetView() || !GetView()->GetModel())
         return false;
-
-    m_was_unusable_symbol = Slic3r::GUI::Plater::has_illegal_filename_characters(text_editor->GetValue());
+    wxTextCtrl* text_editor = wxDynamicCast(ctrl, wxTextCtrl);
+    if (!text_editor)
+        return false;
+    const wxDataViewItem edited_item = m_item;
+    const auto parent = GetView()->GetModel()->GetParent(edited_item);
+    // Read model data before calling Cocoa through the editor. Native text
+    // access can reenter focus handling and cancel this editing session.
+    wxVariant valueOld;
+    GetView()->GetModel()->GetValue(valueOld, edited_item, Slic3r::GUI::ColumnNumber::colName);
+    const wxString name = text_editor->GetValue();
+    if (m_item != edited_item || GetEditorCtrl() != ctrl || (parent.IsOk() && name.IsEmpty()))
+        return false;
+    m_was_unusable_symbol = Slic3r::GUI::Plater::has_illegal_filename_characters(name);
     if (m_was_unusable_symbol)
         return false;
 
-    // The icon can't be edited so get its old value and reuse it.
-    wxVariant valueOld;
-    GetView()->GetModel()->GetValue(valueOld, m_item, Slic3r::GUI::ColumnNumber::colName); 
-    
     DataViewBitmapText bmpText;
     bmpText << valueOld;
 
     // But replace the text with the value entered by user.
-    bmpText.SetText(text_editor->GetValue());
+    bmpText.SetText(name);
 
     value << bmpText;
     return true;

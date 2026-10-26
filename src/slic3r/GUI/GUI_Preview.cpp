@@ -730,6 +730,7 @@ void Preview::load_print_as_fff(bool keep_z_range, bool only_gcode)
             BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": will load gcode_preview from result, moves count %1%") % m_gcode_result->moves.size();
             //BBS: add only gcode mode
             m_canvas->load_gcode_preview(*m_gcode_result, tool_colors, color_print_colors, only_gcode);
+            wxGetApp().plater()->remember_slice_for_comparison();
             // the view type may have been changed by the call m_canvas->load_gcode_preview()
             gcode_view_type = m_canvas->get_gcode_view_type();
             //BBS show sliders

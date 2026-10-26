@@ -64,6 +64,7 @@
 #include <nlohmann/json.hpp>
 
 #include "Flashforge.hpp"
+#include "DesignTokens.hpp"
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "MsgDialog.hpp"
@@ -75,6 +76,7 @@
 #include "ExtraRenderers.hpp"
 #include "format.hpp"
 #include "../Utils/CrealityPrint.hpp"
+#include "../Utils/PrinterConnectionStatus.hpp"
 #include "BitmapComboBox.hpp"
 #include "libslic3r_version.h"
 #include "wxExtensions.hpp"
@@ -816,6 +818,12 @@ void FlashforgePrintHostSendDialog::init()
 
     content_sizer->Add(m_flashforge_options_sizer, 0, wxEXPAND);
 
+    m_readiness_text = new wxStaticText(this, wxID_ANY, wxEmptyString);
+    m_readiness_text->SetFont(::Label::Body_13);
+    m_readiness_text->SetForegroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::Warning, wxGetApp().dark_mode())));
+    content_sizer->Add(m_readiness_text, 0, wxTOP, FromDIP(6));
+    update_readiness_notice();
+
     if (m_supports_material_station)
         m_status_text->SetLabel(wxString::Format(_L("Detected %d IFS slots on printer."), static_cast<int>(m_slots.size())));
     else
@@ -939,7 +947,9 @@ void FlashforgePrintHostSendDialog::load_slots()
 
     wxString msg;
     bool     supports_material_station = false;
-    if (!m_host->fetch_material_slots(m_slots, &supports_material_station, msg)) {
+    const bool fetched = m_host->fetch_material_slots(m_slots, &supports_material_station, msg);
+    update_readiness_notice();
+    if (!fetched) {
         m_status_text->SetLabel(msg.empty() ? _L("Unable to read IFS slots from printer.") : msg);
         return;
     }
@@ -1074,6 +1084,21 @@ void FlashforgePrintHostSendDialog::sync_mapping_section_visibility()
     }
     Layout();
     Fit();
+}
+
+// Reuses the machine state from the reply that listed the material slots; nothing is sent.
+// Uploading stays available: whether a busy printer accepts a file without printing is unknown.
+void FlashforgePrintHostSendDialog::update_readiness_notice()
+{
+    if (m_readiness_text == nullptr)
+        return;
+    const auto readiness = m_host != nullptr ? m_host->job_readiness() : PrinterLinkFailure::none;
+    m_readiness_text->SetLabel(readiness == PrinterLinkFailure::print_finished ?
+        _L("A finished print is still on the printer. Clear the bed and confirm on the printer's screen before sending.") :
+        readiness == PrinterLinkFailure::printer_busy ? _L("The printer is busy and may not accept this file until it's ready.") :
+        wxString());
+    m_readiness_text->Wrap(CONTENT_WIDTH * wxGetApp().em_unit());
+    m_readiness_text->Show(readiness != PrinterLinkFailure::none);
 }
 
 const Slic3r::FlashforgeMaterialSlot* FlashforgePrintHostSendDialog::find_slot_by_id(const std::string& slot_id_text) const
@@ -1582,19 +1607,22 @@ ElegooPrintHostSendDialog::ElegooPrintHostSendDialog(const fs::path&            
                                                      const wxArrayString&       groups,
                                                      const wxArrayString&       storage_paths,
                                                      const wxArrayString&       storage_names,
-                                                     bool                       switch_to_device_tab)
+                                                     bool                       switch_to_device_tab,
+                                                     int                        used_filaments)
     : PrintHostSendDialog(path, post_actions, groups, storage_paths, storage_names, switch_to_device_tab)
     , m_timeLapse(0)
     , m_heatedBedLeveling(0)
     , m_BedType(BedType::btPTE)
+    , m_used_filaments(used_filaments)
 {}
 
 void ElegooPrintHostSendDialog::init() {
 
     auto preset_bundle = wxGetApp().preset_bundle;
     auto model_id = preset_bundle->printers.get_edited_preset().get_printer_type(preset_bundle);
+    const bool cc2 = model_id == "Elegoo-CC2";
 
-    if (model_id != "Elegoo-CC" && model_id != "Elegoo-C") {
+    if (model_id != "Elegoo-CC" && model_id != "Elegoo-C" && !cc2) {
         PrintHostSendDialog::init();
         return;
     }
@@ -1610,6 +1638,11 @@ void ElegooPrintHostSendDialog::init() {
     std::string uploadAndPrint = app_config->get("recent", CONFIG_KEY_UPLOADANDPRINT);
     if (!uploadAndPrint.empty())
         post_upload_action = static_cast<PrintHostPostUploadAction>(std::stoi(uploadAndPrint));
+    // CC2 can start only a print with one known filament; an unavailable start
+    // is never preselected from an earlier choice.
+    m_can_start = post_actions.has(PrintHostPostUploadAction::StartPrint) && (!cc2 || m_used_filaments == 1);
+    if (!m_can_start)
+        post_upload_action = PrintHostPostUploadAction::None;
 
     std::string timeLapse = app_config->get("recent", CONFIG_KEY_TIMELAPSE);
     if (!timeLapse.empty())
@@ -1709,10 +1742,36 @@ void ElegooPrintHostSendDialog::init() {
         checkbox_text->SetFont(::Label::Body_13);
         checkbox_text->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#323A3D")));
         content_sizer->Add(checkbox_sizer);
+        if (!m_can_start) {
+            checkbox->Disable();
+            checkbox_text->Disable();
+            if (cc2) {
+                auto* note = new wxStaticText(this, wxID_ANY, m_used_filaments > 1 ?
+                    _L("Start prints that use more than one filament from the printer's screen.") :
+                    _L("Couldn't confirm which filaments this print uses. Start it from the printer's screen."));
+                note->SetFont(::Label::Body_13);
+                note->SetForegroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::InkMuted, wxGetApp().dark_mode())));
+                note->Wrap(350);
+                content_sizer->AddSpacer(4);
+                content_sizer->Add(note, 0, wxLEFT, FromDIP(4));
+            }
+        }
         content_sizer->AddSpacer(VERT_SPACING);
     }
 
-    {
+    if (cc2) {
+        // CC2 has no remote CANVAS slot mapping or confirmed camera here, so only
+        // a print from the print head's filament starts, without time-lapse.
+        auto* note = new wxStaticText(this, wxID_ANY, _L("With CANVAS attached, start the print from the printer's screen."));
+        note->SetFont(::Label::Body_13);
+        note->SetForegroundColour(wxColour(DesignSystem::color_hex(DesignSystem::ColorRole::InkMuted, wxGetApp().dark_mode())));
+        note->Wrap(350);
+        auto* h_sizer = new wxBoxSizer(wxHORIZONTAL);
+        h_sizer->AddSpacer(16);
+        h_sizer->Add(note);
+        uploadandprint_sizer->Add(h_sizer);
+        uploadandprint_sizer->AddSpacer(VERT_SPACING);
+    } else {
         auto checkbox_sizer = new wxBoxSizer(wxHORIZONTAL);
         auto checkbox       = new ::CheckBox(this);
         checkbox->SetValue(m_timeLapse == 1);
@@ -1830,7 +1889,9 @@ void ElegooPrintHostSendDialog::init() {
         return true;
     };
 
-    auto* btn_ok = add_button(wxID_OK, true, _L("Upload"));
+    // The button names its action, so starting a print is always an explicit click.
+    auto* btn_ok = m_upload_button = add_button(wxID_OK, true,
+        post_upload_action == PrintHostPostUploadAction::StartPrint ? _L("Upload and Print") : _L("Upload"));
     btn_ok->Bind(wxEVT_BUTTON, [this, validate_path](wxCommandEvent&) {
         if (validate_path(txt_filename->GetValue())) {
             // post_upload_action = PrintHostPostUploadAction::None;
@@ -1871,7 +1932,9 @@ void ElegooPrintHostSendDialog::EndModal(int ret)
     if (ret == wxID_OK) {
 
         AppConfig* app_config = wxGetApp().app_config;
-        app_config->set("recent", CONFIG_KEY_UPLOADANDPRINT, std::to_string(static_cast<int>(post_upload_action)));
+        // A plate that cannot start keeps the remembered choice for the next one.
+        if (m_can_start)
+            app_config->set("recent", CONFIG_KEY_UPLOADANDPRINT, std::to_string(static_cast<int>(post_upload_action)));
         app_config->set("recent", CONFIG_KEY_TIMELAPSE, std::to_string(m_timeLapse));
         app_config->set("recent", CONFIG_KEY_HEATEDBEDLEVELING, std::to_string(m_heatedBedLeveling));
         app_config->set("recent", CONFIG_KEY_BEDTYPE, std::to_string(static_cast<int>(m_BedType)));
@@ -1899,6 +1962,8 @@ void ElegooPrintHostSendDialog::refresh()
     if (warning_text) {
         warning_text->Show(post_upload_action == PrintHostPostUploadAction::StartPrint && appBedType() != m_BedType);
     }
+    if (m_upload_button)
+        m_upload_button->SetLabel(post_upload_action == PrintHostPostUploadAction::StartPrint ? _L("Upload and Print") : _L("Upload"));
     this->Layout();
     this->Fit();
 }

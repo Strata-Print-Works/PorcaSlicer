@@ -126,6 +126,9 @@ void WebDialog::on_bootstrap_event(wxWebViewEvent& event)
         else if (loaded && m_content_navigated)
             load_page_html();
     }
+    // Back from a page the plugin opened lands on the blank bootstrap page, not the plugin HTML.
+    else if (loaded && !m_own_page_load && web_hosting::is_bootstrap_url(event.GetURL()))
+        load_page_html();
     if (loaded)
         m_content_navigated = false;
     event.Skip();

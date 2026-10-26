@@ -22,6 +22,7 @@ add_executable(${_TEST_NAME}_tests
 	test_precise_seam.cpp
 	test_print.cpp
 	test_plate_print_setup.cpp
+	test_slice_comparison.cpp
 	test_printobject.cpp
 	test_mixed_filament.cpp
 	test_seam_placer.cpp

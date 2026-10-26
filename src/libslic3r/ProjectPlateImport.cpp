@@ -17,6 +17,7 @@
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <map>
 #include <set>
@@ -25,6 +26,31 @@
 #include <vector>
 
 namespace Slic3r {
+ProjectSettingsReview review_project_settings(const ConfigSubstitutionContext& substitutions)
+{
+    const auto readable = [](std::string key) {
+        std::replace(key.begin(), key.end(), '_', ' ');
+        if (!key.empty()) key.front() = char(std::toupper(static_cast<unsigned char>(key.front())));
+        return key;
+    };
+    std::set<std::string> unavailable;
+    for (const auto& key : substitutions.unrecogized_keys)
+        if (!key.empty()) unavailable.insert(readable(key));
+    std::set<ProjectSettingsReview::Change> changed;
+    for (const auto& substitution : substitutions.substitutions) {
+        const ConfigOptionDef* def = substitution.opt_def;
+        if (!def || !substitution.new_value) continue;
+        std::string used = def->type == coBool ? (substitution.new_value->getBool() ? "true" : "false") :
+                                                 substitution.new_value->serialize();
+        const auto value = std::find(def->enum_values.begin(), def->enum_values.end(), used);
+        if (value != def->enum_values.end() && size_t(value - def->enum_values.begin()) < def->enum_labels.size())
+            used = I18N::translate(def->enum_labels[size_t(value - def->enum_values.begin())]);
+        const std::string& label = def->full_label.empty() ? def->label : def->full_label;
+        changed.insert({label.empty() ? readable(def->opt_key) : I18N::translate(label), substitution.old_value, used});
+    }
+    return {{unavailable.begin(), unavailable.end()}, {changed.begin(), changed.end()}};
+}
+
 void relocate_plate_models(Model& model, PlateData& plate, const Vec2d& source, const Vec2d& target)
 {
     if (!source.allFinite() || !target.allFinite())

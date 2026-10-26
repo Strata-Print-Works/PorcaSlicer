@@ -7,12 +7,13 @@
 
 namespace Slic3r {
 // `not_ready`: the printer's service answered, but the printer cannot take
-// control yet, such as while its firmware host is starting or disconnected.
+// control or a new job yet, such as while its firmware host is starting, while
+// it prints, or until a finished print is cleared on the printer.
 enum class PrinterLinkStatus { connected, unreachable, refused, not_ready };
 enum class PrinterLinkFailure {
     none, cancelled, missing_credentials, invalid_address, identity_mismatch, timeout, connection_refused,
     unreachable, handshake, send, receive, invalid_response, credentials_rejected,
-    service_rejected, printer_not_ready, http_error, request_failed, certificate_changed
+    service_rejected, printer_not_ready, printer_busy, print_finished, http_error, request_failed, certificate_changed
 };
 struct PrinterLinkResult {
     PrinterLinkStatus status = PrinterLinkStatus::unreachable;
@@ -23,6 +24,9 @@ struct PrinterLinkResult {
 // Decode bounded responses without retaining server text, URLs or credentials.
 PrinterLinkResult printer_mqtt_response(const std::array<unsigned char, 4>& response);
 PrinterLinkResult printer_http_response(const std::string& vendor, const std::string& body, unsigned status);
+// Reads the machine state from an accepted Flashforge /detail reply: `none` when
+// it can take a new job or does not say, otherwise `printer_busy` or `print_finished`.
+PrinterLinkFailure flashforge_job_readiness(const std::string& body);
 
 // Independent jobs and an inspector own their settings; a retained connection
 // must never coerce an imported project's model, nozzle or filament setup.

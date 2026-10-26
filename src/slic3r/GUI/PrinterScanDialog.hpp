@@ -37,6 +37,8 @@ void clear_saved_printer_assignment();
 // Creates an empty independent plate for the destination; -1 if unavailable/busy.
 int create_saved_printer_plate(const std::string& destination);
 std::string scanned_printer_destination(const std::string& device_id);
+// Makes the saved printer with this device ID the one Devices shows next; false if none is saved.
+bool select_saved_printer_in_devices(const std::string& device_id);
 std::string scanned_printer_name(const std::string& destination);
 bool missing_scanned_printer(const std::string& destination);
 std::string restore_scanned_printer(const std::string& destination, DynamicPrintConfig& config);

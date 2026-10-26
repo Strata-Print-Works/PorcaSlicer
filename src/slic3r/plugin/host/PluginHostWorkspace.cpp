@@ -8,6 +8,7 @@
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "slic3r/GUI/BackgroundSlicingProcess.hpp"
 #include <cstdint>
+#include "libslic3r/Preset.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
@@ -23,6 +24,8 @@
 #include <pybind11/stl.h>
 #include <algorithm>
 #include <functional>
+#include <filesystem>
+#include <system_error>
 #include <iterator>
 #include <map>
 #include <set>
@@ -99,6 +102,19 @@ Json slice_status(GUI::Plater& p, GUI::PartPlate& plate)
     }
     return out;
 }
+Json sliced_gcode()
+{
+    auto& p = plater();
+    auto& plates = p.get_partplate_list();
+    const int index = plates.get_curr_plate_index();
+    if (index < 0 || index >= plates.get_plate_count())
+        return {{"state", "not_sliced"}, {"plate", 0}, {"name", ""}};
+    auto* plate = plates.get_plate(index);
+    const Json status = slice_status(p, *plate);
+    const auto* result = plate->get_slice_result();
+    return plugin_sliced_gcode_descriptor(status.at("state").get<std::string>(), index + 1,
+        plate->get_plate_name(), result ? result->filename : std::string(), result ? result->id : 0);
+}
 Json scene(int requested)
 {
     auto& p = plater();
@@ -126,13 +142,16 @@ Json scene(int requested)
         Json parts = Json::array();
         for (const auto* volume : object->volumes)
             parts.push_back({{"id", volume->id().id}, {"name", volume->name}, {"type", int(volume->type())},
+                {"filament", volume->extruder_id()},
                 {"transform", matrix(volume->get_matrix())}, {"orientation", orientation(volume->get_transformation())},
                 {"settings", plugin_workspace_config_values(volume->config.get())}});
         Json layer_ranges = Json::array();
         for (const auto& range : object->layer_config_ranges)
             layer_ranges.push_back({{"z_min_mm", range.first.first}, {"z_max_mm", range.first.second},
                 {"settings", plugin_workspace_config_values(range.second.get())}});
+        const auto* extruder = object->config.option("extruder");
         objects.push_back({{"id", object->id().id}, {"object_index", oi}, {"name", object->name},
+            {"filament", extruder && extruder->getInt() > 0 ? extruder->getInt() : 1},
             {"printable", object->printable}, {"settings", plugin_workspace_config_values(object->config.get())},
             {"support_painted", object->is_fdm_support_painted()}, {"seam_painted", object->is_seam_painted()},
             {"custom_layering", object->has_custom_layering()}, {"layer_ranges", layer_ranges},
@@ -154,6 +173,12 @@ Json context()
             {"bed_shape", shape}, {"locked", plate->is_locked()}, {"slice_valid", plate->is_slice_result_valid()},
             {"slice", slice_status(p, *plate)},
             {"destination_name", plate->print_setup().destination_name}});
+        // Each plate loads its own filaments; a plate without its own setup has
+        // no list to report, as with its settings.
+        try {
+            const auto config = plate_config(i);
+            list.back()["filaments"] = plugin_plate_filaments(config, plate->get_extruders(false, config, config));
+        } catch (const std::runtime_error&) {}
     }
     auto& camera = p.get_camera();
     return {{"source", "live"}, {"context_token", plugin_workspace_token()},
@@ -174,12 +199,15 @@ Json settings(const std::vector<std::string>& requested, int offset, int limit, 
     offset = std::max(0, offset); limit = std::clamp(limit, 1, 100);
     Json entries = Json::object();
     const size_t end = std::min(keys.size(), size_t(offset) + size_t(limit));
+    const auto per_filament = plugin_filament_values(config,
+        std::vector<std::string>(keys.begin() + std::min(keys.size(), size_t(offset)), keys.begin() + end));
     for (size_t i = size_t(offset); i < end; ++i) {
         const auto& key = keys[i];
         const auto* option = config.option(key);
         if (!option) { entries[key] = {{"error", "Unknown setting"}}; continue; }
         const auto* def = config.def()->get(key);
         entries[key] = {{"value", value(*option)}};
+        if (const auto found = per_filament.find(key); found != per_filament.end()) entries[key]["per_filament"] = *found;
         if (def) {
             entries[key]["label"] = def->label;
             entries[key]["category"] = def->category;
@@ -372,9 +400,74 @@ std::string plugin_workspace_token()
         &bundle.project_config, plate->config()});
 }
 
+nlohmann::json plugin_plate_filaments(const DynamicPrintConfig& config, const std::vector<int>& used)
+{
+    Json out = Json::array();
+    const auto* presets = config.option<ConfigOptionStrings>("filament_settings_id");
+    if (!presets) return out;
+    const auto text = [&config](const char* key, size_t index) {
+        const auto* option = config.option<ConfigOptionStrings>(key);
+        return option && index < option->size() ? option->get_at(index) : std::string();
+    };
+    for (size_t i = 0; i < presets->size(); ++i)
+        out.push_back({{"slot", i + 1}, {"preset", presets->get_at(i)}, {"type", text("filament_type", i)},
+            {"colour", text("filament_colour", i)},
+            {"used", std::find(used.begin(), used.end(), int(i + 1)) != used.end()}});
+    return out;
+}
+
+nlohmann::json plugin_filament_values(const DynamicPrintConfig& config, const std::vector<std::string>& keys)
+{
+    static const std::set<std::string> filament_keys(Preset::filament_options().begin(), Preset::filament_options().end());
+    // Printers with several extruder variants store one value per filament and
+    // variant; slicing keeps the variant each filament's extruder uses (PrintApply).
+    DynamicPrintConfig resolved = config;
+    int extruder_count = 1;
+    const bool different_extruder = resolved.support_different_extruders(extruder_count);
+    if (extruder_count > 1 || different_extruder || resolved.has_multi_variant_filament()) {
+        std::vector<std::vector<NozzleVolumeType>> nozzle_volume_types;
+        const int volume_count = resolved.get_extruder_nozzle_volume_count(extruder_count, nozzle_volume_types);
+        std::set<std::string> variant_keys = filament_options_with_variant;
+        variant_keys.insert("filament_self_index");
+        resolved.update_values_to_printer_extruders_for_multiple_filaments(resolved, extruder_count, volume_count, variant_keys,
+                                                                         "filament_self_index", "filament_extruder_variant");
+    }
+    Json out = Json::object();
+    for (const auto& key : keys)
+        if (filament_keys.count(key) != 0)
+            if (const auto* option = dynamic_cast<const ConfigOptionVectorBase*>(resolved.option(key))) out[key] = option->vserialize();
+    return out;
+}
+
+nlohmann::json plugin_sliced_gcode_descriptor(const std::string& state, int plate,
+    const std::string& name, const std::string& filename, unsigned int result_id)
+{
+    Json out = {{"state", state}, {"plate", plate}, {"name", name}};
+    // Never publish a path to a stale result or a file still being written.
+    if (state != "ready") return out;
+    std::error_code error;
+    const auto path = std::filesystem::u8path(filename);
+    if (!std::filesystem::is_regular_file(path, error)) {
+        out["state"] = "missing";
+        return out;
+    }
+    const auto size = std::filesystem::file_size(path, error);
+    if (error) { out["state"] = "missing"; return out; }
+    const auto modified = std::filesystem::last_write_time(path, error);
+    if (error) { out["state"] = "missing"; return out; }
+    out["gcode_path"] = filename;
+    out["size"] = size;
+    // File identity also distinguishes slices restored from a different project.
+    out["revision"] = Json::array({filename, result_id, size, modified.time_since_epoch().count()}).dump();
+    return out;
+}
+
 void host_bindings::register_workspace(pybind11::module_& host)
 {
     host.def("workspace_context", [] { return python_json(run_on_ui_blocking(context)); });
+    host.def("sliced_gcode_snapshot", [] { return python_json(run_on_ui_blocking(sliced_gcode)); },
+        "Read the active plate's slice state and completed G-code path. No export or post-processing. "
+        "Only ready results include gcode_path and revision; reading the file remains subject to plugin permissions.");
     host.def("scene_snapshot", [](int plate) { return python_json(run_on_ui_blocking([=] { return scene(plate); })); },
              pybind11::arg("plate") = -1);
     host.def("settings_snapshot", [](const std::vector<std::string>& keys, int offset, int limit, int plate) {

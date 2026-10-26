@@ -242,3 +242,33 @@ TEST_CASE("A transferred part extrudes using its chosen destination filament", "
     CHECK(extruding_tools == std::set<int>{1});
     CHECK(model.objects[0]->config.extruder() == 2);
 }
+
+TEST_CASE("Imported volumetric limits produce printable toolpaths without zero feed rates", "[ProjectCompatibility]")
+{
+    auto config = Test::multifilament_config(1, {
+        {"layer_height", "0.2"}, {"initial_layer_print_height", "0.2"},
+        {"filament_nozzle_map", "0"}, {"enable_arc_fitting", "0"},
+        {"enable_support", "0"}, {"enable_prime_tower", "0"},
+        {"skirt_loops", "0"}, {"brim_type", "no_brim"}
+    });
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    context.project_import = true;
+    config.set_deserialize("filament_max_volumetric_speed", "nil,20", context);
+    CHECK(config.opt_serialize("filament_max_volumetric_speed") == "20,20");
+    Print print;
+    Model model;
+    Test::init_print(std::vector<TriangleMesh>{Test::cube(6)}, print, model, config);
+    const auto gcode = Test::gcode(print);
+    REQUIRE_FALSE(gcode.empty());
+    GCodeReader reader;
+    bool saw_extrusion = false;
+    bool nonpositive_feed = false;
+    reader.parse_buffer(gcode, [&](GCodeReader& state, const GCodeReader::GCodeLine& line) {
+        if (!line.extruding(state)) return;
+        saw_extrusion = true;
+        const double feed = line.has(F) ? line.f() : state.f();
+        nonpositive_feed |= feed <= 0.;
+    });
+    CHECK(saw_extrusion);
+    CHECK_FALSE(nonpositive_feed);
+}

@@ -1241,6 +1241,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
         //BBS: plater related structures
         bool m_is_bbl_3mf { false };
+        bool m_has_slicer_project = false;
         bool m_parsing_slice_info { false };
         PlateDataMaps m_plater_data;
         PlateData* m_curr_plater;
@@ -1287,6 +1288,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         // publish feature don't know the metadata and take their third-party geometry path.
         // Reads the parse-time metadata: the model XML carries it before its resources, while
         // m_model->model_info is only filled in after the whole XML has been parsed.
+        bool _is_structured_project() const {
+            return m_is_bbl_3mf || m_has_slicer_project || _is_published_3mf();
+        }
+
         bool _is_published_3mf() const {
             const auto it = this->model_info.metadata_items.find(ORCA_PUBLISHED_TAG);
             return it != this->model_info.metadata_items.end() && is_published_3mf_flag(it->second);
@@ -1299,7 +1304,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool _extract_model_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
         void _extract_cut_information_from_archive(mz_zip_archive &archive, const mz_zip_archive_file_stat &stat, ConfigSubstitutionContext &config_substitutions);
         void _extract_layer_heights_profile_config_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
-        void _extract_layer_config_ranges_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, ConfigSubstitutionContext& config_substitutions);
+        void _extract_layer_config_ranges_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, ConfigSubstitutionContext& config_substitutions, const DynamicPrintConfig& project_config);
         void _extract_sla_support_points_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
         void _extract_sla_drain_holes_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
         void _extract_brim_ear_points_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
@@ -1311,7 +1316,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         //BBS: add project config file logic
         void _extract_project_config_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, DynamicPrintConfig& config, ConfigSubstitutionContext& subs_context, Model& model);
         //BBS: extract project embedded presets
-        void _extract_project_embedded_presets_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, std::vector<Preset*>&project_presets, Model& model, Preset::Type type, bool use_json = true);
+        void _extract_project_embedded_presets_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, std::vector<Preset*>&project_presets, Model& model, ConfigSubstitutionContext& context, Preset::Type type, bool use_json = true);
 
         void _extract_auxiliary_file_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, Model& model);
         void _extract_file_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
@@ -1485,6 +1490,15 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     bool _BBS_3MF_Importer::load_model_from_file(const std::string& filename, Model& model, PlateDataPtrs& plate_data_list, std::vector<Preset*>& project_presets, DynamicPrintConfig& config,
         ConfigSubstitutionContext& config_substitutions, LoadStrategy strategy, bool* is_bbl_3mf, bool* is_orca_3mf, Semver& file_version, Import3mfProgressFn proFn, BBLProject *project, int plate_id)
     {
+        const bool previous_project_import = config_substitutions.project_import;
+        const auto* previous_parent = config_substitutions.project_parent;
+        config_substitutions.project_import = true;
+        config_substitutions.project_parent = nullptr;
+        ScopeGuard restore_context([&] {
+            config_substitutions.project_import = previous_project_import;
+            config_substitutions.project_parent = previous_parent;
+        });
+        m_has_slicer_project = false;
         m_version = 0;
         m_fdm_supports_painting_version = 0;
         m_seam_painting_version = 0;
@@ -1858,6 +1872,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             return false;
         }
 
+        // Orca-derived slicers may use their own Application name. Their project
+        // structure, not that branding, determines whether copies and transforms
+        // must remain intact. Do this before parsing the model resources.
+        m_has_slicer_project = mz_zip_reader_locate_file(&archive, BBS_PROJECT_CONFIG_FILE.c_str(), nullptr, 0) >= 0 &&
+                               mz_zip_reader_locate_file(&archive, BBS_MODEL_CONFIG_FILE.c_str(), nullptr, 0) >= 0;
+        int layer_ranges_index = -1;
         mz_uint num_entries = mz_zip_reader_get_num_files(&archive);
 
         mz_zip_archive_file_stat stat;
@@ -2029,12 +2049,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
                 if (boost::algorithm::iequals(name, BBS_LAYER_HEIGHTS_PROFILE_FILE)) {
                     // extract slic3r layer heights profile file
-                    _extract_layer_heights_profile_config_from_archive(archive, stat);
+                    if (m_load_config) _extract_layer_heights_profile_config_from_archive(archive, stat);
                 }
                 else
                 if (boost::algorithm::iequals(name, LAYER_CONFIG_RANGES_FILE)) {
                     // extract slic3r layer config ranges file
-                    _extract_layer_config_ranges_from_archive(archive, stat, config_substitutions);
+                    // Project and object settings must be available for nil inheritance,
+                    // regardless of ZIP entry order.
+                    if (m_load_config) layer_ranges_index = int(stat.m_file_index);
                 }
                 else if (boost::algorithm::iequals(name, BRIM_EAR_POINTS_FILE)) {
                     // extract slic3r config file
@@ -2081,19 +2103,19 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 //BBS: project embedded presets
                 else if (!dont_load_config && boost::algorithm::istarts_with(name, PROJECT_EMBEDDED_PRINT_PRESETS_FILE)) {
                     // extract slic3r layer config ranges file
-                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, Preset::TYPE_PRINT, false);
+                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, config_substitutions, Preset::TYPE_PRINT, false);
                 }
                 else if (!dont_load_config && boost::algorithm::istarts_with(name, PROJECT_EMBEDDED_SLICE_PRESETS_FILE)) {
                     // extract slic3r layer config ranges file
-                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, Preset::TYPE_PRINT);
+                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, config_substitutions, Preset::TYPE_PRINT);
                 }
                 else if (!dont_load_config && boost::algorithm::istarts_with(name, PROJECT_EMBEDDED_FILAMENT_PRESETS_FILE)) {
                     // extract slic3r layer config ranges file
-                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, Preset::TYPE_FILAMENT);
+                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, config_substitutions, Preset::TYPE_FILAMENT);
                 }
                 else if (!dont_load_config && boost::algorithm::istarts_with(name, PROJECT_EMBEDDED_PRINTER_PRESETS_FILE)) {
                     // extract slic3r layer config ranges file
-                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, Preset::TYPE_PRINTER);
+                    _extract_project_embedded_presets_from_archive(archive, stat, project_presets, model, config_substitutions, Preset::TYPE_PRINTER);
                 }
                 else if (!dont_load_config && boost::algorithm::iequals(name, CUSTOM_GCODE_PER_PRINT_Z_FILE)) {
                     // extract slic3r layer config ranges file
@@ -2103,7 +2125,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     // extract slic3r model config file
                     if (!_extract_xml_from_archive(archive, stat, _handle_start_config_xml_element, _handle_end_config_xml_element)) {
                         // Porca plate data makes the config required whichever application tag is present.
-                        if (m_is_bbl_3mf || m_has_porca_stage_metadata || m_has_porca_layout_metadata || m_has_porca_setup_metadata) {
+                        if (m_load_config && (_is_structured_project() || m_has_porca_stage_metadata || m_has_porca_layout_metadata || m_has_porca_setup_metadata)) {
                             add_error("Archive does not contain a valid model config");
                             return false;
                         }
@@ -2151,9 +2173,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             }
         }
 
-        lock.close();
-
-        if (!m_is_bbl_3mf && !_is_published_3mf()) {
+        if (!_is_structured_project()) {
             // if the 3mf was not produced by OrcaSlicer and there is more than one instance,
             // split the object in as many objects as instances
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", found 3mf from other vendor, split as instance");
@@ -2237,6 +2257,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 }
             }
             ModelObject* model_object = m_model->objects[object.second];
+            config_substitutions.project_parent = &config;
             /*IdToGeometryMap::const_iterator obj_geometry = m_geometries.find(object.first);
             if (obj_geometry == m_geometries.end()) {
                 add_error("Unable to find object geometry");
@@ -2248,10 +2269,6 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             if (obj_layer_heights_profile != m_layer_heights_profiles.end())
                 model_object->layer_height_profile.set(std::move(obj_layer_heights_profile->second));
 
-            // m_layer_config_ranges are indexed by a 1 based model object index.
-            IdToLayerConfigRangesMap::iterator obj_layer_config_ranges = m_layer_config_ranges.find(object.second + 1);
-            if (obj_layer_config_ranges != m_layer_config_ranges.end())
-                model_object->layer_config_ranges = std::move(obj_layer_config_ranges->second);
 
             IdToBrimPointsMap::iterator obj_brim_points = m_brim_ear_points.find(object.second + 1);
             if (obj_brim_points != m_brim_ear_points.end())
@@ -2287,7 +2304,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     //BBS: add module name
                     else if (metadata.key == "module")
                         model_object->module_name = metadata.value;
-                    else
+                    else if (m_load_config || metadata.key == "extruder")
                         model_object->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
                 }
 
@@ -2324,6 +2341,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 volumes_ptr = &volumes;
             }
 
+            DynamicPrintConfig inherited = config;
+            inherited.apply(model_object->config.get());
+            config_substitutions.project_parent = &inherited;
+            ScopeGuard restore_parent([&] { config_substitutions.project_parent = nullptr; });
             if (!_generate_volumes_new(*model_object, object_id_list, *volumes_ptr, config_substitutions))
                 return false;
 
@@ -2343,6 +2364,14 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 }
             }
         }
+
+        if (layer_ranges_index >= 0 && mz_zip_reader_file_stat(&archive, mz_uint(layer_ranges_index), &stat)) {
+            _extract_layer_config_ranges_from_archive(archive, stat, config_substitutions, config);
+            for (auto& entry : m_layer_config_ranges)
+                if (entry.first > 0 && size_t(entry.first) <= model.objects.size())
+                    model.objects[entry.first - 1]->layer_config_ranges = std::move(entry.second);
+        }
+        lock.close();
 
         // If instances contain a single volume, the volume offset should be 0,0,0
         // This equals to say that instance world position and volume world position should match
@@ -2853,7 +2882,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
     }
 
     //BBS: extract project embedded presets
-    void _BBS_3MF_Importer::_extract_project_embedded_presets_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, std::vector<Preset*>&project_presets, Model& model, Preset::Type type, bool use_json)
+    void _BBS_3MF_Importer::_extract_project_embedded_presets_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, std::vector<Preset*>&project_presets, Model& model, ConfigSubstitutionContext& context, Preset::Type type, bool use_json)
     {
         if (stat.m_uncomp_size > 0) {
             /*std::string src_file = decode_path(stat.m_filename);
@@ -2875,7 +2904,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             //ConfigSubstitutions config_substitutions = config.load_from_ini(dest_file, Enable);
             std::map<std::string, std::string> key_values;
             std::string reason;
-            ConfigSubstitutions config_substitutions = use_json? config.load_from_json(dest_file, Enable, key_values, reason) : config.load_from_ini(dest_file, Enable);
+            ConfigSubstitutions config_substitutions;
+            if (use_json)
+                config.load_from_json(dest_file, context, true, key_values, reason);
+            else
+                config_substitutions = config.load_from_ini(dest_file, Enable);
             if (!reason.empty()) {
                 BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(", load project embedded config from  %1% failed\n") % dest_file;
                 //skip this file
@@ -3082,7 +3115,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         }
     }
     
-    void _BBS_3MF_Importer::_extract_layer_config_ranges_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, ConfigSubstitutionContext& config_substitutions)
+    void _BBS_3MF_Importer::_extract_layer_config_ranges_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, ConfigSubstitutionContext& config_substitutions, const DynamicPrintConfig& project_config)
     {
         if (stat.m_uncomp_size > 0) {
             std::string buffer((size_t)stat.m_uncomp_size, 0);
@@ -3111,6 +3144,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 }
 
                 t_layer_config_ranges config_ranges;
+                DynamicPrintConfig inherited = project_config;
+                if (size_t(obj_idx) <= m_model->objects.size())
+                    inherited.apply(m_model->objects[obj_idx - 1]->config.get());
+                config_substitutions.project_parent = &inherited;
+                ScopeGuard restore_parent([&] { config_substitutions.project_parent = nullptr; });
 
                 for (const auto& range : object_tree) {
                     if (range.first != "range")
@@ -3787,7 +3825,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             m_index_paths.insert({ object.first.second, object.first.first});
         }
 
-        if (!m_is_bbl_3mf && !_is_published_3mf()) {
+        if (!_is_structured_project()) {
             // if the 3mf was not produced by OrcaSlicer and there is only one object,
             // set the object name to match the filename
             if (m_model->objects.size() == 1)
@@ -5588,7 +5626,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     volume->source.is_converted_from_meters = metadata.value == "1";
                 else if ((metadata.key == MATRIX_KEY) || (metadata.key == MESH_SHARED_KEY))
                     continue;
-                else
+                else if (m_load_config || metadata.key == "extruder")
                     volume->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
             }
 
@@ -5602,7 +5640,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 for (const Metadata& metadata : volume_data->metadata) {
                     if (boost::starts_with(metadata.key, PRECISE_SEAM_CONFIG_PREFIX)) {
                         const std::string key = metadata.key.substr(sizeof(PRECISE_SEAM_CONFIG_PREFIX) - 1);
-                        if (!key.empty())
+                        if (m_load_config && !key.empty())
                             volume->config.set_deserialize(key, metadata.value, config_substitutions);
                     }
                 }
@@ -5686,7 +5724,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
             TriangleMesh triangle_mesh(std::move(its), volume_data.mesh_stats);
 
-            if (!m_is_bbl_3mf && !_is_published_3mf()) {
+            if (!_is_structured_project()) {
                 // if the 3mf was not produced by OrcaSlicer and there is only one instance,
                 // bake the transformation into the geometry to allow the reload from disk command
                 // to work properly
@@ -5768,7 +5806,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     volume->source.is_converted_from_inches = metadata.value == "1";
                 else if (metadata.key == SOURCE_IN_METERS)
                     volume->source.is_converted_from_meters = metadata.value == "1";
-                else
+                else if (m_load_config || metadata.key == "extruder")
                     volume->config.set_deserialize(metadata.key, metadata.value, config_substitutions);
             }
 

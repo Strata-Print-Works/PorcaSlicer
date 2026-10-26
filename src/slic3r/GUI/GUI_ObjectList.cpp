@@ -497,6 +497,8 @@ void ObjectList::create_objects_ctrl()
     this->Bind(wxEVT_DATAVIEW_ITEM_ACTIVATED, [this](wxDataViewEvent& event) {
         if (event.GetColumn() == colFilament) {
 #ifdef __WXOSX__
+            if (!is_pointer_cell(event.GetItem(), colFilament))
+                return;
             start_filament_editor(event.GetItem());
 #else
             // Trigger the editor opening manually
@@ -6627,6 +6629,16 @@ void ObjectList::ItemValueChanged(wxDataViewEvent &event)
 }
 
 #ifdef __WXOSX__
+bool ObjectList::is_pointer_cell(wxDataViewItem item, int column) const
+{
+    // Cocoa also calls shouldEditTableColumn while asking accessibility whether
+    // a cell is editable. That query must not start our pointer-driven editor.
+    // Keyboard rename and filament shortcuts use their explicit command paths.
+    if (!item.IsOk() || column < 0 || unsigned(column) >= GetColumnCount())
+        return false;
+    return GetItemRect(item, GetColumn(unsigned(column))).Contains(ScreenToClient(wxGetMousePosition()));
+}
+
 bool ObjectList::is_live_model_item(wxDataViewItem item) const
 {
     if (!item.IsOk() || !m_objects_model)
@@ -6713,6 +6725,10 @@ void ObjectList::OnEditingStarted(wxDataViewEvent &event)
     event.Veto(); // Not edit with NSTableView's text
     auto col = event.GetColumn();
     auto item = event.GetItem();
+#ifdef __WXOSX__
+    if (!is_live_model_item(item) || !is_pointer_cell(item, col))
+        return;
+#endif
     if (col == colPrint) {
         toggle_printable_state();
         return;

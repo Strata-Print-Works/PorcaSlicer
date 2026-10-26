@@ -324,6 +324,12 @@ indices: pages come and go per printer and per feature flag.
 - The **same `Plater` window is inserted twice**, as Prepare and Preview (`MainFrame::update_layout`).
   The page-changed handler posts `EVT_GLVIEWTOOLBAR_3D` / `EVT_GLVIEWTOOLBAR_PREVIEW` to the plater, so
   "which page" is resolved by id, never by `GetName()` of the window (`MainFrame::select_tab(wxPanel*)`).
+  Project activation replaces both entries with the incoming retained workspace through
+  `Notebook::ReplacePageWindow`; replacing a view must not delete the outgoing document window.
+  A new document also needs `sidebar().obj_list()->init()` and
+  `init_notification_manager()` before presets are loaded or the project is reset. These used
+  to run only in application startup. Keep the new Plater hidden until its private state is
+  complete, suppress background scheduling while binding, and update its AUI layout on resume.
 - Every other page is a `LazyPage<…>` created in `MainFrame::init_tabpanel`: Home
   (`WebViewPanel`), Device (`MonitorPanel`), web Device (`PrinterWebView`), Multi-device
   (`MultiMachinePage`), Project (`ProjectPanel`), Calibration (`CalibrationPanel`), and Design

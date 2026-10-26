@@ -252,6 +252,7 @@ enum ForwardCompatibilitySubstitutionRule
 
 class  ConfigOption;
 class  ConfigOptionDef;
+class  ConfigBase;
 // For forward definition of ConfigOption in ConfigOptionUniquePtr, we have to define a custom deleter.
 struct ConfigOptionDeleter { void operator()(ConfigOption* p); };
 using  ConfigOptionUniquePtr = std::unique_ptr<ConfigOption, ConfigOptionDeleter>;
@@ -277,6 +278,10 @@ struct ConfigSubstitutionContext
     ForwardCompatibilitySubstitutionRule 	rule;
     ConfigSubstitutions					    substitutions;
     std::vector<std::string>                unrecogized_keys;
+    // Only project readers opt in. Preset editing, CLI values and Porca's complete
+    // per-plate records retain their strict deserialization contract.
+    bool project_import = false;
+    const ConfigBase* project_parent = nullptr;
 };
 
 // A generic value of a configuration option.

@@ -154,12 +154,14 @@ private:
 class ElegooPrintHostSendDialog : public PrintHostSendDialog
 {
 public:
+    // used_filaments: filaments in the sliced plate, 0 when unknown.
     ElegooPrintHostSendDialog(const boost::filesystem::path& path,
                               PrintHostPostUploadActions     post_actions,
                               const wxArrayString&           groups,
                               const wxArrayString&           storage_paths,
                               const wxArrayString&           storage_names,
-                              bool                           switch_to_device_tab);
+                              bool                           switch_to_device_tab,
+                              int                            used_filaments = 0);
 
     virtual void EndModal(int ret) override;
     int          timeLapse() const { return m_timeLapse; }
@@ -171,7 +173,8 @@ public:
     {
         return {{"bedType", std::to_string(static_cast<int>(m_BedType))},
                 {"timeLapse", std::to_string(m_timeLapse)},
-                {"heatedBedLeveling", std::to_string(m_heatedBedLeveling)}};
+                {"heatedBedLeveling", std::to_string(m_heatedBedLeveling)},
+                {"filamentCount", std::to_string(m_used_filaments)}};
     }
 
 private:
@@ -186,10 +189,13 @@ private:
 private:
     wxStaticText* warning_text{nullptr};
     wxBoxSizer*   uploadandprint_sizer{nullptr};
+    Button*       m_upload_button{nullptr};
 
     int     m_timeLapse;
     int     m_heatedBedLeveling;
     BedType m_BedType;
+    int     m_used_filaments;
+    bool    m_can_start{true};
 };
 
 class CrealityPrintHostSendDialog : public PrintHostSendDialog
@@ -253,6 +259,7 @@ private:
     void auto_assign_mappings();
     void refresh_mapping_card(MappingRow& row);
     void sync_mapping_section_visibility();
+    void update_readiness_notice();
     const Slic3r::FlashforgeMaterialSlot* find_slot_by_id(const std::string& slot_id_text) const;
     const FilamentInfo* find_filament_by_tool_id(int tool_id) const;
     bool slot_matches_filament(const Slic3r::FlashforgeMaterialSlot& slot, const FilamentInfo& filament) const;
@@ -269,6 +276,7 @@ private:
     wxBoxSizer*                      m_mapping_section_sizer {nullptr};
     wxWrapSizer*                     m_mapping_wrap_sizer {nullptr};
     wxStaticText*                    m_status_text {nullptr};
+    wxStaticText*                    m_readiness_text {nullptr};
     ::CheckBox*                      m_checkbox_leveling {nullptr};
     ::CheckBox*                      m_checkbox_timelapse {nullptr};
     ::CheckBox*                      m_checkbox_ifs {nullptr};

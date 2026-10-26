@@ -9776,11 +9776,13 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         }
     }
     else if(opt_key == "ensure_vertical_shell_thickness") {
-        if(value == "1") {
+        if(value == "1" || value == "enabled") {
             value = "ensure_all";
         }
-        else if (value == "0"){
+        else if (value == "0" || value == "partial"){
             value = "ensure_moderate";
+        } else if (value == "disabled") {
+            value = "none";
         }
     } else if (opt_key == "rotate_solid_infill_direction") {
         opt_key = "solid_infill_rotate_template";
@@ -9797,13 +9799,33 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         opt_key = "chamber_temperature";
     } else if (opt_key == "thumbnail_size") {
         opt_key = "thumbnails";
-    } else if (opt_key == "top_one_wall_type" && value != "none") {
-        opt_key = "only_one_wall_top";
-        value = "1";
+    } else if (opt_key == "top_one_wall_type") {
+        if (value == "all top" || value == "not apply" || value == "none") {
+            opt_key = "only_one_wall_top";
+            value = value == "all top" ? "1" : "0";
+        }
+        // Bambu's topmost-only option has no equivalent; report it as unavailable.
     } else if (opt_key == "initial_layer_flow_ratio") {
         opt_key = "bottom_solid_infill_flow_ratio";
     } else if (opt_key == "ironing_direction") {
         opt_key = "ironing_angle";
+    } else if (opt_key == "enable_support_ironing") {
+        opt_key = "support_ironing";
+    } else if (opt_key == "no_slow_down_for_cooling_on_outwalls") {
+        opt_key = "dont_slow_down_outer_wall";
+    } else if (opt_key == "role_base_wipe_speed") {
+        opt_key = "role_based_wipe_speed";
+    } else if (opt_key == "reduce_infill_retraction_mode" && (value == "Enabled" || value == "Disabled")) {
+        opt_key = "reduce_infill_retraction";
+        value = value == "Enabled" ? "1" : "0";
+    } else if (opt_key == "process_notes") {
+        opt_key = "notes";
+    } else if (opt_key == "sparse_infill_lattice_angle_1") {
+        opt_key = "lateral_lattice_angle_1";
+    } else if (opt_key == "sparse_infill_lattice_angle_2") {
+        opt_key = "lateral_lattice_angle_2";
+    } else if (opt_key == "support_style" && value == "tree_organic") {
+        value = "organic";
     } else if (opt_key == "ironing_angle" && boost::starts_with(value, "-")) {
         value = "0";
     } else if (opt_key == "counterbole_hole_bridging") {
@@ -9845,11 +9867,9 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
     }
     // Orca: Rename wipe tower ribs related options
     else if (opt_key == "prime_tower_rib_wall") {
-        if (value == "1") {
+        if (value == "1" || value == "0") {
             opt_key = "wipe_tower_wall_type";
-            value   = "rib";
-        } else {
-            opt_key = "";
+            value   = value == "1" ? "rib" : "rectangle";
         }
     } else if (opt_key == "prime_tower_extra_rib_length") {
         opt_key = "wipe_tower_extra_rib_length";
@@ -9857,6 +9877,8 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
         opt_key = "wipe_tower_rib_width";
     } else if (opt_key == "prime_tower_fillet_wall") {
         opt_key = "wipe_tower_fillet_wall";
+    } else if (opt_key == "prime_tower_max_purge_speed") {
+        opt_key = "wipe_tower_max_purge_speed";
     } else if (opt_key == "extruder_clearance_max_radius") {
         opt_key = "extruder_clearance_radius";
     } else if (opt_key == "machine_switch_extruder_time") {

@@ -1,4 +1,5 @@
 #include "ElegooLink.hpp"
+#include "ElegooCanvas.hpp"
 #include "ElegooLinkProtocol.hpp"
 #include <wx/app.h>
 #include <wx/thread.h>
@@ -11,6 +12,7 @@
 #include <boost/uuid/random_generator.hpp>
 #include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include "libslic3r/PrintConfig.hpp"
 #include <iostream>
 #include <map>
@@ -310,6 +312,14 @@ namespace Slic3r {
         #endif
             }
 
+        // The send dialog's choices for a CC2 start; only the smooth plate is Side B.
+        ElegooPrintJob cc2_print_job(const PrintHostUpload& upload)
+        {
+            return {filename_to_utf8(upload.upload_path), upload.extended("heatedBedLeveling") == "1",
+                    upload.extended("bedType") == std::to_string(static_cast<int>(BedType::btPC)),
+                    std::atoi(upload.extended("filamentCount").c_str())};
+        }
+
     } //namespace
 
 
@@ -377,11 +387,8 @@ namespace Slic3r {
     const char* ElegooLink::get_name() const { return "ElegooLink"; }
     PrintHostPostUploadActions ElegooLink::get_post_upload_actions() const
     {
-        if (classify_printer_model(m_printerModel) == ElegooPrinterType::CC2) {
-            return PrintHostPostUploadAction::None;
-        } else {
-            return PrintHostPostUploadAction::StartPrint;
-        }
+        // CC2 starts with a separate command after the upload; see start_cc2_print.
+        return PrintHostPostUploadAction::StartPrint;
     }
 
     std::string ElegooLink::get_sn() const
@@ -999,14 +1006,54 @@ namespace Slic3r {
                 break;
         }
 
-        if (res && upload_data.post_action == PrintHostPostUploadAction::StartPrint)
-            BOOST_LOG_TRIVIAL(info) << get_name() << ": CC2 upload completed; start print is not supported.";
-
         (void) info_fn;
         return res;
     }
 
     bool ElegooLink::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const
+    {
+        if (classify_printer_model(m_printerModel) != ElegooPrinterType::CC2)
+            return upload_file(std::move(upload_data), prorgess_fn, error_fn, info_fn);
+        // CC2 starts with its own command once the whole upload succeeded, never
+        // once per attempted address.
+        const bool start = upload_data.post_action == PrintHostPostUploadAction::StartPrint;
+        const auto job   = cc2_print_job(upload_data);
+        return elegoo_upload_then_start(start, [&] { return upload_file(std::move(upload_data), prorgess_fn, error_fn, info_fn); },
+                                        [&] { return start_cc2_print(job, prorgess_fn, error_fn); });
+    }
+
+    bool ElegooLink::start_cc2_print(const ElegooPrintJob& job, ProgressFn progress_fn, ErrorFn error_fn) const
+    {
+        // The queue's cancel applies until the command is sent. Polling keeps the
+        // job in progress; it completes only when the printer accepts the start.
+        const std::string none;
+        bool canceled = false;
+        const auto result = send_elegoo_print_start(Http::get_host_from_url(m_host), m_expected_serial.empty() ? get_sn() : m_expected_serial,
+                                                    cc2_token(), job, [&] {
+                                                        if (!canceled) progress_fn(Http::Progress(0, 0, 100, 99, none), canceled);
+                                                        return canceled;
+                                                    });
+        if (result.started) {
+            BOOST_LOG_TRIVIAL(info) << get_name() << ": CC2 print started";
+            return true;
+        }
+        if (canceled) {
+            // Nothing was sent; finish the job as canceled, like an interrupted transfer.
+            progress_fn(Http::Progress(0, 0, 100, 99, none), canceled);
+            return false;
+        }
+        BOOST_LOG_TRIVIAL(warning) << get_name() << ": CC2 print not started" << (result.sent ? " after the start command" : "")
+                                   << (result.printer_code != 0 ? ", printer code " + std::to_string(result.printer_code) : std::string());
+        wxString message = GUI::format_wxstr("%1% %2%", result.sent && result.printer_code == 0 ? _L("The file was uploaded.") :
+                                                                                                  _L("The file was uploaded, but the print didn't start."),
+                                             _(result.error));
+        if (result.printer_code != 0)
+            message += " " + wxString::Format(_L("Error code: %d"), result.printer_code);
+        error_fn(std::move(message));
+        return false;
+    }
+
+    bool ElegooLink::upload_file(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const
     {
     #ifndef WIN32
         return upload_inner_with_host(std::move(upload_data), prorgess_fn, error_fn, info_fn);

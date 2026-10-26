@@ -31,8 +31,8 @@ protected:
     // waiting briefly for the bridge while the page is still loading. Main thread only.
     void post_to_page(const std::string& json);
 
-    // The plugin HTML to show once the bootstrap page has loaded, and again when WebKit reloads it;
-    // std::nullopt leaves it blank.
+    // The plugin HTML to show once the bootstrap page has loaded, and again when WebKit reloads it or
+    // goes back to the bootstrap page; std::nullopt leaves it blank.
     virtual std::optional<std::string> page_html() = 0;
     // A window.orca message from the page; false for a kind this host does not handle (logged).
     virtual bool on_page_message(const std::string& kind, const nlohmann::json& data) = 0;

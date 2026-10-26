@@ -31,6 +31,8 @@
 #include <wx/event.h>
 #include <wx/menu.h>
 #include <wx/sizer.h>
+#include <wx/uri.h>
+#include <wx/utils.h>
 
 #include <utility>
 #include <wx/webview.h>
@@ -130,9 +132,11 @@ std::optional<std::string> PluginPage::page_html()
 
 void PluginPage::on_new_window(wxWebViewEvent& event)
 {
-    const wxString url = event.GetURL();
-    if (!url.empty())
-        browser()->LoadURL(url);
+    // Loading the target here would replace the plugin page, so web links open in the browser. Other
+    // schemes are dropped: a file URL handed to the system could launch a local application.
+    const wxString scheme = wxURI(event.GetURL()).GetScheme().Lower();
+    if (scheme == "http" || scheme == "https")
+        wxLaunchDefaultBrowser(event.GetURL());
     event.Veto();
 }
 

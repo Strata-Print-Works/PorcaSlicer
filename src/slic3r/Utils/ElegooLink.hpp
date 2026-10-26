@@ -18,6 +18,7 @@ namespace Slic3r {
 
 class DynamicPrintConfig;
 class Http;
+struct ElegooPrintJob;
 
 class ElegooLink : public OctoPrint
 {
@@ -46,6 +47,8 @@ protected:
     bool elegoo_test_with_resolved_ip(wxString& curl_msg) const;
 #endif
 private:
+    bool upload_file(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const;
+    bool start_cc2_print(const ElegooPrintJob& job, ProgressFn progress_fn, ErrorFn error_fn) const;
     bool elegoo_test(wxString& curl_msg) const;
     bool elegoo_cc2_test(wxString& curl_msg) const;
     bool print(WebSocketClient&  client,

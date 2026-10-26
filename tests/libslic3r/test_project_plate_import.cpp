@@ -16,6 +16,7 @@
 #include "libslic3r/Zipper.hpp"
 #include "test_utils.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <set>
 #include <string>
@@ -282,4 +283,40 @@ TEST_CASE("Plate relocation validates every reference before moving copies", "[P
     CHECK_THAT((incoming.offsets()[1] - before[1] - Vec3d(700., -50., 0.)).norm(), WithinAbs(0., 1e-9));
     REQUIRE(plate.has_model_origin);
     CHECK_THAT((plate.model_origin - Vec2d(1000., -50.)).norm(), WithinAbs(0., 1e-12));
+}
+
+TEST_CASE("Unknown project settings are listed once by readable name", "[ProjectPlateImport]")
+{
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    context.unrecogized_keys = {"slowdown_start_height", "counter_coef_1", "enable_height_slowdown", "counter_coef_1"};
+    const auto review = review_project_settings(context);
+    CHECK(review.unavailable == std::vector<std::string>{"Counter coef 1", "Enable height slowdown", "Slowdown start height"});
+    CHECK(review.changed.empty());
+    CHECK_FALSE(review.empty());
+}
+
+TEST_CASE("Replaced project values show the setting, the saved value and the value used", "[ProjectPlateImport]")
+{
+    DynamicPrintConfig config;
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    // The same unknown value can arrive from the project and from an object.
+    for (int copy = 0; copy < 2; ++copy) config.set_deserialize("top_surface_pattern", "future_pattern", context);
+    REQUIRE(context.substitutions.size() == 2);
+    const ConfigOptionDef* def = print_config_def.get("top_surface_pattern");
+    const auto used = std::find(def->enum_values.begin(), def->enum_values.end(), config.opt_serialize("top_surface_pattern"));
+    REQUIRE(used != def->enum_values.end());
+    const auto review = review_project_settings(context);
+    REQUIRE(review.changed.size() == 1);
+    CHECK(review.changed.front().label == (def->full_label.empty() ? def->label : def->full_label));
+    CHECK(review.changed.front().file_value == "future_pattern");
+    CHECK(review.changed.front().used_value == def->enum_labels[size_t(used - def->enum_values.begin())]);
+    CHECK(review.unavailable.empty());
+}
+
+TEST_CASE("Projects with only supported settings need no review", "[ProjectPlateImport]")
+{
+    DynamicPrintConfig config;
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    config.set_deserialize("top_surface_pattern", "monotonic", context);
+    CHECK(review_project_settings(context).empty());
 }

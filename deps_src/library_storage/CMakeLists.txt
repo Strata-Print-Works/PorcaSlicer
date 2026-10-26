@@ -1,0 +1,7 @@
+add_library(porca_library_storage STATIC sqlite3.c blake3.c blake3_portable.c blake3_dispatch.c)
+target_include_directories(porca_library_storage PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(porca_library_storage PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512 BLAKE3_USE_NEON=0)
+set_target_properties(porca_library_storage PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if (UNIX)
+    target_link_libraries(porca_library_storage PRIVATE ${CMAKE_DL_LIBS})
+endif ()

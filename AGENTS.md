@@ -42,7 +42,7 @@ Preserve the discovery hardening: eligible physical LAN interfaces, bounded prob
 
 - This Mac checkout is `/Users/peter/code/experiments/porca-slicer`. Work in this repository; the former MultiSlicer prototype paths have moved. Leave the sibling MultiSlicer and original Orca checkouts alone unless the user requests work there.
 - Preserve existing Git changes before editing or restructuring. Keep Porca's Git object storage independent of the original checkout.
-- `origin` currently points to the local OrcaSlicer repository; `upstream` is the original public Orca remote. Inspect remotes before pushing. A local push is not a GitHub publication, and pushing to upstream requires explicit user direction.
+- `origin` points to `https://github.com/Strata-Print-Works/PorcaSlicer.git`; `upstream` is the original public Orca remote. `local-orca` preserves the former local OrcaSlicer remote. Inspect remotes before pushing. Publish Porca development on `porca`; pushing to upstream requires explicit user direction.
 - `artifacts/` holds app bundles, saved projects, device data, backups and verification records. `mockups/` holds local UI studies, and `base/` holds generated test presets. These directories and build outputs are ignored. Keep credentials, personal printer data and optional vendor binaries out of source commits.
 
 ## Build and verification
@@ -50,7 +50,7 @@ Preserve the discovery hardening: eligible physical LAN interfaces, bounded prob
 Build Release using the guarded wrapper. On this Mac the configured tree is `build/prototype`:
 
 ```bash
-python3 scripts/build_porca.py OrcaSlicer libslic3r_tests slic3rutils_tests porca_unit_tests
+python3 scripts/build_porca.py OrcaSlicer libslic3r_tests slic3rutils_tests porca_unit_tests fff_print_tests
 python3 scripts/verify_offline.py all
 ```
 

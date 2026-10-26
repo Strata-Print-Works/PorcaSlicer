@@ -1,4 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <string>
 #include "slic3r/Utils/PrinterConnectionStatus.hpp"
 
 using namespace Slic3r;
@@ -50,6 +52,63 @@ TEST_CASE("Printer checks preserve useful failures without exposing server bodie
     CHECK(failure.failure == PrinterLinkFailure::http_error);
     CHECK(failure.http_status == 503);
     CHECK(printer_http_response("moonraker", "", 0).failure == PrinterLinkFailure::request_failed);
+}
+
+namespace {
+std::string flashforge_detail(const std::string& state) { return R"({"code":0,"detail":{"status":")" + state + R"("}})"; }
+} // namespace
+
+TEST_CASE("A Flashforge printer is available only while it reports being ready", "[PrinterConnectionStatus]")
+{
+    const std::string state = GENERATE(as<std::string>{}, "ready", "READY", "Ready");
+    const auto result = printer_http_response("flashforge", flashforge_detail(state), 200);
+    CHECK(result.status == PrinterLinkStatus::connected);
+    CHECK(result.failure == PrinterLinkFailure::none);
+    CHECK(flashforge_job_readiness(flashforge_detail(state)) == PrinterLinkFailure::none);
+}
+
+TEST_CASE("A Flashforge printer in any other state answers but is busy", "[PrinterConnectionStatus]")
+{
+    // Firmware may report states beyond the documented ones; none of them takes a new job.
+    const std::string state = GENERATE(as<std::string>{}, "busy", "printing", "PAUSED", "pausing", "heating",
+                                       "calibrate_doing", "cancel", "error", "an_unlisted_state");
+    const auto result = printer_http_response("flashforge", flashforge_detail(state), 200);
+    CHECK(result.status == PrinterLinkStatus::not_ready);
+    CHECK(result.failure == PrinterLinkFailure::printer_busy);
+    CHECK(flashforge_job_readiness(flashforge_detail(state)) == PrinterLinkFailure::printer_busy);
+}
+
+TEST_CASE("A finished Flashforge print waits to be cleared before the next job", "[PrinterConnectionStatus]")
+{
+    const std::string state = GENERATE(as<std::string>{}, "completed", "Completed");
+    const auto result = printer_http_response("flashforge", flashforge_detail(state), 200);
+    CHECK(result.status == PrinterLinkStatus::not_ready);
+    CHECK(result.failure == PrinterLinkFailure::print_finished);
+    CHECK(flashforge_job_readiness(flashforge_detail(state)) == PrinterLinkFailure::print_finished);
+}
+
+TEST_CASE("A Flashforge reply without a machine state keeps the printer available", "[PrinterConnectionStatus]")
+{
+    const std::string reply = GENERATE(as<std::string>{}, R"({"code":0,"detail":{}})", R"({"code":0,"detail":{"status":""}})",
+                                       R"({"code":0,"detail":{"status":null}})", R"({"code":0,"detail":{"status":3}})");
+    CHECK(printer_http_response("flashforge", reply, 200).status == PrinterLinkStatus::connected);
+    CHECK(flashforge_job_readiness(reply) == PrinterLinkFailure::none);
+}
+
+TEST_CASE("A Flashforge refusal outranks the machine state it reports", "[PrinterConnectionStatus]")
+{
+    const auto refused = printer_http_response("flashforge", R"({"code":2,"message":"Printer is busy","detail":{"status":"ready"}})", 200);
+    CHECK(refused.status == PrinterLinkStatus::refused);
+    CHECK(refused.failure == PrinterLinkFailure::service_rejected);
+    const auto unavailable = printer_http_response("flashforge", R"({"code":0,"detail":{"status":"printing"}})", 503);
+    CHECK(unavailable.status == PrinterLinkStatus::unreachable);
+    CHECK(unavailable.failure == PrinterLinkFailure::http_error);
+}
+
+TEST_CASE("Unreadable Flashforge replies never claim a busy printer", "[PrinterConnectionStatus]")
+{
+    const std::string reply = GENERATE(as<std::string>{}, "", "not json", "[]", R"({"code":0})", R"({"detail":"printing"})");
+    CHECK(flashforge_job_readiness(reply) == PrinterLinkFailure::none);
 }
 
 TEST_CASE("Project loading preserves independent and inspected printer setups", "[PrinterConnectionStatus]")

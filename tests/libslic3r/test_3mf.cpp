@@ -2307,3 +2307,231 @@ TEST_CASE("Production part identities and progress survive a 3MF round-trip", "[
     REQUIRE(geometry_only.model_info->metadata_items.count(ProductionLedger::metadata_key) == 0);
     release_PlateData_list(imported_plates);
 }
+
+namespace {
+// The fixtures are local archives made by the exporter and altered only at the
+// format boundaries under test. No application, printer or transport is started.
+struct CompatibilityImport {
+    ScopedTemporaryDir backup;
+    Model model;
+    DynamicPrintConfig config;
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    PlateDataPtrs plates;
+    std::vector<Preset*> presets;
+    ~CompatibilityImport()
+    {
+        release_PlateData_list(plates);
+        for (auto* preset : presets) delete preset;
+    }
+    bool load(const std::string& path, bool settings = true)
+    {
+        model.set_backup_path(backup.string());
+        bool bambu = false, orca = false;
+        Semver version;
+        return load_bbs_3mf(path.c_str(), &config, &context, &model, &plates, &presets,
+                           &bambu, &orca, &version, nullptr,
+                           settings ? LoadStrategy::LoadModel | LoadStrategy::LoadConfig : LoadStrategy::LoadModel);
+    }
+};
+}
+
+TEST_CASE("Orca family projects retain copies and placement under any application name", "[ProjectCompatibility]")
+{
+    const std::string application = GENERATE("BambuStudio-02.08.00.00", "OrcaSlicer-2.3.1", "ElegooSlicer-1.3.0",
+                                            "CrealityPrint-7.0.0", "Snapmaker_Orca-2.3.6", "EdgeSlicer-2.4.0", "FutureSlicer-1.0");
+    INFO(application);
+    Model source;
+    auto* object = source.add_object();
+    object->name = "Bracket";
+    object->add_volume(make_cube(10, 15, 20));
+    object->add_instance()->set_offset(Vec3d(20, 30, 0));
+    object->add_instance()->set_offset(Vec3d(80, 90, 0));
+    object->instances.back()->set_rotation(Vec3d(0., 0., 0.5));
+    object->instances.back()->set_scaling_factor(Vec3d(1.5, 0.75, 1.));
+    object->instances.back()->set_mirror(Vec3d(-1., 1., 1.));
+    const auto first_bounds = object->instance_bounding_box(0);
+    const auto second_bounds = object->instance_bounding_box(1);
+    ScopedTemporaryFile file(".3mf");
+    store_project(source, file.string(), SaveStrategy::Zip64 | SaveStrategy::Silence);
+    REQUIRE(rewrite_3mf_entries(file.string(), [&](std::string& name, std::string& data) {
+        if (name != "3D/3dmodel.model") return false;
+        data = std::regex_replace(data, std::regex("<metadata name=\"OrcaSlicer\">[^<]*</metadata>"), "");
+        data = std::regex_replace(data, std::regex("<metadata name=\"Application\">[^<]*</metadata>"),
+                                  "<metadata name=\"Application\">" + application + "</metadata>");
+        return true;
+    }));
+    CompatibilityImport imported;
+    REQUIRE(imported.load(file.string()));
+    REQUIRE(imported.model.objects.size() == 1);
+    const auto* restored = imported.model.objects.front();
+    REQUIRE(restored->instances.size() == 2);
+    CHECK(restored->name == object->name);
+    CHECK_THAT((restored->instance_bounding_box(0).min - first_bounds.min).norm(), Catch::Matchers::WithinAbs(0., 1e-6));
+    CHECK_THAT((restored->instance_bounding_box(1).max - second_bounds.max).norm(), Catch::Matchers::WithinAbs(0., 1e-6));
+}
+
+TEST_CASE("Project JSON accepts numeric and boolean values without losing later settings", "[ProjectCompatibility]")
+{
+    ScopedTemporaryFile file(".3mf");
+    store_painted_cube(file.string());
+    REQUIRE(rewrite_3mf_entries(file.string(), [](std::string& name, std::string& data) {
+        if (name != "Metadata/project_settings.config") return false;
+        data = R"({"name":"project_settings", "layer_height":0.24, "enable_support":true,
+                   "nozzle_temperature":[215,"220"], "filament_colour":["#112233","#AABBCC"],
+                   "prime_tower_rib_wall":["0"], "top_one_wall_type":["not apply"],
+                   "outer_wall_speed":{"unsupported":80}, "wall_loops":4})";
+        return true;
+    }));
+    CompatibilityImport imported;
+    REQUIRE(imported.load(file.string()));
+    CHECK_THAT(imported.config.opt_float("layer_height"), Catch::Matchers::WithinAbs(0.24, 1e-9));
+    CHECK(imported.config.opt_bool("enable_support"));
+    CHECK(imported.config.option<ConfigOptionInts>("nozzle_temperature")->values == std::vector<int>{215, 220});
+    CHECK(imported.config.option<ConfigOptionStrings>("filament_colour")->values == std::vector<std::string>{"#112233", "#AABBCC"});
+    CHECK(imported.config.opt_serialize("wipe_tower_wall_type") == "rectangle");
+    CHECK_FALSE(imported.config.opt_bool("only_one_wall_top"));
+    CHECK(imported.config.opt_int("wall_loops") == 4);
+    CHECK_FALSE(imported.config.has("outer_wall_speed"));
+    CHECK(std::find(imported.context.unrecogized_keys.begin(), imported.context.unrecogized_keys.end(), "outer_wall_speed") !=
+          imported.context.unrecogized_keys.end());
+    REQUIRE(imported.model.objects.size() == 1);
+    CHECK_FALSE(imported.model.objects.front()->volumes.front()->mmu_segmentation_facets.empty());
+}
+
+TEST_CASE("Project overrides resolve nil against their own parent independent of archive order", "[ProjectCompatibility]")
+{
+    Model source;
+    auto* object = source.add_object();
+    auto* part = object->add_volume(make_cube(10, 10, 10));
+    object->add_instance();
+    ConfigSubstitutionContext strict{ForwardCompatibilitySubstitutionRule::Disable};
+    object->config.set_deserialize("retraction_speed", "80,90", strict);
+    part->config.set_deserialize("retraction_speed", "65,75", strict);
+    object->layer_config_ranges[{1., 2.}].set_deserialize("retraction_speed", "50,60", strict);
+    object->layer_height_profile.set({0., 0.2, 5., 0.2, 10., 0.2});
+    ScopedTemporaryFile file(".3mf");
+    store_project(source, file.string(), SaveStrategy::Zip64 | SaveStrategy::Silence);
+    REQUIRE(rewrite_3mf_entries(file.string(), [](std::string& name, std::string& data) {
+        if (name == "Metadata/project_settings.config") {
+            data = R"({"name":"project_settings", "retraction_speed":[200,250]})";
+            return true;
+        }
+        if (name == "Metadata/model_settings.config") {
+            data = std::regex_replace(data, std::regex("value=\"80,90\""), "value=\"80,nil\"");
+            data = std::regex_replace(data, std::regex("value=\"65,75\""), "value=\"nil,75\"");
+            return true;
+        }
+        if (name == "Metadata/layer_config_ranges.xml") {
+            data = std::regex_replace(data, std::regex(">50,60<"), ">nil,60<");
+            return true;
+        }
+        return false;
+    }));
+    CompatibilityImport imported;
+    REQUIRE(imported.load(file.string()));
+    REQUIRE(imported.model.objects.size() == 1);
+    const auto* restored = imported.model.objects.front();
+    CHECK(restored->config.opt_serialize("retraction_speed") == "80,250");
+    REQUIRE(restored->volumes.size() == 1);
+    CHECK(restored->volumes.front()->config.opt_serialize("retraction_speed") == "80,75");
+    REQUIRE(restored->layer_config_ranges.size() == 1);
+    CHECK_FALSE(restored->layer_height_profile.empty());
+    CHECK(restored->layer_config_ranges.begin()->second.opt_serialize("retraction_speed") == "80,60");
+    // Materialized inheritance is disclosed: it will no longer follow later edits.
+    CHECK(imported.context.substitutions.size() == 3);
+
+    CompatibilityImport geometry;
+    REQUIRE(geometry.load(file.string(), false));
+    REQUIRE(geometry.model.objects.size() == 1);
+    CHECK_FALSE(geometry.model.objects.front()->config.has("retraction_speed"));
+    CHECK_FALSE(geometry.model.objects.front()->volumes.front()->config.has("retraction_speed"));
+    CHECK(geometry.model.objects.front()->layer_config_ranges.empty());
+    CHECK(geometry.model.objects.front()->layer_height_profile.empty());
+}
+
+TEST_CASE("Unresolved project variants are disclosed without inventing zero speeds", "[ProjectCompatibility]")
+{
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    context.project_import = true;
+    DynamicPrintConfig config;
+    config.set_deserialize("retraction_speed", "nil,200,160", context);
+    CHECK(config.opt_serialize("retraction_speed") == "200,200,160");
+    REQUIRE(context.substitutions.size() == 1);
+    CHECK(context.substitutions.front().old_value == "nil,200,160");
+    config.set_deserialize("layer_height", "0.2,0.3", context);
+    REQUIRE(context.substitutions.size() == 2);
+    CHECK_THAT(config.opt_float("layer_height"), Catch::Matchers::WithinAbs(0.2, 1e-9));
+    config.set_deserialize("deretraction_speed", "nil,nil", context);
+    CHECK_FALSE(config.has("deretraction_speed"));
+    CHECK_FALSE(context.unrecogized_keys.empty());
+    config.set_deserialize("wall_loops", "4", context);
+    CHECK(config.opt_int("wall_loops") == 4);
+
+    ConfigSubstitutionContext strict{ForwardCompatibilitySubstitutionRule::Disable};
+    strict.project_import = true;
+    DynamicPrintConfig untouched;
+    CHECK_THROWS(untouched.set_deserialize("retraction_speed", "nil,200", strict));
+
+    // Orca already represents nil for nullable options; keep that native meaning.
+    untouched.set_deserialize("outer_wall_speed", "80,nil", strict);
+    config.set_deserialize("outer_wall_speed", "80,nil", context);
+    CHECK(config.opt_serialize("outer_wall_speed") == untouched.opt_serialize("outer_wall_speed"));
+}
+
+TEST_CASE("Malformed project speeds are reported without replacing valid values", "[ProjectCompatibility]")
+{
+    const std::string value = GENERATE("fast,80", "80mm/s,90", "80,,90", "nan,80", "80,");
+    INFO(value);
+    DynamicPrintConfig config;
+    config.set_deserialize_strict("outer_wall_speed", "60,70");
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    context.project_import = true;
+    CHECK_NOTHROW(config.set_deserialize("outer_wall_speed", value, context));
+    CHECK(config.opt_serialize("outer_wall_speed") == "60,70");
+    CHECK(context.unrecogized_keys == std::vector<std::string>{"outer_wall_speed"});
+    config.set_deserialize("wall_loops", "4", context);
+    CHECK(config.opt_int("wall_loops") == 4);
+}
+
+TEST_CASE("Native default settings deserialize identically during compatible project import", "[ProjectCompatibility]")
+{
+    const auto defaults = DynamicPrintConfig::full_print_config();
+    DynamicPrintConfig strict, imported;
+    ConfigSubstitutionContext baseline{ForwardCompatibilitySubstitutionRule::Enable};
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    context.project_import = true;
+    for (const auto& key : defaults.keys()) {
+        INFO(key);
+        const auto value = defaults.opt_serialize(key);
+        strict.set_deserialize(key, value, baseline);
+        imported.set_deserialize(key, value, context);
+        REQUIRE(imported.has(key) == strict.has(key));
+        if (strict.has(key)) CHECK(imported.opt_serialize(key) == strict.opt_serialize(key));
+    }
+    CHECK(context.substitutions.empty());
+    CHECK(context.unrecogized_keys == baseline.unrecogized_keys);
+}
+
+TEST_CASE("Renamed Bambu settings retain their supported meaning", "[ProjectCompatibility]")
+{
+    DynamicPrintConfig config;
+    ConfigSubstitutionContext context{ForwardCompatibilitySubstitutionRule::Enable};
+    config.set_deserialize("enable_support_ironing", "1", context);
+    config.set_deserialize("no_slow_down_for_cooling_on_outwalls", "1,0", context);
+    config.set_deserialize("role_base_wipe_speed", "1", context);
+    config.set_deserialize("reduce_infill_retraction_mode", "Disabled", context);
+    config.set_deserialize("support_style", "tree_organic", context);
+    config.set_deserialize("ensure_vertical_shell_thickness", "enabled", context);
+    config.set_deserialize("process_notes", "Keep this orientation", context);
+    CHECK(config.opt_bool("support_ironing"));
+    CHECK(config.opt_serialize("dont_slow_down_outer_wall") == "1,0");
+    CHECK(config.opt_bool("role_based_wipe_speed"));
+    CHECK_FALSE(config.opt_bool("reduce_infill_retraction"));
+    CHECK(config.opt_serialize("support_style") == "organic");
+    CHECK(config.opt_serialize("ensure_vertical_shell_thickness") == "ensure_all");
+    CHECK(config.opt_string("notes") == "Keep this orientation");
+    CHECK(context.substitutions.empty());
+    CHECK(context.unrecogized_keys.empty());
+    config.set_deserialize("reduce_infill_retraction_mode", "Auto", context);
+    CHECK(context.unrecogized_keys == std::vector<std::string>{"reduce_infill_retraction_mode"});
+}

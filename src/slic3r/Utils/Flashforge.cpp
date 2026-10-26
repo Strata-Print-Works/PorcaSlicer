@@ -49,6 +49,7 @@
 #include <nlohmann/json.hpp>
 
 #include "PrintHost.hpp"
+#include "PrinterConnectionStatus.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/GUI/I18N.hpp"
@@ -138,7 +139,28 @@ bool try_parse_json_int(const json& value, int& out)
     return false;
 }
 
-bool validate_local_api_response(const std::string& response_body, wxString& error_msg)
+std::string sanitize_flashforge_filename(const std::string& filename, const std::string& fallback_extension = {})
+{
+    std::string basename = fs::path(filename).filename().string();
+    if (basename.empty()) {
+        basename = "print";
+        if (!fallback_extension.empty())
+            basename += fallback_extension;
+    }
+
+    for (char& ch : basename) {
+        const bool is_ascii_alnum = (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+        if (!is_ascii_alnum && ch != '.' && ch != '_' && ch != '-') {
+            ch = '_';
+        }
+    }
+
+    return basename;
+}
+
+} // namespace
+
+bool Flashforge::validate_local_api_response(const std::string& response_body, wxString& error_msg)
 {
     const auto parsed = json::parse(response_body, nullptr, false, true);
     if (parsed.is_discarded() || !parsed.is_object()) {
@@ -164,33 +186,17 @@ bool validate_local_api_response(const std::string& response_body, wxString& err
         if (message.empty())
             message = "Request failed";
 
-        error_msg = GUI::from_u8((boost::format("Flashforge local API error %1%: %2%") % result_code % message).str());
+        BOOST_LOG_TRIVIAL(warning) << boost::format("[Flashforge HTTP] printer refused the request: code %1%: %2%") % result_code % message;
+        // Code 2 ("Printer is busy") refuses a new job, e.g. until a finished
+        // print is cleared and confirmed on the printer's screen.
+        error_msg = result_code == 2 ?
+            _L("The printer is busy. If a print just finished, clear the bed and confirm on the printer's screen, then try again.") :
+            GUI::from_u8((boost::format("Flashforge local API error %1%: %2%") % result_code % message).str());
         return false;
     }
 
     return true;
 }
-
-std::string sanitize_flashforge_filename(const std::string& filename, const std::string& fallback_extension = {})
-{
-    std::string basename = fs::path(filename).filename().string();
-    if (basename.empty()) {
-        basename = "print";
-        if (!fallback_extension.empty())
-            basename += fallback_extension;
-    }
-
-    for (char& ch : basename) {
-        const bool is_ascii_alnum = (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
-        if (!is_ascii_alnum && ch != '.' && ch != '_' && ch != '-') {
-            ch = '_';
-        }
-    }
-
-    return basename;
-}
-
-} // namespace
 
 Flashforge::Flashforge(DynamicPrintConfig* config)
     : m_host()
@@ -464,6 +470,7 @@ bool Flashforge::test_local_api(wxString& msg) const
 bool Flashforge::fetch_material_slots(std::vector<FlashforgeMaterialSlot>& slots, bool* supports_material_station, wxString& msg) const
 {
     slots.clear();
+    m_job_readiness = PrinterLinkFailure::none;
 
     if (m_serial_number.empty() || m_check_code.empty()) {
         msg = _(L("Flashforge local API requires both serial number and access code."));
@@ -479,6 +486,7 @@ bool Flashforge::fetch_material_slots(std::vector<FlashforgeMaterialSlot>& slots
         return false;
     }
 
+    m_job_readiness = flashforge_job_readiness(body);
     return true;
 }
 

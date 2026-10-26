@@ -622,6 +622,100 @@ void ConfigBase::set_deserialize(std::initializer_list<SetDeserializeItem> items
 		this->set_deserialize(item.opt_key, item.opt_value, substitutions_ctxt, item.append);
 }
 
+// Foreign slicers use vectors for some scalar settings and nil for unused or
+// inherited extruder variants. Resolve these only while reading a project, and
+// report every lossy conversion. A bad setting must not discard later settings.
+static bool deserialize_project_value(ConfigBase& config, const ConfigOptionDef& def,
+                                      const std::string& key, const std::string& original,
+                                      ConfigSubstitutionContext& context)
+{
+    std::string value = original;
+    bool changed = false;
+    const auto unsupported = [&] {
+        if (std::find(context.unrecogized_keys.begin(), context.unrecogized_keys.end(), key) == context.unrecogized_keys.end())
+            context.unrecogized_keys.push_back(key);
+        return true;
+    };
+    ConfigOptionUniquePtr candidate(def.create_default_option());
+    const bool numeric = def.type == coFloat || def.type == coFloats || def.type == coInt || def.type == coInts ||
+                         def.type == coPercent || def.type == coPercents || def.type == coFloatOrPercent ||
+                         def.type == coFloatsOrPercents || def.type == coBool || def.type == coBools ||
+                         def.type == coEnum || def.type == coEnums;
+    if (numeric && !(candidate->is_vector() && value.empty())) {
+        std::vector<std::string> slots;
+        boost::split(slots, value, boost::is_any_of(","));
+        for (auto& slot : slots) {
+            boost::trim(slot);
+            if (def.type == coBool || def.type == coBools) {
+                if (slot == "true") slot = "1";
+                else if (slot == "false") slot = "0";
+            }
+            if (slot != "nil" && def.type != coBool && def.type != coBools && def.type != coEnum && def.type != coEnums) {
+                // Several legacy vector readers do not check stream failure or
+                // trailing input. Validate each token before they can consume it.
+                std::istringstream input(slot);
+                if (def.type == coInt || def.type == coInts) {
+                    int parsed;
+                    if (!(input >> parsed)) return unsupported();
+                } else {
+                    double parsed;
+                    if (!(input >> parsed) || !std::isfinite(parsed)) return unsupported();
+                }
+                input >> std::ws;
+                if ((def.type == coPercent || def.type == coPercents || def.type == coFloatOrPercent || def.type == coFloatsOrPercents) &&
+                    input.peek() == '%') {
+                    input.get();
+                    input >> std::ws;
+                }
+                if (!input.eof()) return unsupported();
+            }
+        }
+        if (!candidate->nullable()) {
+            const auto first = std::find_if(slots.begin(), slots.end(), [](const auto& slot) { return slot != "nil"; });
+            if (first == slots.end()) {
+                // All-nil overrides mean inherit the enclosing setting, not zero.
+                return context.project_parent ? true : unsupported();
+            }
+            const std::string first_value = *first;
+            std::vector<std::string> parent_slots;
+            if (context.project_parent) {
+                if (const auto* parent = context.project_parent->option(key))
+                    boost::split(parent_slots, parent->serialize(), boost::is_any_of(","));
+            }
+            for (size_t i = 0; i < slots.size(); ++i) {
+                if (slots[i] != "nil") continue;
+                // Overrides inherit the same variant, never a neighbouring override.
+                // Without that parent, preserve real values and disclose the backfill.
+                slots[i] = parent_slots.size() == slots.size() && parent_slots[i] != "nil" ?
+                    parent_slots[i] : first_value;
+                changed = true;
+            }
+            if (candidate->is_scalar() && slots.size() > 1) {
+                changed |= std::any_of(slots.begin(), slots.end(), [&](const auto& slot) { return slot != slots.front(); });
+                value = slots.front();
+            } else {
+                value = boost::join(slots, ",");
+            }
+        } else {
+            value = boost::join(slots, ",");
+        }
+    }
+    try {
+        if (!candidate->deserialize(value)) {
+            if (def.type != coEnum && def.type != coEnums && def.type != coBool) return unsupported();
+            candidate.reset(def.create_default_option());
+            changed = true;
+        }
+    } catch (const ConfigurationError&) {
+        return unsupported();
+    }
+    config.option(key, true)->set(candidate.get());
+    if (changed && (context.rule == ForwardCompatibilitySubstitutionRule::Enable ||
+                    context.rule == ForwardCompatibilitySubstitutionRule::EnableSystemSilent))
+        context.substitutions.push_back({&def, original, std::move(candidate)});
+    return true;
+}
+
 bool ConfigBase::set_deserialize_raw(const t_config_option_key &opt_key_src, const std::string &value, ConfigSubstitutionContext& substitutions_ctxt, bool append)
 {
     t_config_option_key    opt_key = opt_key_src;
@@ -655,6 +749,9 @@ bool ConfigBase::set_deserialize_raw(const t_config_option_key &opt_key_src, con
                 return false;
         return true;
     }
+
+    if (substitutions_ctxt.project_import && !append && substitutions_ctxt.rule != ForwardCompatibilitySubstitutionRule::Disable)
+        return deserialize_project_value(*this, *optdef, opt_key, value, substitutions_ctxt);
 
     ConfigOption *opt = this->option(opt_key, true);
     assert(opt != nullptr);
@@ -879,17 +976,6 @@ int ConfigBase::load_from_json(const std::string &file, ConfigSubstitutionContex
     CNumericLocalesSetter locales_setter;
 
     std::function<bool(const json::const_iterator&, const char,const char,const bool,std::string&)> parse_str_arr = [&parse_str_arr](const json::const_iterator& it, const char single_sep,const char array_sep,const bool escape_string_style,std::string& value_str)->bool {
-        // must have consistent type name
-        std::string consistent_type;
-        for (auto iter = it.value().begin(); iter != it.value().end(); ++iter) {
-            if (consistent_type.empty())
-                consistent_type = iter.value().type_name();
-            else {
-                if (consistent_type != iter.value().type_name())
-                    return false;
-            }
-        }
-
         bool first = true;
         for (auto iter = it.value().begin(); iter != it.value().end(); iter++) {
             if (iter.value().is_array()) {
@@ -914,10 +1000,11 @@ int ConfigBase::load_from_json(const std::string &file, ConfigSubstitutionContex
                     value_str += "\"";
                 }
             }
-            else {
-                //should not happen
-                return false;
-            }
+            else if (!escape_string_style && (iter.value().is_number() || iter.value().is_boolean())) {
+                if (!first) value_str += single_sep;
+                first = false;
+                value_str += iter.value().is_boolean() ? (iter.value().get<bool>() ? "1" : "0") : iter.value().dump();
+            } else return false;
         }
         return true;
         };
@@ -1004,9 +1091,9 @@ int ConfigBase::load_from_json(const std::string &file, ConfigSubstitutionContex
                     t_config_option_key opt_key_src = opt_key;
                     this->handle_legacy(opt_key, value_str);
                     if (opt_key.empty()) {
-                        //BBS: record these options
-                        substitution_context.unrecogized_keys.push_back(opt_key_src);
-                        continue;
+                        // Some migrations depend on the value (for example tower
+                        // wall type). Decide whether to omit it after joining the array.
+                        opt_key = opt_key_src;
                     }
                     bool valid = true, first = true;
                     const ConfigOptionDef* optdef = config_def->get(opt_key);
@@ -1047,14 +1134,30 @@ int ConfigBase::load_from_json(const std::string &file, ConfigSubstitutionContex
                     valid = parse_str_arr(it, single_sep, array_sep,escape_string_type, value_str);
                     if (!valid) {
                         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": parse " << file << " error, invalid json array for " << it.key();
-                        break;
+                        if (substitution_context.project_import) {
+                            substitution_context.unrecogized_keys.push_back(opt_key_src);
+                            continue;
+                        }
+                        reason = "Invalid JSON array for " + it.key();
+                        return -1;
                     }
                     if (valid)
-                        this->set_deserialize(opt_key, value_str, substitution_context);
+                        // Run value migrations on the original key, exactly once.
+                        this->set_deserialize(opt_key_src, value_str, substitution_context);
+                }
+                else if (it.value().is_number() || it.value().is_boolean()) {
+                    this->set_deserialize(opt_key, it.value().is_boolean() ?
+                        (it.value().get<bool>() ? "1" : "0") : it.value().dump(), substitution_context);
                 }
                 else {
                     //should not happen
                     BOOST_LOG_TRIVIAL(error) << __FUNCTION__<< ": parse "<<file<<" error, invalid json type for " << it.key();
+                    if (substitution_context.project_import)
+                        substitution_context.unrecogized_keys.push_back(opt_key);
+                    else {
+                        reason = "Invalid JSON type for " + it.key();
+                        return -1;
+                    }
                 }
             }
         }

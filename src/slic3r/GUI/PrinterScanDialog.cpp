@@ -348,11 +348,13 @@ public:
             link.result = update.result;
             if (current->vendor == "elegoo" && !update.serial.empty())
                 wxGetApp().app_config->set("dev_sn", device_id(*current), update.serial);
-            if (update.result.status == PrinterLinkStatus::connected) link.failures = 0;
+            // A printer that answers while busy or not ready is reachable, not failing: keep the regular cadence.
+            const bool answered = update.result.status == PrinterLinkStatus::connected || update.result.status == PrinterLinkStatus::not_ready;
+            if (answered) link.failures = 0;
             else link.failures = std::min(link.failures + 1, 7u);
             link.checking = link.failures > 0 && link.failures < 3 && update.result.status != PrinterLinkStatus::refused;
             link.next_check = std::chrono::steady_clock::now() + std::chrono::seconds(
-                update.result.status == PrinterLinkStatus::refused ? 300 : discovery_retry_seconds(link.failures, update.result.status == PrinterLinkStatus::connected));
+                update.result.status == PrinterLinkStatus::refused ? 300 : discovery_retry_seconds(link.failures, answered));
         });
         Bind(wxEVT_TIMER, [this](wxTimerEvent&) { refresh(); });
         m_timer.Start(1000);
@@ -477,6 +479,8 @@ wxString connection_failure_label(const PrinterLinkResult& result)
     case PrinterLinkFailure::credentials_rejected: return _L("Access denied — check the access code or API key");
     case PrinterLinkFailure::service_rejected: return _L("Printer rejected the connection request");
     case PrinterLinkFailure::printer_not_ready: return _L("Printer service is available, but the printer is not ready");
+    case PrinterLinkFailure::printer_busy: return _L("Printer is busy");
+    case PrinterLinkFailure::print_finished: return _L("Print finished — clear the bed and confirm on the printer");
     case PrinterLinkFailure::http_error: return wxString::Format(_L("Printer returned HTTP %u"), result.http_status);
     case PrinterLinkFailure::request_failed: return _L("Connection check failed — check the address and network");
     }
@@ -1134,7 +1138,9 @@ SavedPrinterStatus saved_printer_status(const std::string& destination)
     const auto label = into_u8(connection_label(*printer));
     if (!link->second.restore_error.empty()) return {label, Connection::disconnected};
     if (link->second.checking) return {label, Connection::unknown};
-    return {label, link->second.result.status == PrinterLinkStatus::connected ? Connection::unknown : Connection::disconnected};
+    // A busy or not-ready printer still answered; only failed checks are shown as disconnected.
+    const auto status = link->second.result.status;
+    return {label, status == PrinterLinkStatus::connected || status == PrinterLinkStatus::not_ready ? Connection::unknown : Connection::disconnected};
 }
 
 namespace {
@@ -1249,6 +1255,16 @@ std::string scanned_printer_destination(const std::string& id)
     for (const auto& p : saved_printers())
         if (device_id(p) == id) return project_destination(p);
     return portable_printer_destination(id, *wxGetApp().app_config);
+}
+
+bool select_saved_printer_in_devices(const std::string& id)
+{
+    for (const auto& p : saved_printers())
+        if (device_id(p) == id) {
+            wxGetApp().app_config->set("last_scanned_printer", p.key());
+            return true;
+        }
+    return false;
 }
 
 std::string restore_scanned_printer(const std::string& destination, DynamicPrintConfig& config)
@@ -1573,7 +1589,8 @@ wxPanel* create_scanned_devices_page(wxWindow* parent, LazyPage<MonitorPanel>* m
         bool Show(bool show = true) override
         {
             const bool changed = wxPanel::Show(show);
-            if (show) { refresh(); inspect(); }
+            // Another view, such as a sent print, may have chosen the printer to show.
+            if (show) { m_selected = wxGetApp().app_config->get("last_scanned_printer"); refresh(); inspect(); }
             else { m_open_elegoo.clear(); stop_inspecting(true, false); m_controls->Hide(); }
             return changed;
         }

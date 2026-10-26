@@ -450,9 +450,13 @@ Settings:
 - On GTK, `Create` forces `wxHSCROLL|wxVSCROLL` (`src/gtk/webview_webkit2.cpp:899-901`).
 
 **OrcaSlicer.** `PrinterWebView` vetoes `NEWWINDOW` and opens the URL with `wxLaunchDefaultBrowser`;
-`DockPanel` vetoes it outright. `WebDialog` and `WebPanel` re-apply `SetPage` content on a reload by
-watching `NAVIGATED` + `LOADED` for `web_hosting::content_base_url()`: WebKit reloads the base URL,
-while Edge ignores the base URL and restores `SetPage` content itself.
+`PluginPage` does the same for http(s) URLs only and drops other schemes; `DockPanel` vetoes it
+outright. `WebDialog` and `WebPanel` re-apply `SetPage` content on a reload by watching `NAVIGATED` +
+`LOADED` for `web_hosting::content_base_url()`: WebKit reloads the base URL, while Edge ignores the
+base URL and restores `SetPage` content itself. On WebKit, `SetPage` takes over the current history
+entry instead of adding one, so Back from a page the content navigated to lands on the bootstrap page;
+both hosts re-apply `SetPage` on a `LOADED` of `web_hosting::bootstrap_url()` once the content has been
+swapped in.
 
 **Pitfalls.**
 - **Rule:** Call `evt.Veto()` in `NEWWINDOW` when you open the URL externally or in the same view.

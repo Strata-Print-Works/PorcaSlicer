@@ -281,6 +281,9 @@
 #include "Widgets/MultiNozzleSync.hpp"           // NozzleOption, tryPopUpMultiNozzleDialog, setExtruderNozzleCount
 #include "DeviceCore/DevNozzleSystem.h"          // DevNozzle, GetExtNozzles / GetRackNozzles
 #include "ProjectDirtyStateManager.hpp"
+#include "ProjectSettingsReviewDialog.hpp"
+#include "SliceComparisonDialog.hpp"
+#include "libslic3r/SliceComparison.hpp"
 #include "Gizmos/GLGizmoSimplify.hpp" // create suggestion notification
 #include "Gizmos/GLGizmoSVG.hpp" // Drop SVG file
 #include "Gizmos/GizmoObjectManipulation.hpp"
@@ -8070,6 +8073,7 @@ struct Plater::priv
     std::string m_slice_scope_stage_id;
     PlateSliceBatch m_scope_batch;
     std::map<std::size_t, PlatePrintSetup> m_scope_setups;
+    SliceComparisonHistory m_slice_comparisons;
     bool m_scope_force{false};
     bool m_scope_switching{false};
     wxEventType m_scope_finished_event{wxEVT_NULL};
@@ -9973,6 +9977,11 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                     PlateDataPtrs             plate_data;
                     ConfigSubstitutionContext config_substitutions{ForwardCompatibilitySubstitutionRule::Enable};
                     std::vector<Preset *>     project_presets;
+                    ScopeGuard release_import([&] {
+                        release_PlateData_list(plate_data);
+                        for (auto* preset : project_presets) delete preset;
+                    });
+                    bool reviewed_project_settings = false;
                     // BBS: backup & restore
                     q->skip_thumbnail_invalid = true;
                     model = Slic3r::Model::read_from_archive(path.string(), &config_loaded, &config_substitutions, en_3mf_file_type, strategy, &plate_data, &project_presets,
@@ -10096,6 +10105,32 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
 
                     // 1. add extruder for prusa model if the number of existing extruders is not enough
                     // 2. add extruder for BBS or Other model if only import geometry
+                    // Review before changing the workspace or loading embedded presets.
+                    // Complete Porca plate setups are validated by their strict reader.
+                    const bool uses_shared_setup = plate_data.empty() || std::any_of(plate_data.begin(), plate_data.end(),
+                        [](const PlateData* plate) { return plate && plate->print_setup.empty(); });
+                    if (load_config && !published_config.published && uses_shared_setup && en_3mf_file_type != En3mfType::From_Prusa) {
+                        if (const auto review = review_project_settings(config_substitutions); !review.empty()) {
+                            ProjectSettingsReviewDialog review_dialog(q, review);
+                            const int choice = review_dialog.ShowModal();
+                            if (choice != wxID_YES && choice != wxID_NO) {
+                                q->skip_thumbnail_invalid = false;
+                                return empty_result;
+                            }
+                            reviewed_project_settings = true;
+                            if (choice == wxID_NO) {
+                                release_PlateData_list(plate_data);
+                                for (auto* preset : project_presets) delete preset;
+                                project_presets.clear();
+                                config_loaded.clear();
+                                model = Model::read_from_archive(path.string(), &config_loaded, &config_substitutions,
+                                    en_3mf_file_type, LoadStrategy::LoadModel | LoadStrategy::AddDefaultInstances,
+                                    &plate_data, &project_presets, &file_version);
+                                load_config = false;
+                            }
+                        }
+                    }
+
                     if (en_3mf_file_type == En3mfType::From_Prusa || (load_model && !load_config)) {
                         std::set<int> extruderIds;
                         for (ModelObject *o : model.objects) {
@@ -10397,7 +10432,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         }
                     }
                     // BambuStudio projects routinely carry values Orca replaces; log them rather than showing a dialog on every open.
-                    if (is_bambu_studio_project)
+                    if (is_bambu_studio_project || reviewed_project_settings)
                         log_substitutions(config_substitutions.substitutions, path.string());
                     else if (!config_substitutions.empty())
                         show_substitutions_info(config_substitutions.substitutions, filename.string());
@@ -11821,6 +11856,7 @@ void Plater::priv::reset(bool apply_presets_change, bool reload_presets)
 {
     q->cancel_slice_batch();
     m_scope_batch.cancel();
+    m_slice_comparisons.clear();
     m_slice_scope = SliceScope::Plate;
     m_slice_scope_stage_id.clear();
     // TakeSnapshot below and load_current_presets() further down each re-evaluate the
@@ -14336,6 +14372,7 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
         else if (evt.cancelled()) notification_manager->set_slicing_progress_canceled(_u8L("Slicing Canceled"));
         else notification_manager->set_slicing_progress_export_possible();
         delayed_scene_refresh = true;
+        if (evt.success() && printer_technology == ptFFF) q->remember_slice_for_comparison(true);
         m_is_slicing = false;
         return;
     }
@@ -14444,6 +14481,9 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
     //BBS: set the current plater's slice result to valid
     if (!this->background_process.empty())
         this->background_process.get_current_plate()->update_slice_result_valid_state(evt.success());
+
+    if (evt.success() && !has_error && printer_technology == ptFFF)
+        q->remember_slice_for_comparison(true);
 
     //BBS: update the action button according to the current plate's status
     bool ready_to_slice = !this->partplate_list.get_curr_plate()->is_slice_result_valid();
@@ -20198,9 +20238,18 @@ bool Plater::import_project_plates(const fs::path& file_path, bool keep_settings
         // A Porca archive carries strict, complete per-plate setups. Its shared
         // compatibility profile is not the source of those jobs' settings.
         const bool needs_shared_setup = std::any_of(plates.begin(), plates.end(), [](const PlateData& p) { return p.print_setup.empty(); });
-        if (keep_settings && type != En3mfType::From_Prusa && needs_shared_setup &&
-            (!substitutions.unrecogized_keys.empty() || !substitutions.substitutions.empty()))
-            throw RuntimeError("Some settings in this project are unsupported. Import geometry only to keep its models without changing your current print settings.");
+        if (keep_settings && type != En3mfType::From_Prusa && needs_shared_setup) {
+            // Like opening the project, unknown settings are left out and unknown
+            // values replaced, but only once the user has reviewed them.
+            if (const auto review = review_project_settings(substitutions); !review.empty()) {
+                ProjectSettingsReviewDialog dialog(this, review);
+                const int choice = dialog.ShowModal();
+                // The workspace is still untouched. Re-read the archive without
+                // settings, exactly as a geometry-only import does.
+                if (choice == wxID_NO) return import_project_plates(file_path, false);
+                if (choice != wxID_YES) return false;
+            }
+        }
         if (keep_settings && !independent && (type == En3mfType::From_Prusa || source_config.empty())) {
             MessageDialog dialog(this,
                 _L("This file's print settings cannot be imported. Add its plates using your current printer and print settings?"),
@@ -22177,6 +22226,83 @@ void Plater::slice_workspace_stage(const std::string& stage_id, bool force)
     slice_selected_scope(force);
 }
 
+namespace {
+std::string comparison_plate_label(PartPlate& plate)
+{
+    const wxString number = format_wxstr(_L("Plate %1%"), plate.get_index() + 1);
+    return into_u8(plate.get_plate_name().empty() ? number : number + " — " + from_u8(plate.get_plate_name()));
+}
+}
+bool Plater::can_compare_slices() const
+{
+    if (!p || p->background_process.running() || p->m_is_slicing || p->m_scope_batch.running() ||
+        p->printer_technology != ptFFF) return false;
+    auto* plate = p->partplate_list.get_curr_plate();
+    return plate && plate->is_slice_result_valid() && !plate->is_apply_result_invalid() &&
+        plate->get_slice_result() && !plate->get_slice_result()->moves.empty();
+}
+void Plater::remember_slice_for_comparison(bool completed)
+{
+    if (!p || (!completed && (p->background_process.running() || p->m_scope_batch.running()))) return;
+    auto* plate = completed ? p->background_process.get_current_plate() : p->partplate_list.get_curr_plate();
+    if (!plate || !plate->is_slice_result_valid() || plate->is_apply_result_invalid()) return;
+    const auto* result = plate->get_slice_result();
+    if (!result || result->moves.empty()) return;
+    const auto current = p->m_slice_comparisons.current(plate->id().id);
+    if (current && current->revision == result->id && (!completed || current->settings_available)) return;
+    const Print* print = completed && p->m_is_slicing && !m_only_gcode ? plate->fff_print() : nullptr;
+    const auto origin = plate->get_origin();
+    p->m_slice_comparisons.record(plate->id().id, make_slice_snapshot(*result,
+        print ? &print->full_print_config() : nullptr, print ? &print->model() : nullptr,
+        origin.x(), origin.y(), comparison_plate_label(*plate)));
+}
+void Plater::show_slice_comparison()
+{
+    if (!can_compare_slices()) return;
+    remember_slice_for_comparison();
+    auto* active = p->partplate_list.get_curr_plate();
+    const auto current = p->m_slice_comparisons.current(active->id().id);
+    std::vector<SliceComparisonSource> sources;
+    if (const auto previous = p->m_slice_comparisons.previous(active->id().id))
+        sources.push_back({into_u8(_L("Previous slice of this plate")), [previous] { return previous; }});
+    for (auto* plate : p->partplate_list.get_plate_list()) {
+        if (plate == active) continue;
+        // Editing another plate may invalidate its live result. The retained
+        // completed slice remains useful, without assigning those edits to it.
+        if (const auto retained = p->m_slice_comparisons.current(plate->id().id)) {
+            sources.push_back({into_u8(format_wxstr(_L("Last completed slice: %1%"), from_u8(comparison_plate_label(*plate)))),
+                               [retained] { return retained; }});
+            continue;
+        }
+        if (!plate->is_slice_result_valid() || plate->is_apply_result_invalid() ||
+            !plate->get_slice_result() || plate->get_slice_result()->moves.empty()) continue;
+        const ObjectID identity = plate->id();
+        sources.push_back({comparison_plate_label(*plate), [weak = wxWeakRef<Plater>(this), identity]() -> SliceSnapshotPtr {
+            if (!weak || weak->IsBeingDeleted() || !weak->p || weak->p->background_process.running()) return nullptr;
+            auto* state = weak->p.get();
+            for (auto* candidate : state->partplate_list.get_plate_list()) {
+                if (candidate->id() != identity || !candidate->is_slice_result_valid() || candidate->is_apply_result_invalid()) continue;
+                const auto* result = candidate->get_slice_result();
+                if (!result || result->moves.empty()) return nullptr;
+                const auto saved = state->m_slice_comparisons.current(identity.id);
+                if (saved && saved->revision == result->id) return saved;
+                const auto origin = candidate->get_origin();
+                state->m_slice_comparisons.record(identity.id, make_slice_snapshot(*result, nullptr, nullptr,
+                    origin.x(), origin.y(), comparison_plate_label(*candidate)));
+                return state->m_slice_comparisons.current(identity.id);
+            }
+            return nullptr;
+        }});
+    }
+    if (sources.empty()) {
+        show_info(this, _L("Slice this plate again, or slice another plate, to compare the completed results."), _L("Compare slices"));
+        return;
+    }
+    // Retained snapshots are immutable. No plate activation or preset capture is
+    // needed, and callbacks resolve stable plate identities after modal events.
+    Slic3r::GUI::show_slice_comparison(this, current, std::move(sources));
+}
+
 void Plater::show_filament_usage_report()
 {
     if (!p || slice_batch_running() || is_background_process_slicing() || p->background_process.running() ||
@@ -22855,9 +22981,12 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
 
         std::unique_ptr<PrintHostSendDialog> pDlg;
         if (host_type == htElegooLink) {
+            // CC2 starts remotely only with one filament; the sliced plate reports how many it uses.
+            const auto* slice = delivery_plate->is_slice_result_valid() ? delivery_plate->get_slice_result() : nullptr;
+            const int used_filaments = slice ? int(slice->print_statistics.total_volumes_per_extruder.size()) : 0;
             pDlg = std::make_unique<ElegooPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
                                                                storage_paths, storage_names,
-                                                               config->get_bool("open_device_tab_post_upload"));
+                                                               config->get_bool("open_device_tab_post_upload"), used_filaments);
         } else if (host_type == htCrealityPrint) {
             pDlg = std::make_unique<CrealityPrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
                                                                  storage_paths, storage_names,
@@ -23073,6 +23202,9 @@ void Plater::print_job_finished(wxCommandEvent &evt)
     if (!dev) return;
 
     dev->set_selected_machine(evt.GetString().ToStdString());
+    // Devices shows the printer that received the job rather than the last one inspected.
+    if (wxGetApp().app_config->get_bool("independent_plate_setups"))
+        select_saved_printer_in_devices(evt.GetString().ToStdString());
     p->main_frame->request_select_tab(TAB_ID_MONITOR);
     // Selects the status page on a built Device tab; one built by the switch starts there.
     MonitorPanel* curr_monitor = MonitorPanel::if_built();

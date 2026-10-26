@@ -4162,6 +4162,18 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         ImGui::PopTextWrapPos();
     }
     ImGui::Spacing();
+    const bool comparison_ready = wxGetApp().plater()->can_compare_slices();
+    imgui.push_cancel_button_style();
+    imgui.disabled_begin(!comparison_ready);
+    if (ImGui::Button(_u8L("Compare slices…").c_str(), {ImGui::GetContentRegionAvail().x, 30.f * m_scale})) {
+        wxGetApp().CallAfter([] {
+            if (!wxGetApp().is_closing())
+                if (auto* plater = wxGetApp().plater()) plater->show_slice_comparison();
+        });
+    }
+    imgui.disabled_end();
+    imgui.pop_cancel_button_style();
+    ImGui::Spacing();
     const float tab_gap = 12.f * m_scale;
     const float tab_width = std::max(0.f, (ImGui::GetContentRegionAvail().x - tab_gap) * .5f);
     const auto tab = [&](int index, const std::string& label) {

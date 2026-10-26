@@ -1,4 +1,5 @@
 #include "MainFrame.hpp"
+#include "ModelLibraryPanel.hpp"
 
 #include <wx/event.h>
 #include "slic3r/GUI/Event.hpp"
@@ -1598,6 +1599,12 @@ void MainFrame::init_tabpanel() {
         m_tabpanel->AddPage(TAB_ID_MULTI_DEVICE, m_multi_machine_page, _L("Multi-device"), "tab_multi_active");
     }
 
+    if (wxGetApp().is_editor()) {
+        m_library_page = new LazyPage<ModelLibraryPanel>(m_tabpanel, TAB_ID_LIBRARY, 70);
+        m_lazy_pages.push_back(m_library_page);
+        m_tabpanel->AddPage(TAB_ID_LIBRARY, m_library_page, _L("Library"), "tab_auxiliary_active");
+    }
+
     m_project_page = new LazyPage<ProjectPanel>(m_tabpanel, TAB_ID_PROJECT, 60);
     m_lazy_pages.push_back(m_project_page);
     m_tabpanel->AddPage(TAB_ID_PROJECT, m_project_page, _L("Project"), "tab_auxiliary_active");
@@ -2740,6 +2747,7 @@ void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_sl
 
 void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
 {
+    ModelLibraryPanel::when_built([](ModelLibraryPanel& library) { library.msw_rescale(); });
     wxGetApp().update_fonts(this);
     this->SetFont(this->normal_font());
 
@@ -2812,6 +2820,7 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
 
 void MainFrame::on_sys_color_changed()
 {
+    ModelLibraryPanel::when_built([](ModelLibraryPanel& library) { library.sys_color_changed(); });
     wxBusyCursor wait;
 
     // update label colors in respect to the system mode
@@ -3459,6 +3468,13 @@ void MainFrame::init_menubar_as_editor()
             [this](wxCommandEvent&) { if (m_project_tabs) m_project_tabs->next(-1); });
         viewMenu->AppendSeparator();
         add_common_view_menu_items(viewMenu, std::bind(&MainFrame::can_change_view, this));
+        append_menu_item(viewMenu, wxID_ANY, _L("Compare slices…"), _L("Compare completed slices without changing either plate"),
+            [](wxCommandEvent&) {
+                wxGetApp().CallAfter([] {
+                    if (!wxGetApp().is_closing())
+                        if (auto* plater = wxGetApp().plater()) plater->show_slice_comparison();
+                });
+            }, "", nullptr, [this] { return m_plater && m_plater->can_compare_slices(); }, this);
         viewMenu->AppendSeparator();
 
         //BBS perspective view

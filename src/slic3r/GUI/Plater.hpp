@@ -647,6 +647,9 @@ public:
     wxString slice_batch_label() const;
     void cancel_slice_batch();
     void show_filament_usage_report();
+    bool can_compare_slices() const;
+    void remember_slice_for_comparison(bool completed = false);
+    void show_slice_comparison();
     void record_slice_preset(std::string action);
     void reslice_SLA_supports(const ModelObject &object, bool postpone_error_messages = false);
     void reslice_SLA_hollowing(const ModelObject &object, bool postpone_error_messages = false);

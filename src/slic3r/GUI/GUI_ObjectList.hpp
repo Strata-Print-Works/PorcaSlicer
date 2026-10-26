@@ -210,6 +210,7 @@ private:
     bool m_starting_filament_editor = false;
     wxDataViewItem m_filament_editor_item { nullptr };
     bool is_live_model_item(wxDataViewItem item) const;
+    bool is_pointer_cell(wxDataViewItem item, int column) const;
     void start_filament_editor(wxDataViewItem item);
 #endif // __WXOSX__
 

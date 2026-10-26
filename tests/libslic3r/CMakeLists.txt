@@ -36,6 +36,8 @@ add_executable(${_TEST_NAME}_tests
     test_project_plate_import.cpp
     test_plate_slice_batch.cpp
     test_production_ledger.cpp
+    test_slice_comparison.cpp
+    test_slice_comparison_snapshot.cpp
     test_filament_usage.cpp
     test_workspace_stages.cpp
     test_discovered_printer.cpp

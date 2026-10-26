@@ -342,6 +342,7 @@ src/slic3r/GUI/PluginsDialog.cpp
 src/slic3r/GUI/PrinterScanDialog.cpp
 src/slic3r/GUI/PrinterWebView.cpp
 src/slic3r/GUI/Project.cpp
+src/slic3r/GUI/ProjectSettingsReviewDialog.cpp
 src/slic3r/GUI/ProductionPanel.cpp
 src/slic3r/GUI/PublishSettingsDialog.hpp
 src/slic3r/GUI/PurgeModeDialog.cpp
@@ -374,3 +375,7 @@ src/slic3r/GUI/wxMediaCtrl3.cpp
 src/slic3r/Utils/ElegooCanvas.hpp
 src/slic3r/Utils/ElegooCanvas.cpp
 src/slic3r/GUI/PlateTransfer.cpp
+
+src/slic3r/GUI/ModelLibraryPanel.cpp
+
+src/slic3r/GUI/SliceComparisonDialog.cpp

@@ -6,6 +6,7 @@ endif ()
 
 get_filename_component(_TEST_NAME ${CMAKE_CURRENT_LIST_DIR} NAME)
 add_executable(${_TEST_NAME}_tests
+    test_model_library.cpp
     ${_TEST_NAME}_tests_main.cpp
     test_bambu_filament_ids.cpp
     test_bambu_device_sessions.cpp
@@ -79,7 +80,7 @@ if (MSVC)
     target_link_libraries(${_TEST_NAME}_tests Setupapi.lib)
 endif ()
 
-target_link_libraries(${_TEST_NAME}_tests test_common libslic3r_gui libslic3r pybind11::embed Catch2::Catch2WithMain)
+target_link_libraries(${_TEST_NAME}_tests porca_model_library test_common libslic3r_gui libslic3r pybind11::embed Catch2::Catch2WithMain)
 set_property(TARGET ${_TEST_NAME}_tests PROPERTY FOLDER "tests")
 
 add_library(porca_fake_bbl_plugin SHARED fake_bbl_plugin.cpp)
@@ -166,3 +167,5 @@ if (ORCA_BUNDLED_UV_EXECUTABLE)
 endif()
 
 orcaslicer_discover_tests(${_TEST_NAME}_tests)
+
+target_compile_definitions(${_TEST_NAME}_tests PRIVATE PORCA_LIBRARY_FORMAT_TESTS)

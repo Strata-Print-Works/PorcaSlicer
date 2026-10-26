@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "libslic3r/DiscoveredPrinter.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -225,10 +226,28 @@ class CanvasFixture final : public ElegooCanvasTransport {
 public:
     std::deque<std::pair<uint8_t, std::vector<uint8_t>>> replies;
     std::vector<std::pair<uint8_t, std::vector<uint8_t>>> sent;
+    int requests_at_commit = -1;
     void send(uint8_t h, const std::vector<uint8_t>& b) override { sent.emplace_back(h, b); }
     std::pair<uint8_t, std::vector<uint8_t>> receive() override {
         if (replies.empty()) throw std::runtime_error("fixture timeout");
         auto result = replies.front(); replies.pop_front(); return result;
+    }
+    void commit() override { requests_at_commit = int(requests().size()); }
+    // Published requests to the printer, in order.
+    std::vector<nlohmann::json> requests() const {
+        std::vector<nlohmann::json> result;
+        for (const auto& [h, body] : sent) {
+            if (h != 48) continue;
+            const size_t start = 2 + (size_t(body[0]) << 8) + body[1];
+            auto value = nlohmann::json::parse(body.begin() + start, body.end());
+            if (value.contains("method")) result.push_back(std::move(value));
+        }
+        return result;
+    }
+    std::vector<int> methods() const {
+        std::vector<int> result;
+        for (const auto& request : requests()) result.push_back(request["method"].get<int>());
+        return result;
     }
     void message(const std::string& topic, const nlohmann::json& value, uint8_t header = 48) {
         std::vector<uint8_t> body; elegoo_mqtt_string(body, topic);
@@ -240,6 +259,14 @@ public:
     }
     void identity(const std::string& serial = "fixture-serial") {
         message("elegoo/fixture-serial/client/api_response", {{"id", 1}, {"result", {{"error_code", 0}, {"sn", serial}, {"machine_model", "Centauri Carbon 2"}}}});
+    }
+    void status(const nlohmann::json& external_device = {{"type", 0}}) {
+        nlohmann::json result{{"error_code", 0}, {"machine_status", {{"status", 1}}}};
+        if (!external_device.is_null()) result["external_device"] = external_device;
+        message("elegoo/fixture-serial/client/api_response", {{"id", 2}, {"result", result}});
+    }
+    void start_reply(const nlohmann::json& result, uint8_t header = 48) {
+        message("elegoo/fixture-serial/client/api_response", {{"id", 3}, {"method", 1020}, {"result", result}}, header);
     }
 };
 nlohmann::json canvas_fixture() {
@@ -263,14 +290,8 @@ TEST_CASE("CANVAS sync accepts only correlated fresh readings after identity ver
     REQUIRE(result.error.empty()); REQUIRE(result.slots.size() == 3);
     CHECK(result.slots[0].color == "#AABBCC"); CHECK(result.slots[0].material == "PLA");
     CHECK(result.slots[1].material.empty()); CHECK(result.slots[1].color.empty()); CHECK(result.slots[2].color.empty());
-    std::vector<int> methods;
-    for (const auto& [h, body] : io.sent) {
-        if (h != 48) continue;
-        const size_t start = 2 + (size_t(body[0]) << 8) + body[1];
-        const auto value = nlohmann::json::parse(body.begin() + start, body.end());
-        if (value.contains("method")) methods.push_back(value["method"].get<int>());
-    }
-    CHECK(methods == std::vector<int>{1001, 2005}); // No printer writes or upload/start action.
+    CHECK(io.methods() == std::vector<int>{1001, 2005}); // No printer writes or upload/start action.
+    CHECK(io.requests_at_commit == -1);
 }
 TEST_CASE("CANVAS sync rejects credentials changed identity and registration refusal without importing slots", "[ElegooLink]")
 {
@@ -378,4 +399,114 @@ TEST_CASE("Canceled CANVAS requests open no transport and empty slots retain no 
     data["canvas_info"]["canvas_list"][0]["tray_list"][0]["status"] = 0;
     const auto slots = parse_elegoo_canvas(nlohmann::json::parse(data.dump()));
     REQUIRE(slots.size() == 3); CHECK(slots[0].material.empty()); CHECK(slots[0].color.empty());
+}
+
+namespace {
+ElegooPrintJob single_filament_job() { return {"plate_1.gcode", true, true, 1}; }
+}
+TEST_CASE("Upload and print sends one start request for the uploaded file with the chosen options", "[ElegooLink]")
+{
+    CanvasFixture io; io.begin(); io.identity(); io.status();
+    io.start_reply({{"error_code", 0}});
+    const auto result = start_elegoo_print(io, "fixture-serial", "fixture-code", "client", single_filament_job());
+    CHECK(result.started); CHECK(result.sent); CHECK(result.error.empty());
+    const auto requests = io.requests();
+    REQUIRE(requests.size() == 3);
+    CHECK(requests[1]["method"] == 1002);
+    CHECK(io.requests_at_commit == 2); // Cancel stops applying only right before the start request.
+    const auto& start = requests[2];
+    CHECK(start["method"] == 1020);
+    CHECK(start["id"] == 3);
+    const auto& params = start["params"];
+    CHECK(params["storage_media"] == "local");
+    CHECK(params["filename"] == "plate_1.gcode"); // The name the upload used, without a folder.
+    CHECK(params["config"]["printer_check"] == true);
+    CHECK(params["config"]["print_layout"] == "B");
+    CHECK(params["config"]["delay_video"] == false);
+    CHECK_FALSE(params["config"].contains("slot_map")); // No CANVAS slot is chosen for the user.
+    const auto textured = elegoo_print_start_params({"plate_1.gcode", false, false, 1});
+    CHECK(textured["config"]["print_layout"] == "A");
+    CHECK(textured["config"]["printer_check"] == false);
+}
+TEST_CASE("A printer that refuses to start reports why and is not asked again", "[ElegooLink]")
+{
+    const int code = GENERATE(109, 1009, 1021, 1026, 4242);
+    CanvasFixture io; io.begin(); io.identity(); io.status();
+    io.start_reply({{"error_code", code}});
+    const auto result = start_elegoo_print(io, "fixture-serial", "fixture-code", "client", single_filament_job());
+    CHECK_FALSE(result.started);
+    CHECK(result.sent);
+    CHECK(result.printer_code == code);
+    CHECK_FALSE(result.error.empty());
+    CHECK(io.methods() == std::vector<int>{1001, 1002, 1020});
+}
+TEST_CASE("An unconfirmed start is reported as uncertain and never repeated", "[ElegooLink]")
+{
+    CanvasFixture io; io.begin(); io.identity(); io.status();
+    SECTION("No reply before the deadline") {}
+    SECTION("Reply to another request") {
+        io.message("elegoo/fixture-serial/client/api_response", {{"id", 99}, {"result", {{"error_code", 0}}}});
+    }
+    SECTION("Reply for another client") {
+        io.message("elegoo/fixture-serial/other/api_response", {{"id", 3}, {"result", {{"error_code", 0}}}});
+    }
+    SECTION("Retained reply") { io.start_reply({{"error_code", 0}}, 49); }
+    SECTION("Reply for another action") {
+        io.message("elegoo/fixture-serial/client/api_response", {{"id", 3}, {"method", 1021}, {"result", {{"error_code", 0}}}});
+    }
+    SECTION("Reply without a result code") { io.start_reply({{"message", "accepted"}}); }
+    const auto result = start_elegoo_print(io, "fixture-serial", "fixture-code", "client", single_filament_job());
+    CHECK_FALSE(result.started);
+    CHECK(result.sent);
+    CHECK(result.printer_code == 0);
+    CHECK_FALSE(result.error.empty());
+    CHECK(io.methods() == std::vector<int>{1001, 1002, 1020});
+}
+TEST_CASE("A CC2 start sends no command without one confirmed filament source", "[ElegooLink]")
+{
+    CanvasFixture io;
+    auto job = single_filament_job();
+    std::vector<int> expected{1001, 1002};
+    SECTION("Several filaments") { job.filaments = 2; expected.clear(); }
+    SECTION("Unknown filaments") { job.filaments = 0; expected.clear(); }
+    SECTION("File in a folder") { job.filename = "jobs/plate_1.gcode"; expected.clear(); }
+    SECTION("CANVAS attached") { io.begin(); io.identity(); io.status({{"type", 1}}); }
+    SECTION("Accessories not reported") { io.begin(); io.identity(); io.status(nullptr); }
+    SECTION("Status refused") {
+        io.begin(); io.identity();
+        io.message("elegoo/fixture-serial/client/api_response", {{"id", 2}, {"result", {{"error_code", 1009}}}});
+    }
+    SECTION("Different printer") { io.begin(); io.identity("other-serial"); expected = {1001}; }
+    const auto result = start_elegoo_print(io, "fixture-serial", "fixture-code", "client", job);
+    CHECK_FALSE(result.started);
+    CHECK_FALSE(result.sent);
+    CHECK_FALSE(result.error.empty());
+    CHECK(io.methods() == expected);
+    CHECK(io.requests_at_commit == -1);
+    if (expected.empty()) CHECK(io.sent.empty());
+}
+TEST_CASE("Only an explicit report of no CANVAS lets a print start from the print head", "[ElegooLink]")
+{
+    for (const auto& type : {nlohmann::json(0), nlohmann::json("0"), nlohmann::json("")})
+        CHECK(elegoo_status_without_canvas({{"external_device", {{"type", type}}}}));
+    for (const auto& type : {nlohmann::json(1), nlohmann::json("canvas"), nlohmann::json(nullptr), nlohmann::json(false)})
+        CHECK_FALSE(elegoo_status_without_canvas({{"external_device", {{"type", type}}}}));
+    CHECK_FALSE(elegoo_status_without_canvas({{"external_device", nlohmann::json::object()}}));
+    CHECK_FALSE(elegoo_status_without_canvas(nlohmann::json::object()));
+}
+TEST_CASE("Upload only and failed uploads never ask a CC2 to start", "[ElegooLink]")
+{
+    int starts = 0;
+    const auto start = [&] { ++starts; return true; };
+    CHECK(elegoo_upload_then_start(false, [] { return true; }, start));
+    CHECK_FALSE(elegoo_upload_then_start(false, [] { return false; }, start));
+    CHECK_FALSE(elegoo_upload_then_start(true, [] { return false; }, start));
+    CHECK(starts == 0);
+    CHECK(elegoo_upload_then_start(true, [] { return true; }, start));
+    CHECK(starts == 1);
+    // Rejected jobs and canceled starts return before any transport is opened.
+    CHECK_FALSE(send_elegoo_print_start("", "fixture-serial", "code", {"plate_1.gcode", false, false, 2}, [] { return false; }).sent);
+    const auto canceled = send_elegoo_print_start("", "fixture-serial", "code", single_filament_job(), [] { return true; });
+    CHECK_FALSE(canceled.started);
+    CHECK_FALSE(canceled.sent);
 }

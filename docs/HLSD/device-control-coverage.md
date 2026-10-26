@@ -115,7 +115,7 @@ translate the operation. No row establishes live or physical validation.
 | Bambu A2L (`N9`) | `bbl` | Same panel, including supported AMS organization and calibration actions | Independent device process; no assumption about nozzle or accessories |
 | Creality SPARKX i7 | `crealityprint` | Native monitoring and translated basic commands; Printer website for vendor controls | Separate instance; Moonraker compatibility is required by this adapter and is not established by discovery or the model's name |
 | Snapmaker U1 | `snapmaker` | Native monitoring and translated basic commands; Printer website for toolhead, filament and other vendor functions | Separate instance; native filament pull is supported, but it does not imply full toolhead control |
-| Elegoo Centauri Carbon / Carbon 2 | `ElegooLink` upload; CC local website / CC2 bundled vendor panel | Explicit Elegoo connection choice; complete existing vendor page and its IPC upload/file actions; CC2 registration gates commands; Prepare offers read-only CANVAS filament review | HTTP availability and background identification only outside the view. Panel MQTT/status/control exists while explicitly opened; no retained native CC2 agent. Firmware handshake remains unqualified. |
+| Elegoo Centauri Carbon / Carbon 2 | `ElegooLink` upload; CC local website / CC2 bundled vendor panel | Explicit Elegoo connection choice; complete existing vendor page and its IPC upload/file actions; CC2 registration gates commands; Prepare offers read-only CANVAS filament review; Upload and Print starts single-filament prints on a CC2 without CANVAS | HTTP availability and background identification only outside the view. Panel MQTT/status/control exists while explicitly opened; no retained native CC2 agent. Firmware handshake remains unqualified. |
 | Flashforge Adventurer 5M | No registered control agent | Saved availability and plate actions; existing guarded upload remains in Prepare | Missing native monitor/control adapter; upload support establishes no control capability |
 
 The four Bambu capability definitions live in `resources/printers/N1.json`,
@@ -231,7 +231,11 @@ actual uploads are unqualified.
 `Flashforge.cpp` implements authenticated `/detail` reads, material-slot parsing,
 HTTP upload and the older TCP upload path. It does not implement an
 `IPrinterAgent`, job controls, native camera, file browsing or control telemetry.
-The Flashforge identity guard before delivery remains required.
+The Flashforge identity guard before delivery remains required. The send dialog
+reuses the machine state from the `/detail` reply that lists material slots to
+show a busy printer or a finished print awaiting confirmation; it does not block
+uploading. A request refused with result code 2 is reported as a busy printer,
+with how to clear a finished print; the firmware's own text stays in the log.
 
 The vendor's published [Orca-Flashforge network façade](https://github.com/FlashForge/Orca-Flashforge/blob/main/src/slic3r/Utils/NetworkAgent.cpp)
 delegates communication to an external networking library; it is not a reusable
@@ -258,7 +262,8 @@ and concurrent completion accounting. No fake opens even loopback sockets.
 `[ElegooLink]` exercises actual saved-connection projection, host construction,
 identity serialization/merge, custom ports, CC/CC2 classification, encoded local
 panel URL construction and structured identity failures without calling a
-transport. `node tools/test_elegoo_link.cjs` executes the shipped register class
+transport. Its packet fakes also cover the CC2 start request, refusals,
+unconfirmed replies, the CANVAS/filament/identity gates and the upload gate. `node tools/test_elegoo_link.cjs` executes the shipped register class
 in a VM with fake MQTT and fake timers: registration gates, target matching,
 refusal, timeout, recovery and independent page state. It does not run the full
 web application or qualify firmware/native WebView lifecycle.
@@ -295,8 +300,8 @@ Devices or reuse a Bambu `MachineObject`. The connection captures the active
 plate identity, edited setup and local connection before starting a cancellable
 UI job. Its ten-second session owns its socket, uses a unique client ID, verifies
 registration and the saved serial/model with method 1001, then requests method
-2005. Only matching, non-retained responses can supply CANVAS data. The client
-has no printer-write method. It neither changes discovery nor establishes a
+2005. Only matching, non-retained responses can supply CANVAS data. This read
+sends no other method. It neither changes discovery nor establishes a
 persistent background-control session.
 
 Connected CANVAS units supply reported slot identifiers, material names and
@@ -322,8 +327,38 @@ Orca rebases unedited nozzle-dependent defaults to the selected preset; explicit
 edited settings retain their usual difference metadata. It does not change
 model placement or derive installed hardware from discovery or a profile name.
 
-The method 1001/2005 exchange and CANVAS normalization follow private reference
-sources. Porca's fixtures are synthetic; no proprietary source or private
+The method 1001/1002/2005/1020 exchanges and CANVAS normalization follow private
+reference sources. Porca's fixtures are synthetic; no proprietary source or private
 hardware fixture is copied. The bundled Elegoo panel remains available for
 vendor controls, with the lifetime and persistent-control limits described
 above.
+
+## CC2 upload and print
+
+ElegooLink uploads CC2 files over HTTP. When the user chooses Upload and Print,
+a separate start command follows once, after the whole upload succeeds. Upload
+only, a failed or canceled upload and each attempted Windows address never reach
+it. The start uses the same bounded session as filament sync with a fresh client
+ID: registration, the serial/model check with method 1001, then method 1002
+status. It sends method 1020 only when that status explicitly reports no attached
+CANVAS (`external_device.type` 0, `"0"` or empty) and the sliced plate uses
+exactly one filament. The request names the uploaded file on local storage, the
+chosen bed leveling and plate side (A textured, B smooth), and keeps time-lapse
+off. Like the vendor's single-material request it carries no slot map, so the
+printer uses the filament loaded at the print head. The printer itself refuses a
+start while busy.
+
+Porca has no confirmed mapping from plate filaments to CANVAS slots. Filament
+sync adds presets and colors without recording slots, and a reading goes stale
+when spools change. Prints with several or unknown filaments, or with an attached
+or unreported CANVAS, are therefore uploaded only, and the send dialog or upload
+queue asks the user to start them from the printer's screen. Time-lapse needs a
+camera this exchange does not confirm, so the CC2 dialog does not offer it.
+
+The matching reply decides the outcome. Error code 0 is a started print; any
+other code is a refusal shown with its reason and code. A missing, mismatched,
+retained or late reply after sending is reported as unconfirmed and asks the
+user to check the printer. No start is retried. The queue's cancel applies until
+the command is sent; the reply then gets its own ten-second window. Logs carry
+no access code. Firmware acceptance of this request, CANVAS reporting and the
+print head's behavior are unqualified until a permitted live print.

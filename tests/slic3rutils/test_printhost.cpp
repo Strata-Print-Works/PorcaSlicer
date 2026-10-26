@@ -362,6 +362,27 @@ TEST_CASE("Flashforge material slots reject a reply that is not JSON", "[PrintHo
     CHECK(slots.empty());
 }
 
+TEST_CASE("A busy Flashforge refusal tells the user what to do instead of quoting firmware", "[PrintHost][Flashforge]")
+{
+    const std::string busy_reply = GENERATE(as<std::string>{}, R"({"code":2,"message":"Printer is busy"})", R"({"code":"2","msg":"Printer is busy"})");
+    wxString busy;
+    CHECK_FALSE(Flashforge::validate_local_api_response(busy_reply, busy));
+    CHECK_FALSE(busy.empty());
+    CHECK_FALSE(busy.Contains("Printer is busy")); // The raw reply stays in the log.
+
+    wxString other;
+    CHECK_FALSE(Flashforge::validate_local_api_response(R"({"code":1,"message":"Printer is busy"})", other));
+    CHECK(other.Contains("Printer is busy"));
+    CHECK(busy != other);
+}
+
+TEST_CASE("A Flashforge reply with result code zero is accepted", "[PrintHost][Flashforge]")
+{
+    wxString message;
+    CHECK(Flashforge::validate_local_api_response(R"({"code":0,"message":"Success"})", message));
+    CHECK(message.empty());
+}
+
 TEST_CASE("An upload that throws still finishes with an error", "[PrintHost][LifecycleEvents]")
 {
     UploadEvents run(std::make_unique<ThrowingPrintHost>());

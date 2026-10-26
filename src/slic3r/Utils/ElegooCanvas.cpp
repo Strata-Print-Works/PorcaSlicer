@@ -12,10 +12,11 @@ class CanvasSocket final : public ElegooCanvasTransport {
     boost::asio::io_context context;
     boost::asio::ip::tcp::socket socket{context};
     std::function<bool()> canceled;
-    const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    bool committed = false;
     void check() {
-        if (canceled() || std::chrono::steady_clock::now() >= deadline)
-            throw std::runtime_error(L("Filament sync was canceled or the printer stopped responding."));
+        if ((!committed && canceled()) || std::chrono::steady_clock::now() >= deadline)
+            throw std::runtime_error(L("The printer stopped responding."));
     }
     void transfer(uint8_t* data, size_t length, bool writing) {
         size_t offset = 0;
@@ -26,7 +27,7 @@ class CanvasSocket final : public ElegooCanvasTransport {
             if (ec == boost::asio::error::would_block || ec == boost::asio::error::try_again) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5)); continue;
             }
-            if (ec || n == 0) throw std::runtime_error(L("Could not read filaments. Check the printer's LAN-only settings and address."));
+            if (ec || n == 0) throw std::runtime_error(L("Lost the connection to the printer. Check its LAN-only settings and address."));
             offset += n;
         }
     }
@@ -51,6 +52,11 @@ public:
         if (connection_error) throw std::runtime_error(L("Could not connect. Check the printer's LAN-only settings and address."));
         socket.non_blocking(true);
     }
+    void commit() override {
+        // A sent command gets its own full reply window; cancel no longer applies.
+        committed = true;
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    }
     void send(uint8_t header, const std::vector<uint8_t>& body) override {
         std::vector<uint8_t> packet{header}; size_t length = body.size();
         do { uint8_t part = uint8_t(length % 128); length /= 128; packet.push_back(part | (length ? 128 : 0)); } while (length);
@@ -62,7 +68,7 @@ public:
         size_t length = 0, factor = 1;
         for (int i = 0; i < 4; ++i) {
             uint8_t part; transfer(&part, 1, false); length += (part & 127) * factor;
-            if (length > 262144) throw std::runtime_error(L("The printer's filament reply was too large."));
+            if (length > 262144) throw std::runtime_error(L("The printer sent an invalid reply."));
             if (!(part & 128)) { std::vector<uint8_t> body(length); transfer(body.data(), body.size(), false); return {header, std::move(body)}; }
             factor *= 128;
         }
@@ -80,5 +86,16 @@ ElegooCanvasResult fetch_elegoo_canvas(const std::string& address, const std::st
         CanvasSocket socket(address, canceled);
         return read_elegoo_canvas(socket, serial, secret, "porca_" + boost::uuids::to_string(boost::uuids::random_generator()()));
     } catch (const std::exception& e) { return {{}, e.what()}; }
+}
+ElegooPrintStartResult send_elegoo_print_start(const std::string& address, const std::string& serial, const std::string& secret,
+                                               const ElegooPrintJob& job, const std::function<bool()>& canceled)
+{
+    try {
+        if (const char* problem = elegoo_print_job_problem(job)) return {false, problem};
+        if (!elegoo_canvas_serial_valid(serial) || secret.size() > 256)
+            return {false, L("Check this printer's serial number and LAN access code.")};
+        CanvasSocket socket(address, canceled);
+        return start_elegoo_print(socket, serial, secret, "porca_" + boost::uuids::to_string(boost::uuids::random_generator()()), job);
+    } catch (const std::exception& e) { return {false, e.what()}; }
 }
 }

@@ -46,7 +46,7 @@ executables; it uses only the Python standard library. From the repository root:
 
 ```sh
 python3 scripts/verify_offline.py --list
-python3 scripts/build_porca.py libslic3r_tests slic3rutils_tests porca_unit_tests
+python3 scripts/build_porca.py libslic3r_tests slic3rutils_tests porca_unit_tests fff_print_tests
 python3 scripts/verify_offline.py all
 ```
 
@@ -58,7 +58,7 @@ invoking the script from another directory does not change fixture isolation.
 
 | Group | Coverage | Target(s) |
 |---|---|---|
-| `devices` | Device session reuse, routing, invalidated callbacks and Moonraker workers with fake transports; Bambu sessions run in `porca_bambu_worker` child processes loaded with a fake SDK library and no network | `porca_unit_tests`, `slic3rutils_tests` (builds `porca_bambu_worker` and the fake SDK libraries) |
+| `devices` | Device session reuse, routing, invalidated callbacks and Moonraker workers with fake transports; in-memory Flashforge reply parsing; Bambu sessions run in `porca_bambu_worker` child processes loaded with a fake SDK library and no network | `porca_unit_tests`, `slic3rutils_tests` (builds `porca_bambu_worker` and the fake SDK libraries) |
 | `layout` | Selection alignment math, density/rotation packing, exclusions, complete sets and cancellation | `libslic3r_tests`, `porca_unit_tests` |
 | `quick` | Pure panel allocation, scope estimates, filament totals, slice queue and discovery policy; no application library linkage | `porca_unit_tests` |
 | `persistence` | Plate setup capture/restore, credential stripping, 3MF round trips and compatibility | `libslic3r_tests` |

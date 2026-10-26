@@ -35,6 +35,7 @@
 #include "Auxiliary.hpp"
 #include "Project.hpp"
 #include "ProductionPanel.hpp"
+namespace Slic3r::GUI { class ModelLibraryPanel; }
 #include "CalibrationPanel.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "Widgets/SideButton.hpp"
@@ -68,6 +69,7 @@
 #define TAB_ID_MONITOR_WEB   "monitor_web"
 #define TAB_ID_MULTI_DEVICE  "multi_device"
 #define TAB_ID_PROJECT       "project"
+#define TAB_ID_LIBRARY       "library"
 #define TAB_ID_PRODUCTION    "production"
 #define TAB_ID_CALIBRATION   "calibration"
 
@@ -527,6 +529,7 @@ public:
     LazyPage<MultiMachinePage>* m_multi_machine_page{ nullptr };
     LazyPage<ProjectPanel>* m_project_page{ nullptr };
     LazyPage<ProductionPanel>* m_production_page{ nullptr };
+    LazyPage<ModelLibraryPanel>* m_library_page{ nullptr };
 
     LazyPage<CalibrationPanel>* m_calibration_page{ nullptr };
     LazyPage<WebViewPanel>* m_home_page { nullptr };

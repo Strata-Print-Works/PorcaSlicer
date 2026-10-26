@@ -18,7 +18,7 @@ Rules for writing tests under `tests/`. [CATCH2.md](CATCH2.md) is the Catch2 ref
 The root [AGENTS.md](../AGENTS.md) owns the current local validation restriction. Use an already configured Release tree with tests enabled (`BUILD_TESTS=ON`) and dependencies available locally:
 
 ```sh
-python3 scripts/build_porca.py libslic3r_tests slic3rutils_tests porca_unit_tests
+python3 scripts/build_porca.py libslic3r_tests slic3rutils_tests porca_unit_tests fff_print_tests
 python3 scripts/verify_offline.py all
 ```
 

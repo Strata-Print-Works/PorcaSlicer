@@ -19,6 +19,10 @@ wxString content_base_url();
 // injected page, a reload and a failed navigation alike, so a match alone is not a new document.
 bool is_content_url(const wxString& url);
 
+// Whether `url` is BOOTSTRAP_PAGE. SetPage takes over the bootstrap page's history entry instead of
+// adding one, so going back from a page the plugin opened returns here, to a blank page.
+bool is_bootstrap_url(const wxString& url);
+
 // The window.orca bridge of plugin windows and docked panels. Pages tabs ship their own.
 const char* orca_bridge_script();
 

@@ -27,6 +27,15 @@ ROOT = Path(__file__).resolve().parents[1]
 # Each entry is (suite, tag, reviewed test sources). Keep filters narrow; do not
 # add transport integration tests just because they use the same feature name.
 GROUPS = {
+    "comparison": [
+        ("porca_unit", "SliceComparison", ["tests/libslic3r/test_slice_comparison.cpp"]),
+        ("libslic3r", "SliceComparisonSnapshot", ["tests/libslic3r/test_slice_comparison_snapshot.cpp"]),
+        ("fff_print", "SliceComparisonPrint", ["tests/fff_print/test_slice_comparison.cpp"]),
+    ],
+    "library-formats": [("slic3rutils", "ModelLibraryFormats", ["tests/slic3rutils/test_model_library.cpp"])],
+    "library": [
+        ("porca_unit", "ModelLibrary", ["tests/slic3rutils/test_model_library.cpp"]),
+    ],
     "devices": [
         ("slic3rutils", "ElegooLink", ["tests/slic3rutils/test_elegoo_link.cpp"]),
         ("slic3rutils", "BambuProcessSessions", ["tests/slic3rutils/test_bambu_process_sessions.cpp"]),
@@ -37,6 +46,7 @@ GROUPS = {
         ("slic3rutils", "DeviceOwnership", ["tests/slic3rutils/test_device_manager_integration.cpp"]),
         ("slic3rutils", "WebMediaController", ["tests/slic3rutils/test_web_media_controller.cpp"]),
         ("slic3rutils", "MoonrakerPrinterAgent", ["tests/slic3rutils/test_moonraker_printer_agent.cpp"]),
+        ("slic3rutils", "Flashforge", ["tests/slic3rutils/test_printhost.cpp"]),
     ],
     "layout": [
         ("libslic3r", "PlateLayout", ["tests/libslic3r/test_plate_layout.cpp"]),
@@ -56,6 +66,7 @@ GROUPS = {
         ("porca_unit", "DiscoveryPolicy", ["tests/libslic3r/test_discovery_policy.cpp"]),
     ],
     "persistence": [
+        ("libslic3r", "ProjectCompatibility", ["tests/libslic3r/test_3mf.cpp"]),
         ("libslic3r", "PlatePrintSetup", ["tests/libslic3r/test_plate_print_setup.cpp",
                                           "tests/libslic3r/test_model.cpp"]),
         ("libslic3r", "ProjectPlateImport", ["tests/libslic3r/test_project_plate_import.cpp",

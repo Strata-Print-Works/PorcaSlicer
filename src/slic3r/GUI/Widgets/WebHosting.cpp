@@ -64,6 +64,11 @@ bool is_content_url(const wxString& url)
     return wxURI::Unescape(url.BeforeFirst('#')) == wxURI::Unescape(content_base_url());
 }
 
+bool is_bootstrap_url(const wxString& url)
+{
+    return wxURI::Unescape(url.BeforeFirst('#')) == wxURI::Unescape(bootstrap_url());
+}
+
 const char* orca_bridge_script() { return ORCA_BRIDGE_JS; }
 
 }}} // namespace Slic3r::GUI::web_hosting

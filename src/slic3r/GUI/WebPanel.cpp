@@ -45,6 +45,10 @@ void WebPanel::on_load_event(wxWebViewEvent& event)
         // The first bootstrap load (or its error) triggers the swap to the plugin HTML.
         m_content_loaded = true;
         load_page_html();
+    } else if (web_hosting::is_bootstrap_url(event.GetURL())) {
+        // Back from a page the plugin opened lands on the blank bootstrap page, not the plugin HTML.
+        if (loaded && !m_own_page_load)
+            load_page_html();
     } else if (!web_hosting::is_content_url(event.GetURL())) {
         // Not our document (a linked page, a substituted error page), or any document on Edge, which ignores
         // the base URL and restores SetPage content on a reload itself; either way it takes the app theme.

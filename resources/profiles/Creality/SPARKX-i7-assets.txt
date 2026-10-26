@@ -1,0 +1,22 @@
+SPARKX i7 profile assets
+
+Source: Creality Print for macOS, copied from a local installation on 2026-10-17
+(the bed model is byte-identical to Creality Print 7.3.0.6157).
+  creality_SPARKX_buildplate_model.stl is a byte-for-byte copy of the
+    application's profiles/Creality/Creality F022_buildplate_model.stl. It has
+    the same overall size and thickness as the bed model it replaces, with a
+    finer mesh.
+  Creality SPARKX i7_cover.png is a cropped, 240 x 240 pixel version of the
+    application's profiles/Creality/SPARKX i7_cover.png.
+The default bed type was checked against the application's
+profiles/Creality/machine/SPARKX i7_model.json. The bed texture
+creality_SPARKX_buildplate_texture.svg and model_id Creality_SPARKX_i7 are
+OrcaSlicer's existing values for this printer.
+
+License: unknown. The application ships no license statement for its profile
+assets, and its bundle notice reads "Copyright(C) 2022-2024 Creality All Rights
+Reserved". Unless Creality's license for these two files is confirmed to be
+compatible with this repository's license, do not distribute them; restore
+OrcaSlicer's previous bed model and cover instead.
+
+Creality retains the original asset provenance and applicable notices.

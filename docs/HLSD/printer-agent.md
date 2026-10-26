@@ -92,7 +92,8 @@ release its transport. Teardown never joins the current thread: a retired
 worker is reaped by an owned thread, which the transport joins on destruction.
 
 Availability checks report `not_ready` when a Moonraker or Snapmaker service
-answers but Klipper is not ready, distinct from an unreachable printer.
+answers but Klipper is not ready, or when a Flashforge reports a machine state
+other than ready, distinct from an unreachable printer.
 
 LAN upload and print calls retain a transfer guard on their originating session.
 Automatic status recovery cannot retire that session while the call is active,
@@ -107,7 +108,11 @@ saved local identity and plate aliases. CC2 HTTP identification is background
 availability only; its vendor MQTT control/status lifetime is the explicitly
 opened page. Each page's native IPC handler owns its connection snapshot and
 retires queued work when hidden/replaced. This remains a first-class concurrent
-background-control gap, not evidence of connected status from polling.
+background-control gap, not evidence of connected status from polling. Outside
+the page, Prepare's filament sync and the user's Upload and Print are each a
+one-shot ElegooCanvas session; the latter sends one start command after a
+complete upload, under the limits in the
+[control matrix](device-control-coverage.md#cc2-upload-and-print).
 
 Cloud operations are selected separately using a provider key. `NetworkAgent` forwards a cloud request
 to the matching `ICloudServiceAgent`, and forwards cloud camera operations with a device ID. The
