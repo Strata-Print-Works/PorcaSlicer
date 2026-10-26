@@ -882,6 +882,10 @@ target_link_libraries(libcurl INTERFACE CURL::libcurl)
 find_package(ZLIB REQUIRED)
 target_link_libraries(libcurl INTERFACE ZLIB::ZLIB)
 
+if(APPLE AND SLIC3R_GUI)
+    include(CheckBundledTLS)
+endif()
+
 # Fixing curl's cmake config script bugs
 if (NOT WIN32)
     # Required by libcurl

@@ -102,6 +102,15 @@ if [ -z "$CMAKE_IGNORE_PREFIX_PATH" ]; then
   export CMAKE_IGNORE_PREFIX_PATH="/opt/local:/usr/local:/opt/homebrew"
 fi
 
+# CMake 4 no longer selects a sysroot by default. Without an explicit SDK,
+# xcrun puts /usr/local/include ahead of imported dependency headers on Intel,
+# mixing Homebrew OpenSSL headers with our bundled libraries.
+if [ -z "${SDKROOT:-}" ]; then
+    SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+fi
+: "${SDKROOT:?xcrun did not find a macOS SDK}"
+export SDKROOT
+
 CMAKE_VERSION=$(cmake --version | head -1 | sed 's/[^0-9]*\([0-9]*\).*/\1/')
 if [ "$CMAKE_VERSION" -ge 4 ] 2>/dev/null; then
   export CMAKE_POLICY_VERSION_MINIMUM=3.10
@@ -160,6 +169,7 @@ function build_deps() {
                         -G "${DEPS_CMAKE_GENERATOR}" \
                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
                         -DCMAKE_OSX_ARCHITECTURES:STRING="${_ARCH}" \
+                        -DCMAKE_OSX_SYSROOT="${SDKROOT}" \
                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}" \
                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}" \
                         ${CMAKE_POLICY_COMPAT}
@@ -262,6 +272,7 @@ function build_slicer() {
                     ${BUILD_TESTS:+-DBUILD_TESTS=ON} \
                     -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
                     -DCMAKE_OSX_ARCHITECTURES="${_ARCH}" \
+                    -DCMAKE_OSX_SYSROOT="${SDKROOT}" \
                     -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}" \
                     -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}" \
                     ${CMAKE_POLICY_COMPAT}

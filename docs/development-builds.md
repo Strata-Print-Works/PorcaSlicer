@@ -10,6 +10,8 @@ For a macOS-only run, `macos-arch` can select `arm64` or `x86_64` independently.
 
 Manual runs can select a supported Apple Silicon host with `macos-arm-runner` (`macos-26`, `macos-15`, or `macos-14`) when investigating runner availability or SDK compatibility. The selected host runs both compilation and unit tests, and its dependency cache is separate. Push and pull-request builds use macOS 14.
 
+The macOS build script selects an explicit SDK for dependencies and the application, preserving a supplied `SDKROOT`. This prevents CMake 4 and the Intel compiler from picking up Homebrew headers ahead of bundled libraries. Configuration also links a small curl/camera-transport probe without running it, so incompatible cached OpenSSL dependencies fail before the application compiles.
+
 The macOS DMG contains `Porca.app` with bundle identifier `com.strataprintworks.porca`. Windows uses Porca's installer name, icon, install directory and uninstall registry identity. The internal executable names and Orca settings directory remain inherited. The legacy Flatpak and MSIX Store packages retain upstream identities and are excluded from Porca's build/release path.
 
 Start a build with:
@@ -34,6 +36,7 @@ Release assembly and Linux packaging checks run without network access; packagin
 ```sh
 python3 -m unittest discover -s scripts -p test_prepare_porca_release.py
 python3 -m unittest discover -s scripts -p test_appimage_packaging.py
+python3 -m unittest discover -s scripts -p test_macos_build.py
 ```
 
 ## Local Release builds
@@ -96,6 +99,7 @@ invoking the script from another directory does not change fixture isolation.
 
 | Group | Coverage | Target(s) |
 |---|---|---|
+| `u1` | U1 slice snapshots, toolhead/nozzle/material checks, calibration selection, upload acknowledgments and safe parameterized-start encoding; no sockets | `porca_unit_tests` |
 | `devices` | Device session reuse, routing, invalidated callbacks and Moonraker workers with fake transports; in-memory Flashforge reply parsing; Bambu sessions run in `porca_bambu_worker` child processes loaded with a fake SDK library and no network | `porca_unit_tests`, `slic3rutils_tests` (builds `porca_bambu_worker` and the fake SDK libraries) |
 | `layout` | Selection alignment math, density/rotation packing, exclusions, complete sets and cancellation | `libslic3r_tests`, `porca_unit_tests` |
 | `quick` | Pure panel allocation, scope estimates, filament totals, slice queue and discovery policy; no application library linkage | `porca_unit_tests` |

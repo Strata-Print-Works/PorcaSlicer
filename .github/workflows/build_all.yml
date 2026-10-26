@@ -9,6 +9,7 @@ on:
     paths:
      - 'deps/**'
      - 'deps_src/**'
+     - 'cmake/**'
      - 'src/**'
      - '**/CMakeLists.txt'
      - 'version.inc'
@@ -23,6 +24,7 @@ on:
      - 'scripts/prepare_porca_release.py'
      - 'scripts/test_prepare_porca_release.py'
      - 'scripts/test_appimage_packaging.py'
+     - 'scripts/test_macos_build.py'
      - 'build_release_macos.sh'
      - 'scripts/build_preset_cache.*'
      - 'scripts/flatpak/**'
@@ -37,6 +39,7 @@ on:
     paths:
      - 'deps/**'
      - 'deps_src/**'
+     - 'cmake/**'
      - 'src/**'
      - '**/CMakeLists.txt'
      - 'version.inc'
@@ -49,6 +52,7 @@ on:
      - 'scripts/prepare_porca_release.py'
      - 'scripts/test_prepare_porca_release.py'
      - 'scripts/test_appimage_packaging.py'
+     - 'scripts/test_macos_build.py'
      - 'build_release_macos.sh'
      - 'scripts/build_preset_cache.*'
      - 'scripts/flatpak/**'
@@ -115,6 +119,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p test_prepare_porca_release.py
       - name: Check AppImage packaging with offline fakes
         run: python3 -m unittest discover -s scripts -p test_appimage_packaging.py
+      - name: Check macOS SDK selection and TLS library compatibility
+        run: python3 -m unittest discover -s scripts -p test_macos_build.py
 
   # build_win.bat ships a test suite. Run it before the Windows builds.
   check_build_script:
