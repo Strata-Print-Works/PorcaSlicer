@@ -53,9 +53,10 @@ void BoostThreadWorker::run()
     while (!stop) {
         m_input_queue
             .consume_one(BlockingWait{0, &m_running}, [this, &stop](JobEntry &e) {
-                if (!e.job)
+                if (!e.job) {
                     stop = true;
-                else {
+                    m_running.store(false);
+                } else {
                     m_canceled.store(false);
 
                     try {
@@ -65,9 +66,8 @@ void BoostThreadWorker::run()
                     }
 
                     e.canceled = m_canceled.load();
-                    m_output_queue.push(std::move(e)); // finalization message
+                    m_output_queue.push(std::move(e), m_running); // finalization message
                 }
-                m_running.store(false);
             });
     };
 }

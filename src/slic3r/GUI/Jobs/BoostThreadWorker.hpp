@@ -66,7 +66,12 @@ class BoostThreadWorker : public Worker, private Job::Ctl
         WorkerMessage(int s, std::string txt)
             : m_data{StatusInfo{s, std::move(txt)}}
         {}
-        WorkerMessage(JobEntry &&entry) : m_data{std::move(entry)} {}
+        WorkerMessage(JobEntry &&entry, std::atomic<bool>& running) : m_data{std::move(entry)}
+        {
+            // The queue constructs this message under its lock. Publish the
+            // idle state before the consumer can drain the last message.
+            running.store(false);
+        }
         WorkerMessage(MainThreadCallData fn) : m_data{std::move(fn)} {}
 
         int get_type () const { return m_data.which(); }
