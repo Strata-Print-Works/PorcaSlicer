@@ -1,5 +1,36 @@
 # Local builds and offline verification
 
+## GitHub builds and preview releases
+
+`Build all` runs on pushes to `porca`, pull requests targeting `porca`, and manual dispatch. It reuses the existing dependency caches and platform build scripts. GitHub-hosted runners build macOS arm64 and Intel bundles into a universal DMG, Windows x64 and arm64 installers/portable applications, and Linux x86_64 and aarch64 AppImages. The platform tests and Linux slicing checks run on those hosted machines; this does not lift the local Mac's network-testing restriction.
+
+The macOS DMG contains `Porca.app` with bundle identifier `com.strataprintworks.porca`. Windows uses Porca's installer name, icon, install directory and uninstall registry identity. The internal executable names and Orca settings directory remain inherited. The legacy Flatpak and MSIX Store packages retain upstream identities and are excluded from Porca's build/release path.
+
+Start a build with:
+
+```sh
+gh workflow run build_all.yml --repo Strata-Print-Works/PorcaSlicer --ref porca
+```
+
+Once the entire build run succeeds, start **Porca preview release** with that run ID and a new `porca-` tag:
+
+```sh
+gh workflow run porca_release.yml --repo Strata-Print-Works/PorcaSlicer --ref porca \
+  -f run_id=123456789 -f tag=porca-preview-2026.10.26
+```
+
+The workflow accepts only successful `Build all` push/manual runs from this repository's `porca` branch. It checks out the exact built commit, requires every supported application package, and creates a draft prerelease at that commit. Existing tags/releases are rejected. `scripts/prepare_porca_release.py` gives downloads Porca names, packages portable applications, and generates `SHA256SUMS` plus `build-manifest.json`. No binary is rebuilt by the release job. Drafts remain available for inspection before publication.
+
+Developer previews use ad-hoc macOS signing rather than Developer ID signing/notarization, and Windows packages are unsigned. Apple Developer ID/notarization and Windows certificate signing are not configured. A green build verifies compilation and its CI checks, not native interaction, physical printer behavior or resolution of reported application crashes.
+
+Release assembly checks run without network access:
+
+```sh
+python3 -m unittest discover -s scripts -p test_prepare_porca_release.py
+```
+
+## Local Release builds
+
 Use the guarded build command when sharing a configured build directory:
 
 ```sh

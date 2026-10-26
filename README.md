@@ -6,6 +6,12 @@ The project develops the existing C++/wxWidgets application and retains its matu
 
 ![Porca icon](resources/images/Porca_256px.png)
 
+## Builds and previews
+
+[Build results](https://github.com/Strata-Print-Works/PorcaSlicer/actions/workflows/build_all.yml?query=branch%3Aporca) include macOS, Windows and Linux downloads. Pushes to `porca` and pull requests targeting it run the builds and tests on GitHub-hosted runners.
+
+The **Porca preview release** workflow assembles a draft from one successful build run, with checksums and its source commit. Preview packages are not Developer ID signed/notarized on macOS or certificate signed on Windows. See [build and release instructions](docs/development-builds.md#github-builds-and-preview-releases).
+
 ## Work on this repository
 
 Start with [agent instructions](AGENTS.md), the [feature map](docs/feature-map.md), and [local build and offline verification instructions](docs/development-builds.md). The [independent-plate design](docs/HLSD/independent-plate-setups.md) describes project compatibility and current workflow limits.
@@ -16,7 +22,7 @@ The current local app is built from this checkout with:
 python3 scripts/build_porca.py OrcaSlicer libslic3r_tests slic3rutils_tests porca_unit_tests
 ```
 
-The build target (`OrcaSlicer`) and the macOS app directory (`OrcaSlicer.app`) keep their inherited names; the app's displayed name, installer package name and icon are Porca. The user-facing release notes are in [resources/porca-release-notes.txt](resources/porca-release-notes.txt). This repository does not advertise upstream binaries as Porca downloads.
+The build target (`OrcaSlicer`) and local macOS build directory (`OrcaSlicer.app`) keep their inherited names; the distributed macOS app is `Porca.app`. The app's displayed name, installer package name and icon are Porca. The user-facing release notes are in [resources/porca-release-notes.txt](resources/porca-release-notes.txt). This repository does not advertise upstream binaries as Porca downloads.
 
 ## Project files
 

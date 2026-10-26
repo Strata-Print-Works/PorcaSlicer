@@ -324,9 +324,9 @@ jobs:
           # Create main OrcaSlicer DMG without the profile validator helper
           mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_dmg
           rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/*
-          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
+          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Porca.app
           ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Applications
-          retry hdiutil create -volname "OrcaSlicer" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
+          retry hdiutil create -volname "Porca" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
           codesign --deep --force --verbose --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$CERTIFICATE_ID" OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
           
           # Create separate OrcaSlicer_profile_validator DMG if the app exists
@@ -350,16 +350,16 @@ jobs:
           fi
 
       - name: Create DMG without notary
-        if: github.ref != 'refs/heads/main' && runner.os == 'macOS' && inputs.macos-combine-only
+        if: ${{ runner.os == 'macOS' && inputs.macos-combine-only && !(github.repository == 'OrcaSlicer/OrcaSlicer' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))) }}
         working-directory: ${{ github.workspace }}
         run: |
           # Load the `retry` helper (retries flaky commands such as `hdiutil create`).
           source ${{ github.workspace }}/scripts/retry.sh
           mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_dmg
           rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/*
-          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
+          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Porca.app
           ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Applications
-          retry hdiutil create -volname "OrcaSlicer" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
+          retry hdiutil create -volname "Porca" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
           
           # Create separate OrcaSlicer_profile_validator DMG if the app exists
           if [ -f "${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
@@ -528,7 +528,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: OrcaSlicer_Windows_${{ env.ver }}${{ env.ARCH_SUFFIX }}
-          path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer*.exe
+          path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/Porca_Windows_Installer_*.exe
+          if-no-files-found: error
 
       - name: Upload artifacts Win PDB
         if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
@@ -578,7 +579,7 @@ jobs:
           max_releases: 1
 
       - name: Build MSIX Store package Win
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && github.repository == 'OrcaSlicer/OrcaSlicer'
         working-directory: ${{ github.workspace }}
         shell: pwsh
         run: |
@@ -591,7 +592,7 @@ jobs:
             -PublisherDisplayName "${{ vars.ORCA_MSIX_PUBLISHER_DISPLAY_NAME || 'OrcaSlicer' }}"
 
       - name: Upload artifacts Win MSIX
-        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED && github.repository == 'OrcaSlicer/OrcaSlicer'
         uses: actions/upload-artifact@v7
         with:
           name: OrcaSlicer_Windows_MSIX_${{ env.ver }}${{ env.ARCH_SUFFIX }}

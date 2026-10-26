@@ -1,5 +1,7 @@
 Porca preview
 
+Opening a recent project from Home has been reported to close Porca unexpectedly. This is under investigation.
+
 When plates open scattered across the workspace, right-click a plate and choose Arrange plates. Movable beds form tidy rows, and models keep their places on each bed. Locked plates and plates in a stage stay where you put them.
 
 To make better use of the space on each bed, right-click the workspace or a stage and choose Optimize plates. Review the proposed placements before applying them. Objects stay on their current plates and keep the same face on the bed; plates without a complete layout stay as they are.

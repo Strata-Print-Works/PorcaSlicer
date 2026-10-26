@@ -1,0 +1,105 @@
+name: Porca preview release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Build all run on porca
+        required: true
+        type: string
+      tag:
+        description: New preview tag, for example porca-preview-2026.10.26
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: porca-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'Strata-Print-Works/PorcaSlicer' && github.ref == 'refs/heads/porca'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Verify source build
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$TAG" =~ ^porca-[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > "$RUNNER_TEMP/build-run.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" '
+            .repository.full_name == $repo and
+            .path == ".github/workflows/build_all.yml" and
+            .head_branch == "porca" and .status == "completed" and .conclusion == "success" and
+            (.event == "push" or .event == "workflow_dispatch")
+          ' "$RUNNER_TEMP/build-run.json"
+          commit=$(jq -r .head_sha "$RUNNER_TEMP/build-run.json")
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          # Never replace an existing tag or a published release.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::That tag already exists; choose a new preview tag."
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::That release already exists; choose a new preview tag."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.build.outputs.commit }}
+          persist-credentials: false
+
+      - name: Check release assembly
+        run: python3 -m unittest discover -s scripts -p test_prepare_porca_release.py
+
+      - name: Download application artifacts
+        shell: bash
+        run: |
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir release-artifacts \
+            -p 'OrcaSlicer_Windows_V*' \
+            -p 'OrcaSlicer_Mac_universal_*' \
+            -p 'OrcaSlicer_Linux_ubuntu_*'
+
+      - name: Assemble Porca downloads
+        env:
+          BUILD_COMMIT: ${{ steps.build.outputs.commit }}
+        run: |
+          python3 scripts/prepare_porca_release.py --artifacts release-artifacts --output upload \
+            --tag "$TAG" --commit "$BUILD_COMMIT" \
+            --run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+          cat resources/porca-release-notes.txt > "$RUNNER_TEMP/porca-release-notes.txt"
+          cat >> "$RUNNER_TEMP/porca-release-notes.txt" <<EOF
+
+          Porca development preview, built from $BUILD_COMMIT.
+
+          Build and test results: https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID
+
+          These are preview builds.
+          macOS downloads are not Developer ID signed or notarized; Windows downloads are unsigned.
+          Check SHA256SUMS against your download. build-manifest.json records the source commit and build run.
+
+          Source and inherited licenses are included in this repository's tagged source archives.
+          EOF
+
+      - name: Create draft preview
+        env:
+          BUILD_COMMIT: ${{ steps.build.outputs.commit }}
+        run: |
+          gh release create "$TAG" upload/* --repo "$GITHUB_REPOSITORY" --target "$BUILD_COMMIT" \
+            --title "Porca $TAG" --draft --prerelease \
+            --notes-file "$RUNNER_TEMP/porca-release-notes.txt"
