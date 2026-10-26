@@ -71,7 +71,7 @@ static bool scan_multicast_printers(const std::shared_ptr<std::atomic<bool>>& ca
     const address_v4 group = address_v4::from_string(snapmaker ? "224.0.0.251" : "239.255.255.250");
     std::vector<address_v4> addresses;
     const auto interfaces = discovery_interfaces();
-    for (const auto& interface : interfaces) addresses.emplace_back(interface.address);
+    for (const auto& lan_interface : interfaces) addresses.emplace_back(lan_interface.address);
     if (addresses.empty() || cancelled->load()) return false;
     std::vector<std::unique_ptr<udp::socket>> sockets;
     for (const auto& address : addresses) {
@@ -81,8 +81,8 @@ static bool scan_multicast_printers(const std::shared_ptr<std::atomic<bool>>& ca
         if (ec) continue;
         socket->bind(udp::endpoint(address, 0), ec);
         if (ec) continue;
-        const auto interface = std::find_if(interfaces.begin(), interfaces.end(), [&address](const auto& item) { return item.address == address.to_uint(); });
-        if (interface == interfaces.end() || !constrain_discovery_socket(*socket, interface->index)) continue;
+        const auto lan_interface = std::find_if(interfaces.begin(), interfaces.end(), [&address](const auto& item) { return item.address == address.to_uint(); });
+        if (lan_interface == interfaces.end() || !constrain_discovery_socket(*socket, lan_interface->index)) continue;
         socket->set_option(boost::asio::ip::multicast::outbound_interface(address), ec);
         if (ec) continue;
         socket->set_option(boost::asio::ip::multicast::hops(1), ec);
@@ -199,25 +199,25 @@ bool scan_elegoo_printers(const std::shared_ptr<std::atomic<bool>>& cancelled, c
     if (cancelled->load()) return false; // no interface enumeration or socket when cancelled
     class Sockets final : public ElegooDiscoveryTransport {
         boost::asio::io_context io;
-        struct InterfaceSocket { DiscoveryInterface interface; std::unique_ptr<udp::socket> socket; };
+        struct InterfaceSocket { DiscoveryInterface lan_interface; std::unique_ptr<udp::socket> socket; };
         std::vector<InterfaceSocket> sockets;
         const std::atomic<bool>& stop;
     public:
         explicit Sockets(const std::atomic<bool>& stop) : stop(stop)
         {
-            for (const auto& interface : discovery_interfaces()) {
+            for (const auto& lan_interface : discovery_interfaces()) {
                 if (stop.load()) break;
-                if (!interface.broadcast || !discovery_netmask_valid(interface.netmask)) continue;
+                if (!lan_interface.broadcast || !discovery_netmask_valid(lan_interface.netmask)) continue;
                 boost::system::error_code error;
                 auto socket = std::make_unique<udp::socket>(io);
                 socket->open(udp::v4(), error);
                 if (error) continue;
-                socket->bind(udp::endpoint(address_v4(interface.address), 0), error);
-                if (error || !constrain_discovery_socket(*socket, interface.index)) continue;
+                socket->bind(udp::endpoint(address_v4(lan_interface.address), 0), error);
+                if (error || !constrain_discovery_socket(*socket, lan_interface.index)) continue;
                 socket->set_option(udp::socket::broadcast(true), error);
                 if (error) continue;
                 socket->non_blocking(true, error);
-                if (!error) sockets.push_back({interface, std::move(socket)});
+                if (!error) sockets.push_back({lan_interface, std::move(socket)});
             }
         }
         Clock::time_point now() const override { return Clock::now(); }
@@ -228,7 +228,7 @@ bool scan_elegoo_printers(const std::shared_ptr<std::atomic<bool>>& cancelled, c
             auto& item = sockets[index];
             if (!item.socket->is_open() || !wait_for_discovery_probe(&stop, deadline) || cancelled() || now() >= deadline) return;
             boost::system::error_code error;
-            const auto broadcast = address_v4(item.interface.address | ~item.interface.netmask);
+            const auto broadcast = address_v4(item.lan_interface.address | ~item.lan_interface.netmask);
             item.socket->send_to(boost::asio::buffer(elegoo_discovery_probe, sizeof(elegoo_discovery_probe) - 1),
                                  udp::endpoint(broadcast, elegoo_discovery_port), 0, error);
             if (error) item.socket->close(error);
@@ -244,7 +244,7 @@ bool scan_elegoo_printers(const std::shared_ptr<std::atomic<bool>>& cancelled, c
                 return ElegooDiscoveryDatagram{std::string(8193, ' '), {}, 0, false}; // count truncated packets in the receive budget
             if (error || !sender.address().is_v4()) return std::nullopt;
             return ElegooDiscoveryDatagram{std::string(bytes.data(), size), sender.address().to_string(), sender.port(),
-                elegoo_reply_on_interface(sender.address().to_v4().to_uint(), item.interface.address, item.interface.netmask)};
+                elegoo_reply_on_interface(sender.address().to_v4().to_uint(), item.lan_interface.address, item.lan_interface.netmask)};
         }
         void idle() override { std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
     } transport(*cancelled);

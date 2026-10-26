@@ -69,6 +69,27 @@ jobs:
         shell: pwsh
 
 
+      # CMake's downloader does not retry interrupted archive transfers. Stage
+      # Draco first with bounded retries, retaining its pinned source checksum.
+      - name: Download Draco source with retries
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=deps/DL_CACHE/Draco/1.5.7.zip
+          expected=27b72ba2d5ff3d0a9814ad40d4cb88f8dc89a35491c0866d952473f8f9416b77
+          mkdir -p "$(dirname "$archive")"
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 30 --max-time 600 \
+            --output "$archive.partial" \
+            https://github.com/google/draco/archive/refs/tags/1.5.7.zip
+          actual=$(cmake -E sha256sum "$archive.partial")
+          if [[ "${actual%% *}" != "$expected" ]]; then
+            rm -f "$archive.partial"
+            echo 'Draco source checksum does not match the pinned version.' >&2
+            exit 1
+          fi
+          mv "$archive.partial" "$archive"
+
       - name: Install MSYS2 (clangarm64) with GMP/MPFR and LLVM tools
         if: runner.os == 'Windows' && inputs.arch == 'arm64'
         uses: msys2/setup-msys2@v2

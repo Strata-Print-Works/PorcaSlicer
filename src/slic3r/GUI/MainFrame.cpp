@@ -2393,7 +2393,7 @@ wxBoxSizer* MainFrame::create_side_tools()
         if (m_plater->slice_scope() == Plater::SliceScope::Plate) {
             auto* plate = m_plater->get_partplate_list().get_curr_plate();
 #ifdef __linux__
-            const auto* preset = wxGetApp().preset_bundle;
+            auto* preset = wxGetApp().preset_bundle;
             const bool force_grouping = preset && preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2;
 #else
             const bool force_grouping = false;
