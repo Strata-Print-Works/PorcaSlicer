@@ -25,6 +25,7 @@ constexpr uint8_t context_bit(ShortcutContext context) { return uint8_t(1u << un
 enum class Shortcut : uint8_t {
     // Project
     NewProject, OpenProject, SaveProject, SaveProjectAs, ImportModel, Publish3mf,
+    CloseProject, NextProject, PreviousProject, SaveAllProjects,
     // Slicing and printing
     SlicePlate, ExportSlicedFile, PrintPlate, PrintHostQueue,
     // Selection

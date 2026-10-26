@@ -3649,6 +3649,13 @@ bool GUI_App::on_init_inner()
         plater_->reset_project_dirty_initial_presets();
         plater_->update_project_dirty_from_presets();
         plater_->get_partplate_list().set_filament_count(preset_bundle->filament_presets.size());
+        // Loading the initial defaults is the blank document's baseline, not an
+        // edit. Startup files and recovery are loaded after this initialization.
+        if (plater_->model().objects.empty() && plater_->get_project_filename().empty()) {
+            update_saved_preset_from_current_preset();
+            plater_->reset_project_dirty_after_save();
+            plater_->update_title_dirty_status();
+        }
     }
 
     // BBS:
@@ -3694,6 +3701,7 @@ bool GUI_App::on_init_inner()
 
     Bind(wxEVT_IDLE, [this](wxIdleEvent& event)
     {
+        if (!mainframe) { event.Skip(); return; }
         bool curr_studio_active = this->is_studio_active();
         if (m_studio_active != curr_studio_active) {
             if (curr_studio_active) {
@@ -4836,6 +4844,10 @@ void release_window_pools();
 
 void GUI_App::recreate_GUI(const wxString &msg_name)
 {
+    if (mainframe->m_project_tabs && !mainframe->m_project_tabs->prepare_recreation()) {
+        show_error(mainframe, _L("Finish the current edit before changing the application language. Your open projects have been kept."));
+        return;
+    }
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "recreate_GUI enter";
     m_is_recreating_gui = true;
 

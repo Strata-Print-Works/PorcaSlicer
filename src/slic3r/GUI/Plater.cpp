@@ -8069,6 +8069,7 @@ struct Plater::priv
     SliceScope m_slice_scope{SliceScope::Plate};
     std::string m_slice_scope_stage_id;
     PlateSliceBatch m_scope_batch;
+    std::map<std::size_t, PlatePrintSetup> m_scope_setups;
     bool m_scope_force{false};
     bool m_scope_switching{false};
     wxEventType m_scope_finished_event{wxEVT_NULL};
@@ -8098,6 +8099,7 @@ struct Plater::priv
     GLTexture environment_texture;
 #endif // ENABLE_ENVIRONMENT_MAP
     Mouse3DController mouse3d_controller;
+    bool mouse3d_active {false};
     View3D* view3D;
     // BBS
     //GLToolbar view_toolbar;
@@ -8115,6 +8117,7 @@ struct Plater::priv
     std::unique_ptr<NotificationManager> notification_manager;
 
     ProjectDirtyStateManager dirty_state;
+    bool last_load_succeeded {false};
 
     BackgroundSlicingProcess    background_process;
     bool suppressed_backround_processing_update { false };
@@ -8166,7 +8169,7 @@ struct Plater::priv
     void update_project_dirty_from_presets()
     {
         // BBS: backup
-        Slic3r::put_other_changes();
+        Slic3r::put_other_changes(model.id().id);
         dirty_state.update_from_presets();
     }
     int save_project_if_dirty(const wxString& reason) {
@@ -8455,6 +8458,7 @@ struct Plater::priv
     std::vector<ObjectID> scope_plate_ids(SliceScope scope, const std::string& stage_id);
     void start_slice_scope(SliceScope scope, const std::string& stage_id, bool force);
     void advance_scope_batch();
+    void advance_hidden_scope_plate(PartPlate* plate, std::uint64_t generation);
     void fail_scope_batch(const wxString& reason);
     void on_export_began(wxCommandEvent&);
     void on_export_finished(wxCommandEvent&);
@@ -8626,7 +8630,7 @@ private:
     boost::filesystem::path     m_project_folder;
 
     /* display project name */
-    wxString                    m_project_name;
+    wxString                    m_project_name {_L("Untitled")};
 
     Slic3r::UndoRedo::Stack 	m_undo_redo_stack_main;
     Slic3r::UndoRedo::Stack 	m_undo_redo_stack_gizmos;
@@ -8736,6 +8740,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     m_is_dark = wxGetApp().app_config->get("dark_color_mode") == "1";
 
     m_aui_mgr.init(q);
+    background_process.set_owner(q);
 
     this->q->SetFont(Slic3r::GUI::wxGetApp().normal_font());
 
@@ -8788,6 +8793,9 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     preview->get_canvas3d()->share_section_view(*view3D->get_canvas3d());
 
     assemble_view = new AssembleView(panel_3d, bed, &model, config, &background_process);
+    view3D->get_canvas3d()->set_project_owner(q);
+    preview->get_canvas3d()->set_project_owner(q);
+    assemble_view->get_canvas3d()->set_project_owner(q);
 
 #ifdef __APPLE__
     // BBS
@@ -9084,9 +9092,9 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         q->Bind(EVT_PROCESS_COMPLETED, &priv::on_process_completed, this);
         q->Bind(EVT_EXPORT_BEGAN, &priv::on_export_began, this);
         q->Bind(EVT_EXPORT_FINISHED, &priv::on_export_finished, this);
-        q->Bind(EVT_GLVIEWTOOLBAR_3D, [q](SimpleEvent&) { q->select_view_3D("3D"); });
+        q->Bind(EVT_GLVIEWTOOLBAR_3D, [q](SimpleEvent&) { if (q->is_active_project()) q->select_view_3D("3D"); });
         //BBS: set on_slice to false
-        q->Bind(EVT_GLVIEWTOOLBAR_PREVIEW, [q](SimpleEvent&) { q->select_view_3D("Preview", false); });
+        q->Bind(EVT_GLVIEWTOOLBAR_PREVIEW, [q](SimpleEvent&) { if (q->is_active_project()) q->select_view_3D("Preview", false); });
         q->Bind(EVT_GLTOOLBAR_SLICE_PLATE, &priv::on_action_slice_plate, this);
         q->Bind(EVT_GLTOOLBAR_SLICE_ALL, &priv::on_action_slice_all, this);
         const auto bind_delivery_action = [this](const wxEventTypeTag<SimpleEvent>& type, void (priv::*action)(SimpleEvent&)) {
@@ -9137,6 +9145,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     // Start the background thread to detect and connect to a HID device (Windows and Linux).
     // Connect to a 3DConnextion driver (OSX).
     mouse3d_controller.init();
+    mouse3d_active = true;
 #ifdef _WIN32
     // Register an USB HID (Human Interface Device) attach event. evt contains Win32 path to the USB device containing VID, PID and other info.
     // This event wakes up the Mouse3DController's background thread to enumerate HID devices, if the VID of the callback event
@@ -11280,6 +11289,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
             msg.ShowModal();
         }
     }
+    last_load_succeeded = !is_user_cancel &&
+        (tolal_model_count > 0 || loaded_plate_setups || loaded_cad_recipe || q->m_exported_file);
     q->schedule_background_process(true);
     q->mark_plate_toolbar_image_dirty();
     return obj_idxs;
@@ -12039,6 +12050,8 @@ void Plater::priv::scale_selection_to_fit_print_volume()
 
 void Plater::priv::schedule_background_process()
 {
+    if (!q->is_active_project()) return;
+    if (main_frame->m_project_tabs && main_frame->m_project_tabs->changing()) return;
     delayed_error_message.clear();
     // Trigger the timer event after 0.5s
     if (!m_scope_batch.running()) this->background_process_timer.Start(500, wxTIMER_ONE_SHOT);
@@ -12577,6 +12590,7 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
 // Restart background processing thread based on a bitmask of UpdateBackgroundProcessReturnState.
 bool Plater::priv::restart_background_process(unsigned int state)
 {
+    if (main_frame->m_project_tabs && !main_frame->m_project_tabs->can_start_slice(q)) return false;
     if (!m_worker.is_idle()) {
         // Avoid a race condition
         BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(", Line %1%: ui jobs running, return false")%__LINE__;
@@ -13820,6 +13834,7 @@ void Plater::priv::set_current_panel(wxPanel* panel, bool no_slice)
 // BBS
 void Plater::priv::on_combobox_select(wxCommandEvent &evt)
 {
+    if (!q->is_active_project()) return;
     PlaterPresetComboBox* preset_combo_box = dynamic_cast<PlaterPresetComboBox*>(evt.GetEventObject());
     if (preset_combo_box) {
         this->on_select_preset(evt);
@@ -14095,7 +14110,7 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
     }
 
     // BBS: log modify of filament selection
-    Slic3r::put_other_changes();
+    Slic3r::put_other_changes(model.id().id);
 
     // update slice state and set bedtype default for 3rd-party printer
     auto plate_list = partplate_list.get_plate_list();
@@ -14120,13 +14135,14 @@ void Plater::priv::on_slicing_update(SlicingStatusEvent &evt)
         notification_manager->set_slicing_progress_percentage(evt.status.text, (float)evt.status.percent / 100.0f);
 
         // update slicing percent
-        PartPlateList& plate_list = wxGetApp().plater()->get_partplate_list();
+        PartPlateList& plate_list = partplate_list;
         //slicing parallel, only update if percent is greater than before
-        if (evt.status.percent > plate_list.get_curr_plate()->get_slicing_percent())
-            plate_list.get_curr_plate()->update_slicing_percent(evt.status.percent);
+        auto* target = background_process.get_current_plate();
+        if (!target) target = plate_list.get_curr_plate();
+        if (evt.status.percent > target->get_slicing_percent()) target->update_slicing_percent(evt.status.percent);
     }
 
-    if (evt.status.flags & (PrintBase::SlicingStatus::RELOAD_SCENE | PrintBase::SlicingStatus::RELOAD_SLA_SUPPORT_POINTS)) {
+    if (q->is_active_project() && (evt.status.flags & (PrintBase::SlicingStatus::RELOAD_SCENE | PrintBase::SlicingStatus::RELOAD_SLA_SUPPORT_POINTS))) {
         switch (this->printer_technology) {
         case ptFFF:
             //BBS: add slice project logic, only display shells at the beginning
@@ -14143,7 +14159,7 @@ void Plater::priv::on_slicing_update(SlicingStatusEvent &evt)
             break;
         default: break;
         }
-    } else if (evt.status.flags & PrintBase::SlicingStatus::RELOAD_SLA_PREVIEW) {
+    } else if (q->is_active_project() && (evt.status.flags & PrintBase::SlicingStatus::RELOAD_SLA_PREVIEW)) {
         // Update the SLA preview. Only called if not RELOAD_SLA_SUPPORT_POINTS, as the block above will refresh the preview anyways.
         this->preview->reload_print();
     }
@@ -14190,6 +14206,7 @@ void Plater::priv::on_slicing_update(SlicingStatusEvent &evt)
 
 void Plater::priv::on_slicing_completed(wxCommandEvent & evt)
 {
+    if (!q->is_active_project()) { delayed_scene_refresh = true; return; }
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": event_type %1%, string %2%") % evt.GetEventType() % evt.GetString();
     //BBS: add slice project logic
     if (m_slice_all && (m_cur_slice_plate < (partplate_list.get_plate_count() - 1))) {
@@ -14308,6 +14325,20 @@ void Plater::priv::on_process_completed(SlicingProcessCompletedEvent &evt)
     // A legacy completion queued before this batch does not belong to its
     // worker. Scoped completions arrive through their unique registered type.
     if (m_scope_batch.running() && evt.GetEventType() == EVT_PROCESS_COMPLETED) return;
+    if (!q->is_active_project()) {
+        background_process.stop();
+        background_process.reset_export();
+        if (auto* plate = background_process.get_current_plate()) {
+            plate->update_slice_result_valid_state(evt.success());
+            plate->update_slicing_percent(evt.success() ? 100.0f : 0.0f);
+        }
+        if (evt.error()) notification_manager->push_slicing_error_notification(evt.format_error_message().first, {});
+        else if (evt.cancelled()) notification_manager->set_slicing_progress_canceled(_u8L("Slicing Canceled"));
+        else notification_manager->set_slicing_progress_export_possible();
+        delayed_scene_refresh = true;
+        m_is_slicing = false;
+        return;
+    }
     BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << boost::format(": enter, m_ignore_event %1%, status %2%")%m_ignore_event %evt.status();
     //BBS:ignore cancel event for some special case
     if (m_ignore_event && evt.GetEventType() == EVT_PROCESS_COMPLETED)
@@ -14857,6 +14888,7 @@ void Plater::priv::on_action_print_plate_from_sdcard(SimpleEvent&)
 
 void Plater::priv::on_tab_selection_changing(wxBookCtrlEvent& e)
 {
+    if (!q->is_active_project()) { e.Skip(); return; }
     // Ignore event raised by child controls
     if (!(main_frame->m_tabpanel && e.GetId() == main_frame->m_tabpanel->GetId())) {
         e.Skip();
@@ -15544,6 +15576,7 @@ void Plater::priv::set_project_name(const wxString& project_name)
 
 void Plater::priv::update_title_dirty_status()
 {
+    if (!q->is_active_project()) return;
     if (m_project_name.empty())
         return;
 
@@ -15725,7 +15758,7 @@ void Plater::priv::unbind_canvas_event_handlers()
     // The Design tab's viewport is a fourth GLCanvas3D on the same shared GL context, owned by
     // MainFrame rather than by us — same reach as reset() uses for clear_document(). Null until
     // the tab has been opened once, so most sessions skip it.
-    if (DesignPanel* design = DesignPanel::if_built())
+    if (DesignPanel* design = q->is_active_project() ? DesignPanel::if_built() : nullptr)
         design->unbind_canvas_event_handlers();
 #endif
 }
@@ -15739,7 +15772,7 @@ void Plater::priv::reset_canvas_volumes()
         preview->get_canvas3d()->reset_volumes();
 
 #ifdef SLIC3R_CAD
-    if (DesignPanel* design = DesignPanel::if_built())
+    if (DesignPanel* design = q->is_active_project() ? DesignPanel::if_built() : nullptr)
         design->reset_canvas_volumes();
 #endif
 }
@@ -16783,11 +16816,81 @@ void Sidebar::set_btn_label(const ActionButtonType btn_type, const wxString& lab
 
 Plater::Plater(wxWindow *parent, MainFrame *main_frame)
     : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxGetApp().get_min_size())
-    , p(new priv(this, main_frame))
+    // Workspaces are created on the UI thread. Unlike a model id restored from
+    // a file, this identity is never reused during the application's lifetime.
+    , m_project_session_id([] { static std::uint64_t last = 0; return ++last; }())
+    , m_project_presets(wxGetApp().preset_bundle, [](PresetBundle*) {})
 {
+    // A new child of an already visible frame is shown by default. Keep the
+    // entire workspace unmapped until its private state and views are complete;
+    // otherwise scene initialization renders through a half-constructed Plater.
+    wxPanel::Show(false);
+    p = std::make_unique<priv>(this, main_frame);
+    main_frame->m_plater = this;
+    wxGetApp().plater_ = this;
     // Initialization performed in the private c-tor
     enable_wireframe(true);
     m_only_gcode = false;
+}
+
+bool Plater::is_active_project() const { return wxGetApp().plater() == this; }
+bool Plater::last_project_load_succeeded() const { return p->last_load_succeeded; }
+
+bool Plater::prepare_project_switch()
+{
+    if (p->view3D->is_dragging() || !p->m_worker.is_idle() ||
+        p->view3D->get_canvas3d()->get_gizmos_manager().is_in_editing_mode(true))
+        return false;
+    sidebar().finish_param_edit();
+    capture_plate_setup();
+    return true;
+}
+
+void Plater::suspend_project()
+{
+    if (is_active_project()) checkpoint_project();
+    p->background_process_timer.Stop();
+    p->auto_reslice_timer.Stop();
+    if (p->mouse3d_active) {
+        p->mouse3d_controller.shutdown();
+        p->mouse3d_active = false;
+    }
+}
+
+void Plater::resume_project()
+{
+    if (!p->mouse3d_active) {
+        p->mouse3d_controller.init();
+        p->mouse3d_active = true;
+    }
+    // The retained workspace was resized while hidden. Refresh its AUI panes
+    // after mapping it, including Preview's canvas and summary placement.
+    p->update_sidebar(true);
+    p->set_current_canvas_as_dirty();
+    update_title_dirty_status();
+}
+
+bool Plater::checkpoint_project()
+{
+    if (p->main_frame->m_project_tabs) return p->main_frame->m_project_tabs->checkpoint(this);
+    if (!is_active_project() || !p->is_project_dirty()) return true;
+    if (up_to_date(false, true)) return true;
+    capture_plate_setup();
+    const auto path = model().get_backup_path() + "/.3mf";
+    if (export_3mf(path, SaveStrategy::Backup) < 0) return false;
+    up_to_date(true, true);
+    return true;
+}
+
+void Plater::shutdown_project()
+{
+    suspend_project();
+    cancel_slice_batch();
+    p->background_process.stop();
+    p->m_worker.cancel_all();
+    unbind_canvas_event_handlers();
+    reset_canvas_volumes();
+    remove_dock_panes();
 }
 
 bool Plater::Show(bool show)
@@ -17192,6 +17295,11 @@ SLAPrint&       Plater::sla_print()         { return p->sla_print; }
 
 int Plater::new_project(bool skip_confirm, bool silent, const wxString& project_name, bool reload_presets)
 {
+    // Calibration builders continue on this Plater after resetting it. Only the
+    // ordinary New command can hand off to a newly allocated workspace here.
+    if (!skip_confirm && !silent && project_name.empty() && p->main_frame->m_project_tabs &&
+        !p->main_frame->m_project_tabs->creating())
+        return p->main_frame->m_project_tabs->new_project() ? wxID_YES : wxID_CANCEL;
     model().calib_pa_pattern.reset(nullptr);
     model().plates_custom_gcodes.clear();
 
@@ -17300,8 +17408,13 @@ void Plater::load_project(wxString const& filename2,
     wxString const& originfile)
 {
     auto filename = filename2;
+    if (p->main_frame->m_project_tabs && !p->main_frame->m_project_tabs->creating()) {
+        if (filename.empty()) wxGetApp().load_project(this, filename);
+        if (!filename.empty()) p->main_frame->m_project_tabs->open_project(filename, originfile);
+        return;
+    }
     bool geometry_only = false;
-    if (originfile == "-") {
+    if (originfile == "-" && !(p->main_frame->m_project_tabs && p->main_frame->m_project_tabs->creating())) {
         if (project_load_asks(model())) {
             if (filename.empty()) wxGetApp().load_project(this, filename);
             if (filename.empty()) return;
@@ -17333,7 +17446,8 @@ void Plater::load_project(wxString const& filename2,
 
     // BSS: save project, force close
     int result;
-    if ((result = close_with_confirm(check)) == wxID_CANCEL) {
+    const bool candidate_load = p->main_frame->m_project_tabs && p->main_frame->m_project_tabs->creating();
+    if (!candidate_load && (result = close_with_confirm(check)) == wxID_CANCEL) {
         return;
     }
 
@@ -17384,6 +17498,7 @@ void Plater::load_project(wxString const& filename2,
         input_paths.push_back(into_u8(originfile));
 
     bool loaded_published   = false;
+    p->last_load_succeeded = false;
     std::vector<size_t> res = load_files(input_paths, strategy, false, &loaded_published);
 
     // Import may select a different plate while rebuilding object selections.
@@ -17395,7 +17510,7 @@ void Plater::load_project(wxString const& filename2,
     wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
 
     // if res is empty no data has been loaded
-    if (!res.empty() && !loaded_published && (load_restore || !(strategy & LoadStrategy::Silence))) {
+    if (p->last_load_succeeded && !loaded_published && (load_restore || !(strategy & LoadStrategy::Silence))) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << __LINE__ << " call set_project_filename: " << (load_restore ? originfile : filename);
         p->set_project_filename(load_restore ? originfile : filename);
         if (load_restore && originfile.IsEmpty()) {
@@ -17467,6 +17582,7 @@ void Plater::load_project(wxString const& filename2,
 // BBS: save logic
 int Plater::save_project(bool saveAs)
 {
+    sidebar().finish_param_edit();
     //if (up_to_date(false, false)) // should we always save
     //    return;
     auto filename = get_project_filename(".3mf");
@@ -17477,6 +17593,9 @@ int Plater::save_project(bool saveAs)
     if (filename.empty())
         return wxID_NO;
     if (filename == "<cancel>")
+        return wxID_CANCEL;
+
+    if (p->main_frame->m_project_tabs && !p->main_frame->m_project_tabs->confirm_save(filename, this))
         return wxID_CANCEL;
 
     //BBS export 3mf without gcode
@@ -17524,6 +17643,7 @@ int Plater::save_project(bool saveAs)
     catch (...) {}
 
     update_title_dirty_status();
+    if (p->main_frame->m_project_tabs) p->main_frame->m_project_tabs->saved(this);
     return wxID_YES;
 }
 
@@ -17786,15 +17906,12 @@ void Plater::request_download_project(std::string project_id)
 bool Plater::up_to_date(bool saved, bool backup)
 {
     if (saved) {
-        Slic3r::clear_other_changes(backup);
+        Slic3r::clear_other_changes(backup, model().id().id);
         return p->up_to_date(saved, backup);
     }
-    // A Design-tab project is object-less until it is committed to the plate, but its feature
-    // tree is real work: treating it as an empty project skipped both the autosave and the
-    // "unsaved changes" prompt, so quitting threw it away without asking. Non-CAD projects
-    // never carry a recipe, so the empty-project shortcut is unchanged for them.
-    return (p->model.objects.empty() && p->model.cad_recipe.empty()) ||
-           (p->up_to_date(saved, backup) && !Slic3r::has_other_changes(backup));
+    // Empty plates and CAD recipes are still project work. Geometry count must
+    // not bypass either the undo baseline or this project's non-model edits.
+    return p->up_to_date(saved, backup) && !Slic3r::has_other_changes(backup, model().id().id);
 }
 
 bool Plater::add_model(bool imperial_units, std::string fname)
@@ -19312,6 +19429,10 @@ void Plater::load_gcode()
 //BBS: remove GCodeViewer as seperate APP logic
 void Plater::load_gcode(const wxString& filename)
 {
+    if (p->main_frame->m_project_tabs && !p->main_frame->m_project_tabs->creating()) {
+        if (!filename.empty()) p->main_frame->m_project_tabs->open_gcode(filename);
+        return;
+    }
     BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << __LINE__ << " entry and filename: " << filename;
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__;
     if (! is_gcode_file(into_u8(filename))
@@ -19322,7 +19443,8 @@ void Plater::load_gcode(const wxString& filename)
     m_last_loaded_gcode = filename;
 
     // BSS: create a new project when load_gcode, force close previous one
-    if (new_project(false, true) != wxID_YES)
+    const bool candidate_load = p->main_frame->m_project_tabs && p->main_frame->m_project_tabs->creating();
+    if (new_project(candidate_load, true) != wxID_YES)
         return;
 
     m_only_gcode = true;
@@ -19972,6 +20094,8 @@ bool Plater::load_files(const wxArrayString& filenames)
             } else other_file.push_back(path);
         }
         if (handle_zips(other_file) && other_file.empty()) return true;
+        if (!other_file.empty() && p->main_frame->m_project_tabs && !is_active_project() &&
+            !p->main_frame->m_project_tabs->activate(this)) break;
         if (!other_file.empty() && load_files(other_file, LoadStrategy::LoadModel, false).empty()) res = false;
         break;
     default: break;
@@ -20276,6 +20400,8 @@ void Plater::add_file()
                 if (!open_3mf_file(path)) return;
             } else other_file.push_back(path);
         }
+        if (!other_file.empty() && p->main_frame->m_project_tabs && !is_active_project() &&
+            !p->main_frame->m_project_tabs->activate(this)) break;
         if (!other_file.empty() && !load_files(other_file, LoadStrategy::LoadModel, false).empty())
             wxGetApp().mainframe->update_title();
         break;
@@ -20421,6 +20547,7 @@ int GUI::Plater::close_with_confirm(std::function<bool(bool)> second_check)
 //BBS: trigger a restore project event
 void Plater::trigger_restore_project(int skip_confirm)
 {
+    if (p->main_frame->m_project_tabs && p->main_frame->m_project_tabs->restore_session()) return;
     auto evt = new wxCommandEvent(EVT_RESTORE_PROJECT, this->GetId());
     evt->SetInt(skip_confirm);
     wxQueueEvent(this, evt);
@@ -22019,9 +22146,13 @@ bool Plater::can_slice_scope(bool force) const
 }
 
 bool Plater::slice_batch_running() const { return p && p->m_scope_batch.running(); }
+bool Plater::slice_worker_running() const { return p && p->background_process.running(); }
+void Plater::continue_queued_slice() { if (p && p->m_scope_batch.running()) p->advance_scope_batch(); }
+
 
 wxString Plater::slice_batch_label() const
 {
+    if (p && p->m_scope_batch.state() == PlateSliceBatch::State::Failed) return _L("Slicing failed");
     if (!slice_batch_running()) return {};
     return format_wxstr(_L("Slicing %1% — %2% of %3%"), p->m_scope_batch_title,
         p->m_scope_batch.completed() + 1, p->m_scope_batch.total());
@@ -22076,6 +22207,7 @@ void Plater::cancel_slice_batch()
     // Invalidate the queue before waiting for the worker. Its queued completion
     // has a unique event type, so it cannot advance this or a later batch.
     p->m_scope_batch.cancel();
+    if (p->main_frame->m_project_tabs) p->main_frame->m_project_tabs->cancel_slice(this);
     if (p->m_scope_finished_event != wxEVT_NULL)
         Unbind(wxEventTypeTag<SlicingProcessCompletedEvent>(p->m_scope_finished_event), &priv::on_scope_process_completed, p.get());
     p->m_scope_finished_event = wxEVT_NULL;
@@ -22084,7 +22216,7 @@ void Plater::cancel_slice_batch()
     p->m_is_slicing = false;
     p->auto_reslice_after_cancel = false;
     p->notification_manager->set_slicing_progress_canceled(_u8L("Slicing Canceled"));
-    if (!IsBeingDeleted() && !wxGetApp().is_closing()) {
+    if (!IsBeingDeleted() && !wxGetApp().is_closing() && is_active_project()) {
         p->preview->reload_print(false);
         p->main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, true, true);
     }
@@ -22107,7 +22239,7 @@ void Plater::priv::fail_scope_batch(const wxString& reason)
     }
     notification_manager->push_notification(NotificationType::CustomNotification,
         NotificationManager::NotificationLevel::ErrorNotificationLevel, into_u8(message));
-    main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, true, true);
+    if (q->is_active_project()) main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, true, true);
 }
 
 void Plater::priv::start_slice_scope(SliceScope scope, const std::string& stage_id, bool force)
@@ -22124,6 +22256,12 @@ void Plater::priv::start_slice_scope(SliceScope scope, const std::string& stage_
         const auto state = update_background_process(true);
         if (state & UPDATE_BACKGROUND_PROCESS_REFRESH_SCENE) view3D->reload_scene(false);
         m_scope_batch.begin(scope_candidates(), scope, partplate_list.get_curr_plate()->id(), stage_id, force);
+        m_scope_setups.clear();
+        for (const auto* plate : partplate_list.get_plate_list()) {
+            auto setup = plate->print_setup();
+            if (setup.empty()) setup.capture(q->project_presets());
+            m_scope_setups.emplace(plate->id().id, std::move(setup));
+        }
         m_scope_force = force;
         m_scope_batch_title = scope == SliceScope::Plate ? _L("Plate") : _L("Project");
         if (scope == SliceScope::Stage)
@@ -22141,7 +22279,8 @@ void Plater::priv::start_slice_scope(SliceScope scope, const std::string& stage_
         auto_reslice_timer.Stop();
         auto_reslice_pending = false;
         auto_reslice_after_cancel = false;
-        advance_scope_batch();
+        if (main_frame->m_project_tabs) main_frame->m_project_tabs->queue_slice(q);
+        else advance_scope_batch();
         if (m_scope_batch.running()) {
             q->select_view_3D("Preview", true);
             main_frame->select_tab(TAB_ID_PREVIEW);
@@ -22165,6 +22304,10 @@ void Plater::priv::advance_scope_batch()
     const auto found = std::find_if(plates.begin(), plates.end(), [&](const PartPlate* plate) { return plate->id() == target; });
     if (found == plates.end()) { fail_scope_batch(_L("This plate is no longer in the project.")); return; }
     const int index = int(std::distance(plates.begin(), found));
+    if (!q->is_active_project()) {
+        advance_hidden_scope_plate(*found, generation);
+        return;
+    }
     m_scope_switching = true;
     try {
         Plater::SingleSnapshot snapshot(q);
@@ -22231,6 +22374,51 @@ void Plater::priv::advance_scope_batch()
     }
 }
 
+void Plater::priv::advance_hidden_scope_plate(PartPlate* plate, std::uint64_t generation)
+{
+    try {
+        const auto saved = m_scope_setups.find(plate->id().id);
+        if (saved == m_scope_setups.end()) { fail_scope_batch(_L("This plate's settings have changed. Slice it again.")); return; }
+        if (!m_scope_force && scope_result_reusable(plate)) {
+            m_scope_batch.complete(generation, plate->id(), true);
+            if (m_scope_batch.running()) q->CallAfter([this, generation] {
+                if (m_scope_batch.running() && m_scope_batch.generation() == generation) advance_scope_batch();
+            });
+            return;
+        }
+        PresetBundle bundle(q->project_presets());
+        saved->second.activate(bundle, "Slice");
+        // Resolve against this plate's own printer, without touching the settings
+        // editor, active plate, camera or another project's preset bundle.
+        const auto maps = plate->get_real_filament_maps(bundle.project_config);
+        const auto config = bundle.get_printer_extruder_count() > 1
+            ? bundle.full_config(false, maps, plate->get_filament_volume_maps()) : bundle.full_config(false);
+        if (const auto* plugins = config.option<ConfigOptionStrings>("plugins"); plugins && !plugins->values.empty()) {
+            fail_scope_batch(_L("Open this project to review its plugin requirements before slicing."));
+            return;
+        }
+        plate->update_slice_context(background_process);
+        background_process.reset();
+        if (m_scope_force) background_process.fff_print()->clear();
+        else background_process.fff_print()->set_gcode_file_invalidated();
+        background_process.set_job_context(config, bundle.is_bbl_vendor());
+        background_process.apply(model, config);
+        background_process.fff_print()->set_extruder_filament_info(bundle.get_extruder_filament_info());
+        const auto error = background_process.validate();
+        if (!error.string.empty()) { fail_scope_batch(from_u8(error.string)); return; }
+        plate->update_slice_result_valid_state(false);
+        m_scope_event_generation = generation;
+        m_scope_event_plate_id = plate->id();
+        m_scope_finished_event = wxNewEventType();
+        q->Bind(wxEventTypeTag<SlicingProcessCompletedEvent>(m_scope_finished_event), &priv::on_scope_process_completed, this);
+        background_process.set_finished_event(m_scope_finished_event);
+        m_is_slicing = true;
+        if (!background_process.start()) fail_scope_batch(_L("Review this plate's settings and try slicing again."));
+    } catch (const std::exception& error) {
+        fail_scope_batch(from_u8(error.what()));
+    }
+}
+
 void Plater::priv::on_scope_process_completed(SlicingProcessCompletedEvent& event)
 {
     if (event.GetEventType() != m_scope_finished_event || !m_scope_batch.running() ||
@@ -22259,7 +22447,7 @@ void Plater::priv::on_scope_process_completed(SlicingProcessCompletedEvent& even
     } else {
         m_is_slicing = false;
     }
-    main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, !m_scope_batch.running(), true);
+    if (q->is_active_project()) main_frame->update_slice_print_status(MainFrame::eEventSliceUpdate, !m_scope_batch.running(), true);
 }
 
 void Plater::reslice()

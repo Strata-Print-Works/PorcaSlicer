@@ -1024,7 +1024,7 @@ void AuxiliaryPanel::on_import_file(wxCommandEvent &event)
 
             boost::system::error_code ec;
             if (!fs::copy_file(src_bfs_path, fs::path(dir_path.ToStdWstring()), fs::copy_options::overwrite_existing, ec)) continue;
-            Slic3r::put_other_changes();
+            Slic3r::put_other_changes(wxGetApp().model().id().id);
 
             // add in file list
             iter = m_paths_list.find(file_model.ToStdString());

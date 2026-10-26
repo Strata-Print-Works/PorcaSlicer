@@ -100,6 +100,7 @@ class PresetBundle;
 namespace CustomGCode { struct Item; }
 
 namespace GUI {
+class Plater;
 
 class Bed3D;
 class PartPlateList;
@@ -777,6 +778,7 @@ private:
     Selection m_selection;
     const DynamicPrintConfig* m_config;
     Model* m_model;
+    Plater* m_project_owner {nullptr};
     BackgroundSlicingProcess *m_process;
     bool m_requires_check_outside_state{ false };
 
@@ -1127,6 +1129,7 @@ public:
     void set_process(BackgroundSlicingProcess* process) { m_process = process; }
     void set_model(Model* model);
     const Model* get_model() const { return m_model; }
+    void set_project_owner(Plater* owner) { m_project_owner = owner; }
 
     const Selection& get_selection() const { return m_selection; }
     Selection& get_selection() { return m_selection; }

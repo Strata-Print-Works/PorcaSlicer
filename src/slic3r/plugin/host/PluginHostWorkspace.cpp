@@ -335,6 +335,7 @@ std::string plugin_workspace_token()
     // invalidates an old suggestion. Edits are snapshotted, objects carry
     // revisions, and settings are compared rather than serialized per call.
     std::size_t state = p.model().id().id;
+    boost::hash_combine(state, p.project_session_id());
     boost::hash_combine(state, p.undo_redo_stack_main().active_snapshot_time());
     boost::hash_combine(state, bundle.filament_presets);
     auto hash_matrix = [&state](const Transform3d& transform) {

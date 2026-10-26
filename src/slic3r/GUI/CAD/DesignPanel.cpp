@@ -4917,7 +4917,7 @@ void DesignPanel::sync_recipe_to_model()
     // a design that has not been committed to the plate has no ModelObjects either — so without
     // this the project reads as clean: no autosave, and no "unsaved changes" prompt on quit.
     // Same hook the auxiliary-files panel uses for project data that lives outside the model.
-    Slic3r::put_other_changes();
+    Slic3r::put_other_changes(wxGetApp().model().id().id);
 }
 
 // Runs recompute() off the UI thread, because on a heavy imported solid it takes seconds.

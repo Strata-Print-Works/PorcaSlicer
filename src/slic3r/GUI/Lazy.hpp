@@ -83,6 +83,13 @@ public:
     Lazy(const Lazy&) = delete;
     Lazy& operator=(const Lazy&) = delete;
 
+    // Retained document pages can select which holder the legacy type accessor
+    // reaches. This does not construct the page or change its owned state.
+    void make_current()
+    {
+        if constexpr (registered()) LazyInstance<T>::s_lazy = this;
+    }
+
     // Null until completely built.
     T* get() const { return built() ? m_object : nullptr; }
 

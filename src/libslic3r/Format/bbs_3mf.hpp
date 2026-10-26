@@ -366,11 +366,11 @@ extern void run_backup_ui_tasks();
 
 extern bool has_restore_data(std::string & path, std::string & origin);
 
-extern void put_other_changes();
+extern void put_other_changes(std::size_t project_id = 0);
 
-extern void clear_other_changes(bool backup);
+extern void clear_other_changes(bool backup, std::size_t project_id = 0);
 
-extern bool has_other_changes(bool backup);
+extern bool has_other_changes(bool backup, std::size_t project_id = 0);
 
 class SaveObjectGaurd {
 public:

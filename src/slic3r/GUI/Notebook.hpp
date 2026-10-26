@@ -308,6 +308,17 @@ public:
     }
 
     ButtonsListCtrl* GetBtnsListCtrl() const { return static_cast<ButtonsListCtrl*>(m_bookctrl); }
+
+    // Prepare and Preview are two views of the same document window. Replace
+    // their backing window without deleting either retained project workspace.
+    bool ReplacePageWindow(const wxString& id, wxWindow* window)
+    {
+        const int index = FindPageByName(id);
+        if (index == wxNOT_FOUND || !window || window->GetParent() != this) return false;
+        m_pages[index] = window;
+        window->SetSize(GetPageRect());
+        return true;
+    }
     void SetOverflowButton(wxWindow* button) { GetBtnsListCtrl()->SetOverflowButton(button); }
 
     // Insertion index just past the first of `ids` that is present, or the end of the bar

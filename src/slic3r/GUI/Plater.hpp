@@ -5,6 +5,7 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/PlateSliceBatch.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include "libslic3r/Technologies.hpp"
 #include "libslic3r/Color.hpp"
@@ -17,6 +18,8 @@
 #include "libslic3r/libslic3r.h"
 #include <atomic>
 #include <memory>
+#include <utility>
+#include "libslic3r/PresetBundle.hpp"
 #include <optional>
 #include "slic3r/GUI/Event.hpp"
 #include "slic3r/GUI/I18N.hpp"
@@ -361,6 +364,20 @@ public:
     Plater &operator=(Plater &&) = delete;
     Plater &operator=(const Plater &) = delete;
     ~Plater();
+
+    PresetBundle& project_presets() { return *m_project_presets; }
+    const PresetBundle& project_presets() const { return *m_project_presets; }
+    void retain_project_presets(std::shared_ptr<PresetBundle> presets) { m_project_presets = std::move(presets); }
+    bool is_active_project() const;
+    std::uint64_t project_session_id() const { return m_project_session_id; }
+    bool last_project_load_succeeded() const;
+    bool prepare_project_switch();
+    void suspend_project();
+    void resume_project();
+    void shutdown_project();
+    void continue_queued_slice();
+    bool slice_worker_running() const;
+    bool checkpoint_project();
 
     bool Show(bool show = true);
 
@@ -1127,6 +1144,8 @@ public:
 
 private:
     struct priv;
+    std::uint64_t m_project_session_id;
+    std::shared_ptr<PresetBundle> m_project_presets;
     std::unique_ptr<priv> p;
     std::string           m_3mf_path;
     // Set true during PopupMenu() tracking to suppress immediate error message boxes.

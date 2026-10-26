@@ -45,6 +45,8 @@ GROUPS = {
         ("porca_unit", "SelectionAlignment", ["tests/libslic3r/test_selection_alignment.cpp"]),
     ],
     "quick": [
+        ("porca_unit", "ProjectSliceQueue", ["tests/libslic3r/test_project_slice_queue.cpp"]),
+        ("porca_unit", "ProjectBackupState", ["tests/libslic3r/test_project_backup_state.cpp"]),
         ("porca_unit", "PrinterConnectionStatus", ["tests/slic3rutils/test_printer_connection_status.cpp"]),
         ("porca_unit", "PreviewAllocation", ["tests/slic3rutils/test_preview_layout.cpp"]),
         ("porca_unit", "PreviewEstimate", ["tests/slic3rutils/test_preview_estimate.cpp"]),

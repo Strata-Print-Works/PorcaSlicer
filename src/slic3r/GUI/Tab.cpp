@@ -836,6 +836,10 @@ void Tab::apply_sidebar_style()
     const wxColour surface(color_hex(ColorRole::Surface, dark));
     SetBackgroundColour(surface);
     m_top_panel->SetBackgroundColour(surface);
+    // These controls were created while the preset header still had its default
+    // background. Keep their native bitmap backing surfaces in sync as well.
+    for (auto* button : {m_btn_save_preset, m_btn_delete_preset, m_btn_search, m_undo_btn})
+        button->SetBackgroundColour(surface);
     update_label_colours();
     // Tinting converts the icon to an image; reuse it until the theme or scale changes.
     if (!m_sidebar_undo_bitmap.IsOk() || m_sidebar_undo_dark != dark || m_sidebar_undo_em != m_em_unit) {
@@ -860,7 +864,11 @@ void Tab::apply_sidebar_style()
     if (auto* row = m_main_sizer->GetItem(m_top_panel)) row->SetBorder(FromDIP(4));
     if (m_variant_sizer)
         if (auto* row = m_main_sizer->GetItem(m_variant_sizer)) row->SetBorder(FromDIP(4));
-    if (m_presets_choice) m_presets_choice->set_sidebar_style();
+    if (m_presets_choice) {
+        m_presets_choice->set_sidebar_style();
+        // The rounded field fill does not cover the window's corner pixels.
+        m_presets_choice->SetBackgroundColour(surface);
+    }
     if (auto* summary = process_summary(this)) summary->apply_style();
     for (auto* button : {m_btn_save_preset, m_btn_delete_preset, m_btn_search}) {
         button->SetMinSize(FromDIP(wxSize(24, control_md)));
@@ -2297,6 +2305,7 @@ static void update_all_extruder_variants(int extruder_idx = -1)
 
 void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
 {
+    if (m_preset_bundle != wxGetApp().preset_bundle) return;
     // Orca:
     // TODO: Move filament-specific checks to TabFilament::on_value_change()
     // TODO: Move printer-specific checks to TabPrinter::on_value_change()
@@ -2952,6 +2961,7 @@ void Tab::apply_config_from_cache()
 // to update number of "filament" selection boxes when the number of extruders change.
 void Tab::on_presets_changed(bool refresh_sidebar)
 {
+    if (m_preset_bundle != wxGetApp().preset_bundle) return;
     if (wxGetApp().plater() == nullptr)
         return;
 
@@ -4120,6 +4130,7 @@ void TabPrintPlate::update_mixed_filament_seq_state()
 
 void TabPrintModel::on_value_change(const std::string& opt_id, const boost::any& value)
 {
+    if (m_preset_bundle != wxGetApp().preset_bundle) return;
     // TODO: support opt_index, translate by OptionsGroup's m_opt_map
     if (m_config_manipulation.is_applying()) {
         TabPrint::on_value_change(opt_id, value);
@@ -4303,6 +4314,7 @@ void TabPrintScope::activate_selected_page(std::function<void()> throw_if_cancel
 
 void TabPrintScope::on_value_change(const std::string& key, const boost::any&)
 {
+    if (m_preset_bundle != wxGetApp().preset_bundle) return;
     const bool inherit = m_back_to_sys;
     m_back_to_sys = false;
     const auto* option = m_config->option(key);
@@ -4389,6 +4401,7 @@ void TabPrintPlate::reset_model_config()
 
 void TabPrintPlate::on_value_change(const std::string& opt_key, const boost::any& value)
 {
+    if (m_preset_bundle != wxGetApp().preset_bundle) return;
     auto k = opt_key;
     if (m_config_manipulation.is_applying()) {
         return;
@@ -5559,6 +5572,7 @@ void TabFilament::clear_pages()
 // Orca:
 void TabFilament::on_value_change(const std::string& opt_key, const boost::any& value)
 {
+    if (m_preset_bundle != wxGetApp().preset_bundle) return;
     if (wxGetApp().plater() == nullptr || m_config_manipulation.is_applying())
         return;
 
@@ -7277,6 +7291,7 @@ void TabPrinter::toggle_options()
 // Orca:
 void TabPrinter::on_value_change(const std::string& opt_key, const boost::any& value)
 {
+    if (m_preset_bundle != wxGetApp().preset_bundle) return;
     if (wxGetApp().plater() == nullptr || m_config_manipulation.is_applying())
         return;
 

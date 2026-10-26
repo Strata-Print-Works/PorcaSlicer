@@ -1719,6 +1719,8 @@ void PreferencesDialog::create_items()
 
     auto item_show_splash_scr  = create_item_checkbox(_L("Show splash screen"), _L("Show the splash screen during startup."), "show_splash_screen");
     g_sizer->Add(item_show_splash_scr);
+    g_sizer->Add(create_item_checkbox(_L("Reopen projects on startup"),
+        _L("Return to the saved projects you left open when you quit Porca."), "reopen_project_tabs"));
 
 #ifdef __linux__
     auto item_window_button_pos  = create_item_checkbox(_L("Use window buttons on left side"), "", "window_buttons_on_left", _L("(Requires restart)"));

@@ -644,7 +644,7 @@ void Preview::update_layers_slider(const std::vector<double>& layers_z, bool kee
 //BBS: add only gcode mode
 void Preview::load_print_as_fff(bool keep_z_range, bool only_gcode)
 {
-    if (wxGetApp().mainframe == nullptr || wxGetApp().is_recreating_gui())
+    if (wxGetApp().mainframe == nullptr || wxGetApp().plater() == nullptr || wxGetApp().is_recreating_gui())
         // avoid processing while mainframe is being constructed
         return;
 

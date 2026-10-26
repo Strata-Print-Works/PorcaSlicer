@@ -34,6 +34,18 @@
 
 using namespace Slic3r;
 
+TEST_CASE("Projects retain the supported silent-mode setting", "[Config][ProjectPlateImport]")
+{
+    for (const auto* value : {"0", "1"}) {
+        DynamicPrintConfig config;
+        ConfigSubstitutionContext substitutions(ForwardCompatibilitySubstitutionRule::Enable);
+        config.set_deserialize("silent_mode", value, substitutions);
+        REQUIRE(config.opt_bool("silent_mode") == (std::string(value) == "1"));
+        REQUIRE(substitutions.unrecogized_keys.empty());
+        REQUIRE(substitutions.substitutions.empty());
+    }
+}
+
 SCENARIO("Generic config validation performs as expected.", "[Config]") {
     GIVEN("A config generated from default options") {
         Slic3r::DynamicPrintConfig config = Slic3r::DynamicPrintConfig::full_print_config();

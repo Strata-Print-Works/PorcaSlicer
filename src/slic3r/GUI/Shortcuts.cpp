@@ -61,6 +61,10 @@ constexpr std::array<ShortcutInfo, size_t(Shortcut::Count)> shortcut_table = {{
     SHORTCUT(Publish3mf,        "publish_3mf",        L("Publish 3MF"),                                          GLOBAL, { 'E', CTRL_SHIFT }),
 
     // Slicing and printing
+    SHORTCUT(CloseProject,      "close_project",      L("Close Project"),                                        GLOBAL, { 'W', CTRL }),
+    SHORTCUT(NextProject,       "next_project",       L("Next Project"),                                         GLOBAL, { WXK_PAGEDOWN, CTRL }),
+    SHORTCUT(PreviousProject,   "previous_project",   L("Previous Project"),                                     GLOBAL, { WXK_PAGEUP, CTRL }),
+    SHORTCUT(SaveAllProjects,   "save_all_projects",  L("Save All Projects"),                                    GLOBAL, {}),
     SHORTCUT(SlicePlate,        "slice_plate",        L("Slice plate"),                                          GLOBAL, { 'R', CTRL }),
     SHORTCUT(ExportSlicedFile,  "export_sliced_file", L("Export plate sliced file"),                             GLOBAL, { 'G', CTRL }),
     SHORTCUT(PrintPlate,        "print_plate",        L("Print plate"),                                          GLOBAL, { 'G', CTRL_SHIFT }),

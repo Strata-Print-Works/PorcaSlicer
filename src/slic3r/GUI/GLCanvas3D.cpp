@@ -2989,7 +2989,7 @@ void GLCanvas3D::render_thumbnail(ThumbnailData &         thumbnail_data,
                                   bool                    for_picking,
                                   bool                    ban_light)
 {
-    ModelObjectPtrs &model_objects = GUI::wxGetApp().model().objects;
+    ModelObjectPtrs &model_objects = (m_project_owner ? m_project_owner->model() : GUI::wxGetApp().model()).objects;
     render_thumbnail(thumbnail_data, w, h, thumbnail_params, model_objects, m_volumes, camera_type, camera_view_angle_type, for_picking, ban_light);
 }
 
@@ -3019,21 +3019,30 @@ void GLCanvas3D::render_thumbnail(ThumbnailData &           thumbnail_data,
         shader = wxGetApp().get_shader("flat");
     else
         shader = wxGetApp().get_shader("thumbnail");
-    std::vector<ColorRGBA> colors = wxGetApp().plater()->get_extruders_colors();
+    std::vector<ColorRGBA> colors = (m_project_owner ? m_project_owner : wxGetApp().plater())->get_extruders_colors();
+    if (m_project_owner && thumbnail_params.plate_id >= 0) {
+        auto* plate = m_project_owner->get_partplate_list().get_plate(thumbnail_params.plate_id);
+        if (plate && plate->fff_print()) {
+            if (const auto* slots = plate->fff_print()->full_print_config().option<ConfigOptionStrings>("filament_colour")) {
+                colors.resize(slots->values.size());
+                for (std::size_t i = 0; i < slots->values.size(); ++i) decode_color(slots->values[i], colors[i]);
+            }
+        }
+    }
     switch (OpenGLManager::get_framebuffers_type())
     {
     case OpenGLManager::EFramebufferType::Arb:
-        { render_thumbnail_framebuffer(thumbnail_data, w, h, thumbnail_params, wxGetApp().plater()->get_partplate_list(), model_objects, volumes, colors, shader, camera_type,
+        { render_thumbnail_framebuffer(thumbnail_data, w, h, thumbnail_params, (m_project_owner ? m_project_owner : wxGetApp().plater())->get_partplate_list(), model_objects, volumes, colors, shader, camera_type,
                                      camera_view_angle_type, for_picking, ban_light);
         break;
     }
     case OpenGLManager::EFramebufferType::Ext:
-        { render_thumbnail_framebuffer_ext(thumbnail_data, w, h, thumbnail_params, wxGetApp().plater()->get_partplate_list(), model_objects, volumes, colors, shader, camera_type,
+        { render_thumbnail_framebuffer_ext(thumbnail_data, w, h, thumbnail_params, (m_project_owner ? m_project_owner : wxGetApp().plater())->get_partplate_list(), model_objects, volumes, colors, shader, camera_type,
                                          camera_view_angle_type, for_picking, ban_light);
         break;
     }
     default:{
-        render_thumbnail_legacy(thumbnail_data, w, h, thumbnail_params, wxGetApp().plater()->get_partplate_list(), model_objects, volumes, colors, shader, camera_type,
+        render_thumbnail_legacy(thumbnail_data, w, h, thumbnail_params, (m_project_owner ? m_project_owner : wxGetApp().plater())->get_partplate_list(), model_objects, volumes, colors, shader, camera_type,
                                 camera_view_angle_type, for_picking, ban_light);
         break;
     }
@@ -3058,17 +3067,17 @@ void GLCanvas3D::render_thumbnail(ThumbnailData &                    thumbnail_d
     GLShaderProgram *shader = wxGetApp().get_shader("thumbnail");
     switch (OpenGLManager::get_framebuffers_type()) {
         case OpenGLManager::EFramebufferType::Arb: {
-            render_thumbnail_framebuffer(thumbnail_data, w, h, thumbnail_params, wxGetApp().plater()->get_partplate_list(), model_objects, volumes, extruder_colors, shader,
+            render_thumbnail_framebuffer(thumbnail_data, w, h, thumbnail_params, (m_project_owner ? m_project_owner : wxGetApp().plater())->get_partplate_list(), model_objects, volumes, extruder_colors, shader,
                                          camera_type, camera_view_angle_type, for_picking, ban_light);
             break;
         }
         case OpenGLManager::EFramebufferType::Ext: {
-            render_thumbnail_framebuffer_ext(thumbnail_data, w, h, thumbnail_params, wxGetApp().plater()->get_partplate_list(), model_objects, volumes, extruder_colors, shader,
+            render_thumbnail_framebuffer_ext(thumbnail_data, w, h, thumbnail_params, (m_project_owner ? m_project_owner : wxGetApp().plater())->get_partplate_list(), model_objects, volumes, extruder_colors, shader,
                                              camera_type, camera_view_angle_type, for_picking, ban_light);
             break;
         }
         default: {
-            render_thumbnail_legacy(thumbnail_data, w, h, thumbnail_params, wxGetApp().plater()->get_partplate_list(), model_objects, volumes, extruder_colors, shader, camera_type, camera_view_angle_type, for_picking, ban_light);
+            render_thumbnail_legacy(thumbnail_data, w, h, thumbnail_params, (m_project_owner ? m_project_owner : wxGetApp().plater())->get_partplate_list(), model_objects, volumes, extruder_colors, shader, camera_type, camera_view_angle_type, for_picking, ban_light);
             break;
         }
     }

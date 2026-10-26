@@ -30,6 +30,7 @@
 #include "Event.hpp"
 //BBS: GUI refactor
 #include "ParamsPanel.hpp"
+#include "ProjectTabs.hpp"
 #include "Monitor.hpp"
 #include "Auxiliary.hpp"
 #include "Project.hpp"
@@ -148,6 +149,7 @@ enum class CalibKind : int
 
 class MainFrame : public DPIFrame
 {
+    friend class ProjectTabs;
 #ifdef __APPLE__
     bool     m_mac_fullscreen{false};
 #endif
@@ -507,6 +509,7 @@ public:
     BBLTopbar*            m_topbar{ nullptr };
     PrintHostQueueDialog* printhost_queue_dlg() { return m_printhost_queue_dlg; }
     Plater*               m_plater { nullptr };
+    std::unique_ptr<ProjectTabs> m_project_tabs;
     // Lazy pages, created once and kept for the frame's life; their panels are reached
     // through LazyInstance's statics, and show_device() only moves pages in and out of the book.
 #ifdef SLIC3R_CAD

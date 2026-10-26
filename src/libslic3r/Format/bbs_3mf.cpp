@@ -1,3 +1,4 @@
+#include "libslic3r/ProjectBackupState.hpp"
 #include "../libslic3r.h"
 #include "../Exception.hpp"
 #include "../IMEXHelpers.hpp"
@@ -9435,7 +9436,6 @@ public:
 
     void backup_soon() {
         boost::lock_guard lock(m_mutex);
-        m_other_changes_backup = true;
         m_tasks.push_back({ Backup, 0, std::string(), nullptr, { ++m_task_seq } });
         m_cond.notify_all();
     }
@@ -9446,19 +9446,24 @@ public:
         std::deque<Task>   canceled_tasks;
         boost::unique_lock lock(m_mutex);
         if (removeAll && model.is_need_backup()) {
-            // running task may not be canceled
-            for (auto & t : m_ui_tasks)
-                canceled_tasks.push_back(t);
-            for (auto & t : m_tasks)
-                canceled_tasks.push_back(t);
-            m_ui_tasks.clear();
-            m_tasks.clear();
+            const auto path = model.get_backup_path();
+            // Object ids are local to a backup task; the project directory owns it.
+            // A global Backup task must remain available for the other projects.
+            const auto cancel_owned = [&](std::deque<Task>& tasks) {
+                for (auto it = tasks.begin(); it != tasks.end();) {
+                    if (it->path == path) {
+                        canceled_tasks.push_back(*it);
+                        it = tasks.erase(it);
+                    } else ++it;
+                }
+            };
+            cancel_owned(m_ui_tasks);
+            cancel_owned(m_tasks);
         }
         m_tasks.push_back({ RemoveBackup, model.id().id, model.get_backup_path(), nullptr, { removeAll } });
         ++m_task_seq;
         if (model.is_need_backup()) {
-            m_other_changes = false;
-            m_other_changes_backup = false;
+            m_project_changes.forget(model.id().id);
         }
         m_cond.notify_all();
         lock.unlock();
@@ -9477,25 +9482,9 @@ public:
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " exit, and new interval is: " << m_interval;
     }
 
-    void put_other_changes()
-    {
-        BOOST_LOG_TRIVIAL(info) << "put_other_changes";
-        m_other_changes        = true;
-        m_other_changes_backup = true;
-    }
-
-    void clear_other_changes(bool backup)
-    {
-        if (backup)
-            m_other_changes_backup = false;
-        else
-            m_other_changes = false;
-    }
-
-    bool has_other_changes(bool backup)
-    {
-        return backup ? m_other_changes_backup : m_other_changes;
-    }
+    void put_other_changes(std::size_t project_id) { m_project_changes.changed(project_id); }
+    void clear_other_changes(bool backup, std::size_t project_id) { m_project_changes.clear(project_id, backup); }
+    bool has_other_changes(bool backup, std::size_t project_id) const { return m_project_changes.dirty(project_id, backup); }
 
 private:
     enum TaskType {
@@ -9604,7 +9593,6 @@ private:
                         if (callback) callback(1);
                     } catch (...) {}
                 }
-                m_other_changes_backup = false;
                 break;
             }
             case AddObject:
@@ -9732,8 +9720,7 @@ private:
     long m_interval = 1 * 60;
     boost::system_time m_next_backup;
     Model m_temp_model; // visit only in main thread
-    bool m_other_changes = false; // visit only in main thread
-    bool m_other_changes_backup = false; // visit only in main thread
+    ProjectBackupState m_project_changes; // visit only in main thread
     std::vector<std::pair<ModelObject*, size_t>> m_gaurd_objects;
     boost::thread m_thread;
 };
@@ -9998,19 +9985,19 @@ bool has_restore_data(std::string & path, std::string& origin)
     return true;
 }
 
-void put_other_changes()
+void put_other_changes(std::size_t project_id)
 {
-    _BBS_Backup_Manager::get().put_other_changes();
+    _BBS_Backup_Manager::get().put_other_changes(project_id);
 }
 
-void clear_other_changes(bool backup)
+void clear_other_changes(bool backup, std::size_t project_id)
 {
-    _BBS_Backup_Manager::get().clear_other_changes(backup);
+    _BBS_Backup_Manager::get().clear_other_changes(backup, project_id);
 }
 
-bool has_other_changes(bool backup)
+bool has_other_changes(bool backup, std::size_t project_id)
 {
-    return _BBS_Backup_Manager::get().has_other_changes(backup);
+    return _BBS_Backup_Manager::get().has_other_changes(backup, project_id);
 }
 
 SaveObjectGaurd::SaveObjectGaurd(ModelObject& object)

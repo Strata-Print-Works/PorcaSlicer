@@ -702,7 +702,8 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
 
         // BBS: close save project
         int result;
-        if (event.CanVeto() && ((result = m_plater->close_with_confirm(check)) == wxID_CANCEL)) {
+        if (event.CanVeto() && (m_project_tabs ? !m_project_tabs->confirm_quit() :
+            ((result = m_plater->close_with_confirm(check)) == wxID_CANCEL))) {
             event.Veto();
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< "cancelled by close_with_confirm selection";
             return;
@@ -732,7 +733,7 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
         // Prevent queued selection/UI refresh work from running as normal during reset.
         wxGetApp().set_closing(true);
 
-        m_plater->reset();
+        if (!m_project_tabs) m_plater->reset();
         this->shutdown();
         // propagate event
 
@@ -781,7 +782,9 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
                 wxPostEvent(this, wxCommandEvent(EVT_BACKUP_POST));
             }
             else if (action == 1) {
-                if (!m_plater->up_to_date(false, true)) {
+                if (m_project_tabs) {
+                    m_project_tabs->checkpoint(m_plater);
+                } else if (!m_plater->up_to_date(false, true)) {
                     m_plater->export_3mf(m_plater->model().get_backup_path() + "/.3mf", SaveStrategy::Backup);
                     m_plater->up_to_date(true, true);
                 }
@@ -884,6 +887,10 @@ bool MainFrame::handle_global_shortcut(const KeyChord& chord)
         break;
     case Shortcut::NewProject: m_plater->new_project(); break;
     case Shortcut::OpenProject: m_plater->load_project(); break;
+    case Shortcut::CloseProject: if (m_project_tabs) m_project_tabs->close_active(); break;
+    case Shortcut::NextProject: if (m_project_tabs) m_project_tabs->next(1); break;
+    case Shortcut::PreviousProject: if (m_project_tabs) m_project_tabs->next(-1); break;
+    case Shortcut::SaveAllProjects: if (m_project_tabs) m_project_tabs->save_all(); break;
     case Shortcut::SaveProjectAs:
         if (can_save_as())
             m_plater->save_project(true);
@@ -1204,6 +1211,7 @@ void MainFrame::update_layout()
 #endif
         m_tabpanel->InsertPage(prepare_pos, TAB_ID_PREPARE, m_plater, _L("Prepare"), "tab_3d_active");
         m_tabpanel->InsertPage(prepare_pos + 1, TAB_ID_PREVIEW, m_plater, _L("Preview"), "tab_preview_active");
+        if (m_project_tabs) m_main_sizer->Add(m_project_tabs->window(), 0, wxEXPAND);
         m_main_sizer->Add(m_tabpanel, 1, wxEXPAND | wxTOP, 0);
 
         m_tabpanel->Bind(wxCUSTOMEVT_NOTEBOOK_SEL_CHANGED, [this](wxCommandEvent& evt)
@@ -1292,6 +1300,7 @@ void MainFrame::update_edge_panels()
 // Called when closing the application and when switching the application language.
 void MainFrame::shutdown()
 {
+    if (m_project_tabs) m_project_tabs->shutdown();
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "MainFrame::shutdown enter";
     m_idle.stop();
     if (ProjectPanel* project = ProjectPanel::if_built())
@@ -1347,7 +1356,7 @@ void MainFrame::shutdown()
     if (m_plater != nullptr) {
         // Stop the background thread (Windows and Linux).
         // Disconnect from a 3DConnextion driver (OSX).
-        m_plater->get_mouse3d_controller().shutdown();
+        if (!m_project_tabs) m_plater->get_mouse3d_controller().shutdown();
         // Store the device parameter database back to appconfig.
         m_plater->get_mouse3d_controller().save_config(*wxGetApp().app_config);
     }
@@ -1619,6 +1628,7 @@ void MainFrame::init_tabpanel() {
             m_plater->on_filament_count_change(full_config.option<ConfigOptionStrings>("filament_colour")->values.size());
         }
     }
+    if (wxGetApp().is_editor()) m_project_tabs = std::make_unique<ProjectTabs>(*this);
 }
 
 // SoftFever
@@ -1924,12 +1934,12 @@ bool MainFrame::can_start_new_project() const
                         GetTitle().StartsWith('*')||
                         wxGetApp().has_current_preset_changes() ||
                         !m_plater->model().objects.empty());*/
-    return (m_plater && !m_plater->is_background_process_slicing());
+    return m_plater && (m_project_tabs || !m_plater->is_background_process_slicing());
 }
 
 bool MainFrame::can_open_project() const
 {
-    return (m_plater && !m_plater->is_background_process_slicing());
+    return m_plater && (m_project_tabs || !m_plater->is_background_process_slicing());
 }
 
 bool  MainFrame::can_add_models() const
@@ -1957,10 +1967,15 @@ void MainFrame::save_project()
 
 bool MainFrame::save_project_as(const wxString& filename)
 {
-    bool ret = (m_plater != nullptr) ? m_plater->export_3mf(into_path(filename)) : false;
+    if (!m_plater) return false;
+    if (filename.empty()) return m_plater->save_project(true) == wxID_YES;
+    if (m_project_tabs && !m_project_tabs->confirm_save(filename, m_plater)) return false;
+    const bool ret = m_plater->export_3mf(into_path(filename)) == 0;
     if (ret) {
 //        wxGetApp().update_saved_preset_from_current_preset();
+        m_plater->set_project_filename(filename);
         m_plater->reset_project_dirty_after_save();
+        if (m_project_tabs) m_project_tabs->saved(m_plater);
     }
     return ret;
 }
@@ -3094,6 +3109,11 @@ void MainFrame::init_menubar_as_editor()
             [this](){return m_plater != nullptr && can_save_as(); }, this);
 #endif
 
+        append_shortcut_item(fileMenu, Shortcut::SaveAllProjects, true, _L("Save All Projects"), wxEmptyString,
+            [this](wxCommandEvent&) { if (m_project_tabs) m_project_tabs->save_all(); });
+        append_shortcut_item(fileMenu, Shortcut::CloseProject, true, _L("Close Project"), wxEmptyString,
+            [this](wxCommandEvent&) { if (m_project_tabs) m_project_tabs->close_active(); });
+
         // BBS: publish
         fileMenu->AppendSeparator();
         auto publish_handler = [this](wxCommandEvent&) { publish_project(); };
@@ -3433,6 +3453,11 @@ void MainFrame::init_menubar_as_editor()
     wxMenu* viewMenu = nullptr;
     if (m_plater) {
         viewMenu = new wxMenu();
+        append_shortcut_item(viewMenu, Shortcut::NextProject, true, _L("Next Project"), wxEmptyString,
+            [this](wxCommandEvent&) { if (m_project_tabs) m_project_tabs->next(1); });
+        append_shortcut_item(viewMenu, Shortcut::PreviousProject, true, _L("Previous Project"), wxEmptyString,
+            [this](wxCommandEvent&) { if (m_project_tabs) m_project_tabs->next(-1); });
+        viewMenu->AppendSeparator();
         add_common_view_menu_items(viewMenu, std::bind(&MainFrame::can_change_view, this));
         viewMenu->AppendSeparator();
 
@@ -4485,6 +4510,29 @@ bool MainFrame::FileHistory::GetPublished(int index) const
     return index >= 0 && index < static_cast<int>(m_published_files.size()) && m_published_files[index];
 }
 
+namespace {
+boost::filesystem::path recent_preview_cache(const wxString& file)
+{
+    // The full path is checked inside the record as well, so a hash collision
+    // is a cache miss rather than another project's preview.
+    return boost::filesystem::path(data_dir()) / "cache" / "recent-project-previews" /
+        (std::to_string(std::hash<std::string>{}(into_u8(file))) + ".json");
+}
+
+void cache_recent_preview(const wxString& file, const std::string& thumbnail, bool published)
+{
+    const auto path = recent_preview_cache(file);
+    try {
+        boost::filesystem::create_directories(path.parent_path());
+        const auto encoded = wxBase64Encode(thumbnail.data(), thumbnail.size()).utf8_string();
+        const auto contents = nlohmann::json{{"version", 1}, {"source", into_u8(file)},
+            {"thumbnail", encoded}, {"published", published}}.dump();
+        save_string_file(path.string() + ".tmp", contents);
+        rename_file(path.string() + ".tmp", path.string());
+    } catch (const std::exception&) { /* Recent previews are optional. */ }
+}
+}
+
 void MainFrame::FileHistory::AddFileToHistory(const wxString &file)
 {
     if (this->m_fileMaxFiles == 0)
@@ -4493,6 +4541,7 @@ void MainFrame::FileHistory::AddFileToHistory(const wxString &file)
     if (m_load_called) {
         m_thumbnails.push_front(bbs_3mf_get_thumbnail(into_u8(file).c_str()));
         m_published_files.push_front(bbs_3mf_is_published(into_u8(file)));
+        cache_recent_preview(file, m_thumbnails.front(), m_published_files.front());
     } else {
         m_thumbnails.push_front("");
         m_published_files.push_front(false);
@@ -4515,15 +4564,25 @@ size_t MainFrame::FileHistory::FindFileInHistory(const wxString & file)
 
 void MainFrame::FileHistory::LoadThumbnails()
 {
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, GetCount()), [this](tbb::blocked_range<size_t> range) {
-        for (size_t i = range.begin(); i < range.end(); ++i) {
-            auto thumbnail = bbs_3mf_get_thumbnail(into_u8(GetHistoryFile(i)).c_str());
-            if (!thumbnail.empty()) {
-                m_thumbnails[i] = thumbnail;
-            }
-            m_published_files[i] = bbs_3mf_is_published(into_u8(GetHistoryFile(i)));
-        }
-    });
+    // Reopening recent source files here can block startup on an unavailable
+    // volume, cloud hydration or a file-access prompt. Load only our own cache;
+    // a successful project open/save refreshes it from the actual archive.
+    for (size_t i = 0; i < GetCount(); ++i) {
+        const auto file = GetHistoryFile(i);
+        const auto path = recent_preview_cache(file);
+        boost::system::error_code ec;
+        const auto size = boost::filesystem::file_size(path, ec);
+        if (ec || size > 1024 * 1024) continue;
+        try {
+            std::string contents;
+            load_string_file(path, contents);
+            const auto cached = nlohmann::json::parse(contents);
+            if (cached.value("version", 0) != 1 || cached.value("source", std::string()) != into_u8(file)) continue;
+            const auto thumbnail = wxBase64Decode(from_u8(cached.value("thumbnail", std::string())));
+            if (thumbnail.GetDataLen()) m_thumbnails[i].assign(static_cast<const char*>(thumbnail.GetData()), thumbnail.GetDataLen());
+            m_published_files[i] = cached.value("published", false);
+        } catch (const std::exception&) { /* Keep an empty preview on a cache miss. */ }
+    }
     m_load_called = true;
 }
 

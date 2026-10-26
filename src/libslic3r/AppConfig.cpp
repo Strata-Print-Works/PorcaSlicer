@@ -409,6 +409,8 @@ void AppConfig::set_defaults()
     // without the setting keeps Orca's shared setup until the user enables it.
     if (get("independent_plate_setups").empty())
         set_bool("independent_plate_setups", get("version").empty());
+    if (get("reopen_project_tabs").empty())
+        set_bool("reopen_project_tabs", false);
 
     if (get("drc_bits").empty())
         set("drc_bits", DRC_BITS_DEFAULT_STR);
