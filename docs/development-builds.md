@@ -4,11 +4,11 @@
 
 `Build all` runs on pushes to `porca`, pull requests targeting `porca`, and manual dispatch. It reuses the existing dependency caches and platform build scripts. GitHub-hosted runners build macOS arm64 and Intel bundles into a universal DMG, Windows x64 and arm64 installers/portable applications, and Linux x86_64 and aarch64 AppImages. The platform tests and Linux slicing checks run on those hosted machines; this does not lift the local Mac's network-testing restriction.
 
-Hosted Intel macOS compilation and universal package assembly use macOS 15 Intel runners; arm64 compilation and tests use macOS 26 Apple Silicon runners. Manual runs accept a `platform` selection (`all`, `linux`, `windows`, or `macos`) to investigate one platform without repeating the others. Releases require an `all` run with every package present.
+Hosted Intel macOS compilation and universal package assembly use macOS 15 Intel runners; arm64 compilation and tests use macOS 14 Apple Silicon runners. Manual runs accept a `platform` selection (`all`, `linux`, `windows`, or `macos`) to investigate one platform without repeating the others. Releases require an `all` run with every package present.
 
 For a macOS-only run, `macos-arch` can select `arm64` or `x86_64` independently. Such a run builds that architecture's intermediate app bundle; arm64 also runs its unit tests. Only the default `all` architecture selection assembles a universal DMG. A complete `platform=all` run always builds both macOS architectures.
 
-Manual runs can select a supported Apple Silicon host with `macos-arm-runner` (`macos-26`, `macos-15`, or `macos-14`) when investigating runner availability or SDK compatibility. The selected host runs both compilation and unit tests, and its dependency cache is separate. Push and pull-request builds use macOS 26.
+Manual runs can select a supported Apple Silicon host with `macos-arm-runner` (`macos-26`, `macos-15`, or `macos-14`) when investigating runner availability or SDK compatibility. The selected host runs both compilation and unit tests, and its dependency cache is separate. Push and pull-request builds use macOS 14.
 
 The macOS DMG contains `Porca.app` with bundle identifier `com.strataprintworks.porca`. Windows uses Porca's installer name, icon, install directory and uninstall registry identity. The internal executable names and Orca settings directory remain inherited. The legacy Flatpak and MSIX Store packages retain upstream identities and are excluded from Porca's build/release path.
 
