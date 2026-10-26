@@ -149,9 +149,9 @@ the *TEXT indices `0xe0e0e0` except INACTIVECAPTIONTEXT `0xaaaaaa` (GRAYTEXT is 
 palette do not give, and because Windows needs an app-level live toggle wx cannot do (see
 [wxMSW dark mode](#wxmsw-dark-mode-mswenabledarkmode-setappearance-wxdarkmodesettings)). `GUI_App::init_label_colours`
 still reads `wxSYS_COLOUR_WINDOWTEXT`/`wxSYS_COLOUR_WINDOW` for two light-mode values — on Windows with a dark system
-and Orca light those come from wx's dark palette. macOS: Orca's wx is patched to read NSColor components in sRGB
-instead of `NSCalibratedRGBColorSpace` (`deps/wxWidgets/0001-macos-use-srgb-colour-components.patch`, commit
-a7775296b0 "Fix macOS custom color accuracy"), so RGB read back from native colours matches the expected hex.
+and Orca light those come from wx's dark palette. macOS: the pinned wx fork reads NSColor components in sRGB
+instead of `NSCalibratedRGBColorSpace` (`src/osx/cocoa/colour.mm` at `v3.3.2`), so RGB read back from native
+colours matches the expected hex. No additional local colour patch is needed.
 
 **Pitfalls**
 

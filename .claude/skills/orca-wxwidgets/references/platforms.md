@@ -69,10 +69,8 @@ Contents: [Rules](#rules) · [The wx build Orca uses](#the-wx-build-orca-uses) �
   under the consuming compiler's prefix first and then the sibling one (`clang` ↔ `vc`), because cl
   and clang-cl share an ABI and either can consume either build
   (`build/cmake/wxWidgetsConfig.cmake.in:53-73`).
-- **The one local patch** is `deps/wxWidgets/0001-macos-use-srgb-colour-components.patch`, applied
-  only `if (APPLE)`. The `PATCH_COMMAND` first runs `git checkout -f -- src/osx/cocoa/colour.mm` and
-  then `git apply`, so the step can run again safely (a7775296b0). The patch makes the wxOSX
-  `wxColour` component getters (`wxNSColorRefData::Red/Green/Blue/Alpha` and `IsSolid`) convert the
+- **macOS colour conversion** is included in the pinned fork at `v3.3.2`; there is no local wx patch.
+  The wxOSX `wxColour` component getters (`wxNSColorRefData::Red/Green/Blue/Alpha` and `IsSolid`) convert the
   `NSColor` with `[NSColorSpace sRGBColorSpace]` instead of `NSCalibratedRGBColorSpace`, so colours
   read back on macOS match their sRGB values (custom-colour accuracy). Colour usage:
   `references/colours-dark-mode.md`.
@@ -315,7 +313,7 @@ Each bullet names the mechanism and the file that owns it.
 - **Controls:** the native `wxDataViewCtrl` (NSOutlineView) never calls `CreateEditorCtrl`, and the
   current item is always selected (`references/controls-dataview.md`). `wxClientDC` cannot draw
   (`references/painting-custom-widgets.md`).
-- **Colours:** Orca's sRGB `wxColour` patch. Dark mode follows the system only (`mac_dark_mode()`) →
+- **Colours:** the pinned wx fork's sRGB `wxColour` conversion. Dark mode follows the system only (`mac_dark_mode()`) →
   `references/colours-dark-mode.md`.
 - **WebView:** WKWebView. Handlers must be registered before `Create`, and adding the same script
   handler twice raises an uncatchable NSException → `references/webview-gl-aui-media.md`.
