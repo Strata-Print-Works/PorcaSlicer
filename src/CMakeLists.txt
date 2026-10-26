@@ -233,7 +233,9 @@ if (SLIC3R_GUI)
     if (APPLE)
         target_link_options(porca_bambu_worker PRIVATE "LINKER:-rpath,@executable_path/python/lib")
     elseif (UNIX)
-        set_target_properties(porca_bambu_worker PROPERTIES BUILD_RPATH "$ORIGIN/python/lib;$ORIGIN/../lib/python/lib"
+        # The isolated test bundle places FFmpeg beside this helper, just as it
+        # does for slic3rutils_tests. The deps install path is absent there.
+        set_target_properties(porca_bambu_worker PROPERTIES BUILD_RPATH "$ORIGIN;$ORIGIN/python/lib;$ORIGIN/../lib/python/lib"
             INSTALL_RPATH "$ORIGIN/../libpython/lib")
     endif ()
     # CMP0112 is set NEW at the top of this file when available.
