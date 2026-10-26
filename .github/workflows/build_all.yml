@@ -82,6 +82,14 @@ on:
           - all
           - arm64
           - x86_64
+      macos-arm-runner:
+        description: 'Hosted macOS image for Apple Silicon'
+        type: choice
+        default: macos-26
+        options:
+          - macos-26
+          - macos-15
+          - macos-14
 
 permissions:
   contents: read
@@ -172,7 +180,7 @@ jobs:
     if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos') }}
     uses: ./.github/workflows/build_check_cache.yml
     with:
-      os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || (matrix.arch == 'x86_64' && 'macos-15-intel' || 'macos-26') }}
+      os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || (matrix.arch == 'x86_64' && 'macos-15-intel' || (inputs.macos-arm-runner == 'macos-14' && 'macos-14' || inputs.macos-arm-runner == 'macos-15' && 'macos-15' || 'macos-26')) }}
       arch: ${{ matrix.arch }}
       build-deps-only: ${{ inputs.build-deps-only || false }}
       force-build: ${{ github.event_name == 'schedule' }}
@@ -227,7 +235,7 @@ jobs:
     if: ${{ !cancelled() && success() && !(inputs.platform == 'macos' && inputs.macos-arch == 'x86_64') }}
     uses: ./.github/workflows/unit_tests.yml
     with:
-      os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || 'macos-26' }}
+      os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || (inputs.macos-arm-runner == 'macos-14' && 'macos-14' || inputs.macos-arm-runner == 'macos-15' && 'macos-15' || 'macos-26') }}
       artifact: ${{ github.sha }}-tests-macos-arm64
       test-dir: build/arm64/tests
   # Slice a two-colour cube through every shipped printer, and through every
