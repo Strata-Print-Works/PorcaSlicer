@@ -9,7 +9,7 @@ runs:
       run: |
         # Avoid the slow Azure mirror on hosted x64 images. Keep the signed
         # Ubuntu repositories and their existing suites/components intact.
-        for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
           if [ -f "$sources" ]; then
             sudo sed -i 's|://azure\.archive\.ubuntu\.com/ubuntu|://archive.ubuntu.com/ubuntu|g' "$sources"
           fi
