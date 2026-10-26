@@ -6,6 +6,8 @@
 
 Hosted Intel macOS compilation and universal package assembly use macOS 15 Intel runners; arm64 compilation and tests use macOS 26 Apple Silicon runners. Manual runs accept a `platform` selection (`all`, `linux`, `windows`, or `macos`) to investigate one platform without repeating the others. Releases require an `all` run with every package present.
 
+For a macOS-only run, `macos-arch` can select `arm64` or `x86_64` independently. Such a run builds that architecture's intermediate app bundle; arm64 also runs its unit tests. Only the default `all` architecture selection assembles a universal DMG. A complete `platform=all` run always builds both macOS architectures.
+
 The macOS DMG contains `Porca.app` with bundle identifier `com.strataprintworks.porca`. Windows uses Porca's installer name, icon, install directory and uninstall registry identity. The internal executable names and Orca settings directory remain inherited. The legacy Flatpak and MSIX Store packages retain upstream identities and are excluded from Porca's build/release path.
 
 Start a build with:

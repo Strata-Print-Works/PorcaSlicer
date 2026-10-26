@@ -72,6 +72,14 @@ on:
           - linux
           - windows
           - macos
+      macos-arch:
+        description: 'Architecture for macOS-only checks'
+        type: choice
+        default: all
+        options:
+          - all
+          - arm64
+          - x86_64
 
 permissions:
   contents: read
@@ -157,9 +165,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - arm64
-          - x86_64
+        arch: ${{ fromJSON(inputs.platform == 'macos' && inputs.macos-arch == 'arm64' && '["arm64"]' || inputs.platform == 'macos' && inputs.macos-arch == 'x86_64' && '["x86_64"]' || '["arm64","x86_64"]') }}
     # Don't run scheduled builds on forks:
     if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') && (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos') }}
     uses: ./.github/workflows/build_check_cache.yml
@@ -172,7 +178,7 @@ jobs:
   build_macos_universal:
     name: Build macOS Universal
     needs: build_macos_arch
-    if: ${{ !cancelled() && needs.build_macos_arch.result == 'success' && !inputs.build-deps-only && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
+    if: ${{ !cancelled() && needs.build_macos_arch.result == 'success' && (inputs.platform != 'macos' || inputs.macos-arch == 'all') && !inputs.build-deps-only && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
     uses: ./.github/workflows/build_orca.yml
     with:
       os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || 'macos-15-intel' }}
@@ -216,7 +222,7 @@ jobs:
   unit_tests_macos_arm64:
     name: macOS arm64
     needs: build_macos_arch
-    if: ${{ !cancelled() && success() }}
+    if: ${{ !cancelled() && success() && !(inputs.platform == 'macos' && inputs.macos-arch == 'x86_64') }}
     uses: ./.github/workflows/unit_tests.yml
     with:
       os: ${{ vars.SELF_HOSTED && 'orca-macos-arm64' || 'macos-26' }}
