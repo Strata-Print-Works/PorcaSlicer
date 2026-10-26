@@ -4,6 +4,8 @@
 
 `Build all` runs on pushes to `porca`, pull requests targeting `porca`, and manual dispatch. It reuses the existing dependency caches and platform build scripts. GitHub-hosted runners build macOS arm64 and Intel bundles into a universal DMG, Windows x64 and arm64 installers/portable applications, and Linux x86_64 and aarch64 AppImages. The platform tests and Linux slicing checks run on those hosted machines; this does not lift the local Mac's network-testing restriction.
 
+Hosted Intel macOS compilation and universal package assembly use Intel runners; arm64 compilation and tests use Apple Silicon runners. Manual runs accept a `platform` selection (`all`, `linux`, `windows`, or `macos`) to investigate one platform without repeating the others. Releases require an `all` run with every package present.
+
 The macOS DMG contains `Porca.app` with bundle identifier `com.strataprintworks.porca`. Windows uses Porca's installer name, icon, install directory and uninstall registry identity. The internal executable names and Orca settings directory remain inherited. The legacy Flatpak and MSIX Store packages retain upstream identities and are excluded from Porca's build/release path.
 
 Start a build with:
