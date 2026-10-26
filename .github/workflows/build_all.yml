@@ -21,6 +21,7 @@ on:
      - 'scripts/test_build_win.ps1'
      - 'scripts/prepare_porca_release.py'
      - 'scripts/test_prepare_porca_release.py'
+     - 'scripts/test_appimage_packaging.py'
      - 'build_release_macos.sh'
      - 'scripts/build_preset_cache.*'
      - 'scripts/flatpak/**'
@@ -45,6 +46,7 @@ on:
      - 'scripts/test_build_win.ps1'
      - 'scripts/prepare_porca_release.py'
      - 'scripts/test_prepare_porca_release.py'
+     - 'scripts/test_appimage_packaging.py'
      - 'build_release_macos.sh'
      - 'scripts/build_preset_cache.*'
      - 'scripts/flatpak/**'
@@ -93,6 +95,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check release assembly
         run: python3 -m unittest discover -s scripts -p test_prepare_porca_release.py
+      - name: Check AppImage packaging with offline fakes
+        run: python3 -m unittest discover -s scripts -p test_appimage_packaging.py
 
   # build_win.bat ships a test suite. Run it before the Windows builds.
   check_build_script:

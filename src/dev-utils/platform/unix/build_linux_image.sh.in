@@ -10,7 +10,7 @@ export NCORES=$(nproc --all)
 CONFIG=Release
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="@CMAKE_SOURCE_DIR@"
 POLICY_FILE="${REPO_ROOT}/scripts/appimage_lib_policy.sh"
 CHECK_SCRIPT="${REPO_ROOT}/scripts/check_appimage_libs.sh"
 
@@ -460,6 +460,7 @@ echo -n "Creating Appimage for distribution..."
         rm -fR package_appimage
     else
         popd > /dev/null
+        exit 1
     fi
 # } &> $ROOT/Build.log # Capture all command output
 echo "done"

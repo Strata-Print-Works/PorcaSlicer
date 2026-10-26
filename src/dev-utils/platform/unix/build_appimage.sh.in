@@ -1,16 +1,29 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
 APPIMAGETOOLURL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$(uname -m).AppImage"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+REPO_ROOT="@CMAKE_SOURCE_DIR@"
+APPIMAGETOOL="${SCRIPT_DIR}/appimagetool.AppImage"
+RUNTIME="${SCRIPT_DIR}/runtime-$(uname -m)"
 
 
 APP_IMAGE="@SLIC3R_APP_KEY@_Linux_V@SoftFever_VERSION@.AppImage"
 
-wget ${APPIMAGETOOLURL} -O ../appimagetool.AppImage
-chmod +x ../appimagetool.AppImage
+download() {
+  local url="$1" destination="$2"
+  if [ -s "$destination" ]; then return; fi
+  curl --fail --location --retry 5 --retry-all-errors --retry-delay 5 \
+    --connect-timeout 30 --max-time 600 --output "$destination.partial" "$url"
+  mv "$destination.partial" "$destination"
+}
+
+download "$APPIMAGETOOLURL" "$APPIMAGETOOL"
+download "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-$(uname -m)" "$RUNTIME"
+chmod +x "$APPIMAGETOOL"
 
 if [ -f /.dockerenv ] ; then # Only run if inside of a Docker Container
-sed '0,/AI\x02/{s|AI\x02|\x00\x00\x00|}' -i  ../appimagetool.AppImage
+sed '0,/AI\x02/{s|AI\x02|\x00\x00\x00|}' -i "$APPIMAGETOOL"
 fi
 
 mv @SLIC3R_APP_CMD@ AppRun
@@ -44,10 +57,10 @@ cp "${REPO_ROOT}/scripts/flatpak/com.orcaslicer.@SLIC3R_APP_KEY@.metainfo.xml" \
 export ARCH=$(uname -m)
 
 if [ -f /.dockerenv ] ; then # Only run if inside of a Docker Container
-  ../appimagetool.AppImage --appimage-extract-and-run . $([ -n "${container}" ] && echo '--appimage-extract-and-run')
+  "$APPIMAGETOOL" --appimage-extract-and-run --runtime-file "$RUNTIME" . $([ -n "${container:-}" ] && echo '--appimage-extract-and-run')
 else
-  ../appimagetool.AppImage . $([ -n "${container}" ] && echo '--appimage-extract-and-run')
+  "$APPIMAGETOOL" --runtime-file "$RUNTIME" . $([ -n "${container:-}" ] && echo '--appimage-extract-and-run')
 fi
 
-mv @SLIC3R_APP_KEY@-$(uname -m).AppImage ${APP_IMAGE}
-chmod +x ${APP_IMAGE}
+mv "@SLIC3R_APP_KEY@-$(uname -m).AppImage" "${APP_IMAGE}"
+chmod +x "${APP_IMAGE}"

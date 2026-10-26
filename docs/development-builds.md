@@ -25,10 +25,11 @@ The workflow accepts only successful `Build all` push/manual runs from this repo
 
 Developer previews use ad-hoc macOS signing rather than Developer ID signing/notarization, and Windows packages are unsigned. Apple Developer ID/notarization and Windows certificate signing are not configured. A green build verifies compilation and its CI checks, not native interaction, physical printer behavior or resolution of reported application crashes.
 
-Release assembly checks run without network access:
+Release assembly and Linux packaging checks run without network access; packaging uses fake download and AppImage tools:
 
 ```sh
 python3 -m unittest discover -s scripts -p test_prepare_porca_release.py
+python3 -m unittest discover -s scripts -p test_appimage_packaging.py
 ```
 
 ## Local Release builds
