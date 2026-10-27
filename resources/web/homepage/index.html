@@ -21,7 +21,7 @@
 	
 <script type="text/javascript" src="js/home.js"></script>
 </head>
-<body class="ZScrol" onLoad="OnInit()">
+<body class="thin-scroll" onLoad="OnInit()">
 <div id="LeftBoard">
 	<div id="LoginArea">
 
@@ -81,7 +81,7 @@
 </div>
 
 <div id="RightBoard">
-<div id="ContentBoard" class="ZScrol" board="recent">
+<div id="ContentBoard" class="thin-scroll" board="recent">
     <div style="height: 14px;"></div>	
 	<div id="MenuArea">
 <!--		<div class="MenuItem" onClick="OnClickModelDepot()">
@@ -107,79 +107,29 @@
 		    <div id="RecentTitle" class="Content-Title TextS1" data-i18n="recently_opened">Recently opened</div>
 			<button type="button" id="RecentClearAllBtn" class="ButtonStyleRegular ButtonTypeWindow" onClick="OnDeleteAllRecentFiles()" data-i18n="clear_all">Clear all</button>
 		</div>
-		<div id="FileList">
-<!--		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
+		<div id="FileList" class="thin-scroll">
+			<!-- EXAMPLE GENERATED BLOCK
+			<div class="FileItem" fpath="sPath">
+				<a class="FileTip" title="sPath"></a>
+				<div class="FileImg" >
+					<img src="sImg" onerror="this.onerror=null;this.src=\'img/d.png\';" alt="No Image"/>
+					sLogoBadge
+				</div>
+				<div class="FileNamePack">
+					<div class="FileName TextS1">
+						orca-model.3mf
+					</div>
+				</div>
+				<div class="FileDate">
+					2026/05/27 09:22
+				</div>
+				<div class="FileActions">
+					<div class="FileActionsReveal ButtonStyleRegular ButtonTypeWindow" fpath="btnPath">Show in folder</div>
+					<div class="FileActionsRemove ButtonStyleAlert ButtonTypeWindow" fpath="sPath">
+					<div class="icon16"/></div>
+				</div>
 			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>
-		    <div class="FileItem" onClick="OnOpenRecentFile('aaaa')" fpath='d:\model\11.3mf'>
-				<a class="FileTip" title="d:\model\11.3mf"></a>
-				<div class="FileImg"><img src="img/d.png"/></div>
-				<div class="FileName TextS1">abcd12334abcd12334abcd12334.3mf</div>
-				<div class="FileDate">2021/12/27 09:22</div>
-			</div>	-->		
+			-->	
 		</div>
 	</div>
 	
@@ -195,8 +145,6 @@
 			<span class="CT_Text" data-i18n="open_containing_folder">Open Containing Folder</span>
 		</button>
     </div>
-	
-	
 </div>
 
 </div>	

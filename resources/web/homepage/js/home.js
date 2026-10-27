@@ -53,12 +53,30 @@ function Set_RecentFile_MouseRightBtn_Event()
 		return false;
 	});	
 	
+	// ORCA file actions
+	$(".FileActions").mousedown(function(e){		
+		return false; // Block events on empty area & parent
+	});
+
+	$(".FileActionsReveal").mousedown(function(e){		
+		RightBtnFilePath=$(this).attr('fpath');
+		if(e.which == 1 && RightBtnFilePath != "")
+			OnExploreRecentFile();
+		return false; // Block events from parent
+	});
+	$(".FileActionsRemove").mousedown(function(e){		
+		RightBtnFilePath=$(this).attr('fpath');
+		if(e.which == 1)
+			OnDeleteRecentFile();
+		return false; // Block events from parent
+	});
+
     $(document).mousemove( function(e){
 		MousePosX=e.pageX;
 		MousePosY=e.pageY;
 		
-		let ContextMenuWidth=$('#recnet_context_menu').width();
-		let ContextMenuHeight=$('#recnet_context_menu').height();
+		//let ContextMenuWidth=$('#recnet_context_menu').width();
+		//let ContextMenuHeight=$('#recnet_context_menu').height();
 	
 		let DocumentWidth=$(document).width();
 		let DocumentHeight=$(document).height();
@@ -73,13 +91,13 @@ function Set_RecentFile_MouseRightBtn_Event()
 		var e = e || window.event;
         var elem = e.target || e.srcElement;
         while (elem) {
-			if (elem.id && elem.id == 'recnet_context_menu') {
-                    return;
-			}
+			//if (elem.id && elem.id == 'recnet_context_menu') {
+            //        return;
+			//}
 			elem = elem.parentNode;
 		}		
 		
-		$("#recnet_context_menu").hide();
+		//$("#recnet_context_menu").hide();
 	} );
 
 	
@@ -140,8 +158,40 @@ function HandleStudio( pVal )
   }
 }
 
+/*---- OrcaCloud opens as a native pane beside this page, so the shell only switches its
+      own cloud-mode state and asks the app to show or hide that pane (WebViewPanel::set_cloud_mode). ----*/
+var m_CloudMode=false;
+
+function SetCloudMode( bOn )
+{
+	if( m_CloudMode==bOn )
+		return;
+
+	m_CloudMode=bOn;
+	$("body").toggleClass("cloud-mode", bOn);
+
+	if( bOn )
+	{
+		$(".BtnItem").removeClass("BtnItemSelected");
+		$(".BtnItem[menu='orca_cloud']").addClass("BtnItemSelected");
+	}
+}
+
+function GotoCloud()
+{
+	SetCloudMode(true);
+	SendSimpleCommand("homepage_open_cloud");
+}
+
 function GotoMenu( strMenu )
 {
+	/*---- Any board in the right region means leaving the cloud pane. ----*/
+	if( m_CloudMode )
+	{
+		SetCloudMode(false);
+		SendSimpleCommand("homepage_close_cloud");
+	}
+
 	let MenuList=$(".BtnItem");
 	let nAll=MenuList.length;
 	
@@ -309,7 +359,7 @@ function ShowRecentFileList(pList)
         }).appendTo(preview);
         const name = $("<div>", { "class": "FileNamePack" }).appendTo(item);
         if (file.published == "1") {
-            $("<span>", { "class": "FilePublishedBadge", "text": "PUB" }).appendTo(name);
+            $("<span>", { "class": "FilePublishedBadge", "text": T("published_badge", "PUB") }).appendTo(name);
             $("<img>", { "class": "FileLogoBadge", "src": "../../images/porca_icon.svg", "alt": "" }).appendTo(preview);
         }
         $("<div>", { "class": "FileName TextS1", "text": file.project_name }).appendTo(name);
@@ -319,7 +369,6 @@ function ShowRecentFileList(pList)
     Set_RecentFile_MouseRightBtn_Event();
     UpdateRecentClearBtnDisplay();
 }
-
 function ShowRecnetFileContextMenu()
 {
 	$("#recnet_context_menu").offset({top: 10000, left:-10000});
@@ -404,7 +453,7 @@ function OnOpenRecentFile( strPath )
 function OnDeleteRecentFile( )
 {
 	//Clear in UI
-	$("#recnet_context_menu").hide();
+	//$("#recnet_context_menu").hide();
 	
 	let AllFile=$(".FileItem");
 	let nFile=AllFile.length;
@@ -462,7 +511,7 @@ function OnExploreRecentFile( )
 	
 	SendWXMessage( JSON.stringify(tSend) );	
 	
-	$("#recnet_context_menu").hide();
+	//$("#recnet_context_menu").hide();
 }
 
 // --- Cloud providers ---

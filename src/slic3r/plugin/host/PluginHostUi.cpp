@@ -6,8 +6,8 @@
 #include <pybind11/cast.h>
 #include "slic3r/plugin/PluginAuditManager.hpp"
 #include "slic3r/plugin/PythonInterpreter.hpp" // PythonGILState
-#include "slic3r/plugin/PluginFsUtils.hpp"   // json_to_py / py_to_json
-#include "slic3r/plugin/PluginUiThread.hpp"  // run_on_ui_blocking
+#include "slic3r/plugin/PluginJsonPy.hpp"
+#include "slic3r/plugin/PluginUiThread.hpp"
 
 #include <libslic3r/PresetBundle.hpp>
 
@@ -42,6 +42,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <future>
 #include <memory>
@@ -759,6 +760,11 @@ void plater_notification(GUI::NotificationManager::NotificationLevel notificatio
 
 } // namespace
 
+void PluginHostUi::run_on_ui_thread(std::function<void()> fn)
+{
+    run_on_ui_blocking(std::move(fn));
+}
+
 void PluginHostUi::RegisterBindings(pybind11::module_& host)
 {
     auto ui = host.def_submodule(
@@ -767,7 +773,8 @@ void PluginHostUi::RegisterBindings(pybind11::module_& host)
         "thread (marshaled from the plugin thread). See the plugin docs for the window.orca bridge. "
         "Do not call these from a slicing pipeline hook (SlicingPipeline capability): that hook runs "
         "on the slicing worker thread, which the UI thread can itself be blocked waiting on, so a "
-        "marshaled UI call from there can deadlock the application.");
+        "marshaled UI call from there can deadlock the application. Once the application is closing, a "
+        "call from a background thread raises RuntimeError instead of waiting for the UI thread.");
 
     ui.def("message", &ui_message, py::arg("text"), py::arg("title") = "OrcaSlicer", py::arg("buttons") = "ok",
            py::arg("icon") = "info",

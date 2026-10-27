@@ -72,7 +72,7 @@ enum ModelInstanceEPrintVolumeState : unsigned char;
 using ModelObjectPtrs = std::vector<ModelObject*>;
 
 struct ObjectFilamentInfo {
-    ModelObject* object;
+    ModelObject* object { nullptr };
     std::map<int, int> manual_filaments; //manual mode: filament id -> extruder id can not be printed
 
     std::vector<int> auto_filaments; //auto mode: filaments in all extruder's outside area
@@ -214,6 +214,8 @@ public:
 	    bool                visible : 1;
 	    // Whether or not this volume is active for rendering
 	    bool                is_active : 1;
+	    // Whether or not is_active was cleared because the other plates are hidden
+	    bool                on_hidden_plate : 1;
 	    // Whether or not to use this volume when applying zoom_to_volumes()
 	    bool                zoom_to_volumes : 1;
 	    // Wheter or not this volume is enabled for outside print volume detection in shader.
@@ -372,7 +374,7 @@ public:
     virtual void render_with_outline(const GUI::Size& cnv_size);
 
     //BBS: add simple render function for thumbnail
-    void simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_objects, std::vector<ColorRGBA>& extruder_colors, bool ban_light =false);
+    void simple_render(GLShaderProgram* shader, ModelObjectPtrs& model_objects, std::vector<ColorRGBA>& extruder_colors, bool ban_light =false, bool ban_color_volume = false);
 
     void                set_bounding_boxes_as_dirty() {
         m_transformed_bounding_box.reset();
@@ -566,7 +568,8 @@ public:
     // Explicit scene context also permits collision validation without a window or GL context.
     bool check_outside_state(const BuildVolume& build_volume, const Model& model, GUI::PartPlateList& plates,
                              const DynamicPrintConfig& project_config, PrinterTechnology technology, ModelInstanceEPrintVolumeState* out_state,
-                             ObjectFilamentResults* object_results) const;
+                             ObjectFilamentResults* object_results, const DynamicPrintConfig* printer_config = nullptr,
+                             bool supports_filament_grouping = false, size_t filament_count = 0) const;
     void reset_outside_state();
     bool check_wipe_tower_outside_state(const Slic3r::BuildVolume &build_volume, int plate_id) const;
 

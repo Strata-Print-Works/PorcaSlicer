@@ -98,6 +98,7 @@ ModelStamp stamp_model(const Model& model)
     for (const ModelObject* object : model.objects) {
         key(object->id().id);
         key(object->printable);
+        key(object->auto_drop);
         key(config_time(object->config));
         key(object->layer_height_profile.timestamp());
         key(object->instances.size());
@@ -111,7 +112,6 @@ ModelStamp stamp_model(const Model& model)
         for (const ModelInstance* instance : object->instances) {
             key(instance->id().id);
             key(instance->printable);
-            key(instance->auto_drop);
             place(instance->get_transformation());
             stamp.production_ids.push_back(instance->production_id);
         }

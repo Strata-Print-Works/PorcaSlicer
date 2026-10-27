@@ -3,6 +3,7 @@
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "GUI.hpp"
 #include "GUI_App.hpp"
+#include "GUI_Utils.hpp"
 #include "I18N.hpp"
 #include "Typography.hpp"
 #include "format.hpp"

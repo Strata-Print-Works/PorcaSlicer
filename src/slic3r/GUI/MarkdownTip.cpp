@@ -200,7 +200,7 @@ bool MarkdownTip::PointerInPlay() const
     return wxRect(left, span.GetTop(), right - left + 1, span.GetHeight()).Inflate(0, TRAVEL_SLACK).Contains(pointer);
 }
 
-bool MarkdownTip::ShowTip(wxRect const &anchor, std::string const &tip, std::string const &tooltip)
+bool MarkdownTip::ShowTip(wxRect const &anchor, std::string const &tip, std::string const &tooltip, const std::string& availability)
 {
     if (tip.empty()) {
         if (_tipView->GetParent() != this)
@@ -221,9 +221,11 @@ bool MarkdownTip::ShowTip(wxRect const &anchor, std::string const &tip, std::str
         }
         return false;
     }
-    bool tipChanged = _lastTip != tip;
+    bool tipChanged = _lastTip != tip || _lastTooltip != tooltip || _lastAvailability != availability;
     if (tipChanged) {
         auto content = LoadTip(tip, tooltip);
+        if (!availability.empty())
+            content = availability + "\n\n---\n\n" + content;
         if (content.empty()) {
             _hide = true;
             this->Hide();
@@ -238,6 +240,8 @@ bool MarkdownTip::ShowTip(wxRect const &anchor, std::string const &tip, std::str
             RunScript(script);
         }
         _lastTip = tip;
+        _lastTooltip = tooltip;
+        _lastAvailability = availability;
         if (_tipView->GetParent() == this)
             this->Hide();
     }
@@ -424,12 +428,12 @@ MarkdownTip* MarkdownTip::markdownTip(bool create)
     return markdownTip;
 }
 
-bool MarkdownTip::ShowTip(std::string const& tip, std::string const & tooltip, wxRect const &anchor)
+bool MarkdownTip::ShowTip(std::string const& tip, std::string const & tooltip, wxRect const &anchor, const std::string& availability)
 {
     // Upstream returns false here under NDEBUG, so this popover has never been
     // reachable in a release build — which is why the tooltip content it reads
     // was left unwritten. The content exists now, so let it through.
-    return markdownTip()->ShowTip(anchor, tip, tooltip);
+    return markdownTip()->ShowTip(anchor, tip, tooltip, availability);
 }
 
 void MarkdownTip::ExitTip()
