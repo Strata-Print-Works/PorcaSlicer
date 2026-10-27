@@ -68,5 +68,9 @@ Porca is a reskin of Orca Slicer: the same layout, controls and workflow, rebuil
 
 ## Logo
 
-- The Logos group holds the mark, both lockups, the app icon and the one-color mark, cropped from the brand sheet as PNG. Use `porca-lockup-charcoal.png` on dark grounds and `porca-lockup-cream.png` on light ones; `porca-app-icon.png` for the dock, the top bar and the about box.
-- Never redraw, recolor, stretch or outline the pig. The mark's stripes echo printed layers; don't reuse them as a decorative pattern next to the logo.
+- The supplied pig is preserved at `resources/branding/porca-pig-source.svg`. Use `resources/images/porca_mark.svg` for the standalone mark and `porca_icon.svg` for the app icon. Do not redraw, stretch or outline the pig.
+- Use `porca_logo_dark.svg` on charcoal and `porca_logo_light.svg` on cream or white. The logo uses only the name Porca, set in outlined Nunito 900. All runtime logos are vectors with no font dependency.
+- Preserve the supplied mark's coral `#FE7674`. The established UI action coral remains `#FF7B7B`; semantic status and filament colors keep their own meanings.
+- The layer stripes belong to the mark. Do not repeat them as a decorative background pattern.
+- `porca_splash_dark.svg` and `porca_splash_light.svg` provide the 640 × 320 startup composition. Keep the footer below y=240 free for native version, loading status and progress.
+- Regenerate SVG compositions with `python3 scripts/generate_brand_assets.py`. The current overview is `resources/branding/porca-brand-kit.svg`; `brand-board.svg` is historical source material.

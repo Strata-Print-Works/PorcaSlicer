@@ -1,10 +1,13 @@
-# Porca Slicer
+# Porca
 
-Porca is a desktop slicer for preparing work across multiple printers in one shared workspace. Each plate is an editable job with its own printer setup, materials, print settings, and slice result. Beds stay at their physical scale; moving a plate keeps its models in place on that bed.
+Porca is a multi-printer desktop slicer based on OrcaSlicer. Prepare work across multiple printers in one shared workspace, with each plate keeping its own printer setup, materials, print settings, and slice result. Beds stay at their physical scale; moving a plate keeps its models in place on that bed.
 
 The project develops the existing C++/wxWidgets application and retains its mature slicing and printer tools. It is a development fork, and its builds and release notes must be distinguished from upstream releases.
 
-![Porca icon](resources/images/Porca_256px.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="resources/images/porca_logo_dark.svg">
+  <img src="resources/images/porca_logo_light.svg" alt="Porca" width="440">
+</picture>
 
 ![A large project spread across named print beds in Porca's shared workspace](docs/screenshots/multi-plate-workspace.jpg)
 

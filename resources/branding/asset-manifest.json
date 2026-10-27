@@ -1,83 +1,28 @@
 {
-  "source": "brand-board.svg",
-  "sha256": "0ef3268297617077846d944799656cd32f54643f236845bd85b3def60f73d3cf",
-  "source_path_indices": {
-    "logo": [
-      111,
-      112,
-      113,
-      114,
-      115,
-      116,
-      117,
-      118,
-      119,
-      127,
-      128,
-      131,
-      132,
-      133,
-      134,
-      135,
-      136,
-      137,
-      138,
-      144,
-      184,
-      185,
-      189,
-      190,
-      191,
-      192,
-      198,
-      199,
-      212,
-      213,
-      214,
-      215,
-      218,
-      219,
-      220,
-      223,
-      231,
-      233,
-      242,
-      245,
-      246
-    ],
-    "icon": [
-      44,
-      45,
-      46,
-      47,
-      48,
-      49,
-      50,
-      51,
-      52,
-      53,
-      54,
-      55
-    ],
-    "pig": [
-      111,
-      112,
-      113,
-      114,
-      115,
-      116,
-      117,
-      118,
-      119,
-      137,
-      138,
-      144
-    ]
+  "source": "porca-pig-source.svg",
+  "sources": {
+    "porca-pig-source.svg": "7643774af52f7680c24f322098558a48184b5f32ce099440a36057ca69beeaa6",
+    "porca-wordmark.svg": "b2329a4e93a7a6a8e8b5c3f0afe658314dd7c4c7faa9d4daeadaeb386fbbd67e"
+  },
+  "source_note": "User-supplied pig artwork, preserved unchanged. Earlier brand-board.svg retained as historical provenance.",
+  "lettering": {
+    "wordmark": "Nunito 900",
+    "format": "outlined paths",
+    "licenses": "../design-system/fonts/*-OFL.txt"
   },
   "palette": {
-    "coral": "#FF7B7B",
+    "mark_coral": "#FE7674",
+    "ui_coral": "#FF7B7B",
     "charcoal": "#1E1E1E",
     "cream": "#FAF7F2"
   },
-  "derived_assets": "../images/porca_*.svg"
+  "generator": "../../scripts/generate_brand_assets.py",
+  "derived_assets": "../images/porca_{mark,icon,logo_*,splash_*}.svg",
+  "splash": {
+    "size": [
+      640,
+      320
+    ],
+    "native_footer": "Version, loading status and progress are drawn by SplashScreen below y=240."
+  }
 }

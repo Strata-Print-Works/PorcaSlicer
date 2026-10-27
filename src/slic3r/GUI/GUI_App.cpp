@@ -87,6 +87,7 @@
 #include <vector>
 #include <sstream>
 #include <wx/dcclient.h>
+#include <wx/control.h>
 #include <wx/chartype.h>
 #include <utility>
 #include <wx/app.h>
@@ -420,7 +421,7 @@ public:
         // is shown. The previous 1500 ms auto-timeout closed the splash long
         // before init finished, leaving the user staring at a frozen blank
         // screen during the slow load_presets / new MainFrame phases.
-        : wxSplashScreen(wxBitmap(FromDIP(wxSize(480,480),nullptr)), wxSPLASH_CENTRE_ON_SCREEN, 0, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        : wxSplashScreen(wxBitmap(FromDIP(wxSize(640,320),nullptr)), wxSPLASH_CENTRE_ON_SCREEN, 0, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
 #ifdef __APPLE__
             wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP
 #else
@@ -445,17 +446,18 @@ public:
         this->SetPosition(pos);
         this->CenterOnScreen();
 
-        scale_font(m_font_version, 1.65f); // only scale this one since it hasnt a preloaded font like Label::Body_24;
-
-        m_bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF"));
-        m_fg_color = StateColor::darkModeColorFor(wxColour("#6B6A6A"));
-        m_progress_bg_color = StateColor::darkModeColorFor(wxColour("#DFDFDF"));
-        m_progress_fg_color = StateColor::darkModeColorFor(wxColour("#009688"));
-        m_progress_h = FromDIP(6);
-        bool dark_mode = m_fg_color != wxColour("#6B6A6A");
-        wxSize sz  = m_window->GetClientSize();
+        const bool dark_mode = GUI_App::dark_mode();
+        m_bg_color = wxColour(dark_mode ? Branding::charcoal : Branding::cream);
+        m_fg_color = wxColour(dark_mode ? "#B8B1A8" : "#6C655D");
+        m_action_color = wxColour(dark_mode ? Branding::cream : Branding::charcoal);
+        m_progress_bg_color = wxColour(dark_mode ? "#403D39" : "#DED8CF");
+        m_progress_fg_color = wxColour("#FE7674");
+        m_progress_h = FromDIP(4);
+        const wxSize sz = m_window->GetClientSize();
         BitmapCache bmp_cache;
-        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "porca_splash_dark" : "porca_splash_light", sz.GetWidth(), sz.GetHeight());
+        if (const auto* bitmap = bmp_cache.load_svg(dark_mode ? "porca_splash_dark" : "porca_splash_light",
+                                                   sz.GetWidth(), sz.GetHeight()))
+            m_logo_bmp = *bitmap;
 
         m_window->Bind(wxEVT_PAINT, &SplashScreen::OnPaint, this);
         m_window->Refresh();
@@ -472,21 +474,21 @@ public:
         if (m_logo_bmp.IsOk())
             dc.DrawBitmap(m_logo_bmp, 0, 0, true);
 
-        wxRect rc = wxRect(0, 0, c_sz.GetWidth(), 0);
+        // The SVG owns the identity; live startup state occupies its quiet footer.
+        const int inset = FromDIP(48);
+        wxRect rc(inset, FromDIP(252), std::max(0, c_sz.GetWidth() - 2 * inset), 0);
         dc.SetTextForeground(m_fg_color);
-
         dc.SetFont(m_font_version);
-        rc.y      = c_sz.GetHeight() * 0.72;
         rc.height = dc.GetTextExtent(m_text_version).GetHeight();
-        dc.DrawLabel(m_text_version, rc, wxALIGN_CENTER);
+        dc.DrawLabel(wxControl::Ellipsize(m_text_version, dc, wxELLIPSIZE_END, rc.width), rc, wxALIGN_LEFT);
 
+        dc.SetTextForeground(m_action_color);
         dc.SetFont(m_font_action);
-        rc.y      = c_sz.GetHeight() * 0.85;
+        rc.y = FromDIP(276);
         rc.height = dc.GetTextExtent(m_text_action).GetHeight();
-        dc.DrawLabel(m_text_action, rc, wxALIGN_CENTER);
+        dc.DrawLabel(wxControl::Ellipsize(m_text_action, dc, wxELLIPSIZE_END, rc.width), rc, wxALIGN_LEFT);
 
-        const wxRect progress_rc(0, c_sz.GetHeight() - m_progress_h, c_sz.GetWidth(), m_progress_h);
-                
+        const wxRect progress_rc(inset, c_sz.GetHeight() - FromDIP(20), rc.width, m_progress_h);
         dc.SetPen(*wxTRANSPARENT_PEN);
         dc.SetBrush(wxBrush(m_progress_bg_color));
         dc.DrawRectangle(progress_rc);
@@ -494,8 +496,9 @@ public:
         const int fill_width = progress_rc.GetWidth() * m_progress * 0.01;
         if (fill_width > 0) {
             dc.SetBrush(wxBrush(m_progress_fg_color));
-            dc.DrawRectangle(0, progress_rc.GetTop(), fill_width, m_progress_h);
+            dc.DrawRectangle(progress_rc.GetLeft(), progress_rc.GetTop(), fill_width, m_progress_h);
         }
+
     }
 
     void SetText(const wxString& text, int progress)
@@ -524,26 +527,11 @@ public:
     // is shown.
     int FilterEvent(wxEvent& /*event*/) override { return wxEventFilter::Event_Skip; }
 
-    void scale_font(wxFont& font, float scale)
-    {
-#ifdef __WXMSW__
-        // Workaround for the font scaling in respect to the current active display,
-        // not for the primary display, as it's implemented in Font.cpp
-        // See https://github.com/wxWidgets/wxWidgets/blob/master/src/msw/font.cpp
-        // void wxNativeFontInfo::SetFractionalPointSize(float pointSizeNew)
-        wxNativeFontInfo nfi= *font.GetNativeFontInfo();
-        float pointSizeNew  = scale * font.GetPointSize();
-        nfi.lf.lfHeight     = nfi.GetLogFontHeightAtPPI(pointSizeNew, get_dpi_for_window(this));
-        nfi.pointSize       = pointSizeNew;
-        font = wxFont(nfi);
-#else
-        font.Scale(scale);
-#endif //__WXMSW__
-    }
 
 private:
     wxBitmap m_logo_bmp;
     wxColour m_fg_color;
+    wxColour m_action_color;
     wxColour m_bg_color;
     wxColour m_progress_bg_color;
     wxColour m_progress_fg_color;
@@ -553,8 +541,8 @@ private:
     int      m_progress     = 0;
     int      m_progress_h   = 6;
 
-    wxFont m_font_version = Label::Body_16;
-    wxFont m_font_action  = Label::Body_16;
+    wxFont m_font_version = Label::Body_12;
+    wxFont m_font_action  = Label::Body_14;
 };
 
 #ifdef __linux__
