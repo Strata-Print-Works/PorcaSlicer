@@ -27,9 +27,7 @@ Porca builds on Orca's slicing, calibration, modeling and printer tools. The add
 
 *Named stages keep related jobs together; each plate keeps its own setup and placement.*
 
-
-<details>
-<summary>See independent plates, stages and settings in action</summary>
+#### See independent plates, stages and settings in action
 
 **Each plate has its own printer, materials and process settings**
 
@@ -59,8 +57,6 @@ Porca builds on Orca's slicing, calibration, modeling and printer tools. The add
 
 ![Switch between project, stage and plate settings](docs/demos/settings-scopes.gif)
 
-</details>
-
 ### Pack parts and plan work across printers
 
 - **Align, distribute and space objects.** Align to the bed, selection or a stationary reference object; distribute evenly or choose an exact gap.
@@ -76,9 +72,7 @@ Porca builds on Orca's slicing, calibration, modeling and printer tools. The add
 
 Planning does not connect to printers or start prints. Stages organize work; they are not an automatic dispatch queue. Physical readiness, installed nozzles and loaded materials still require checking.
 
-
-<details>
-<summary>See alignment, fill and packing previews</summary>
+#### See alignment, fill and packing previews
 
 **Align, distribute or choose an exact gap**
 
@@ -120,8 +114,6 @@ Planning does not connect to printers or start prints. Stages organize work; the
 
 ![Options for planning across saved printers](docs/screenshots/printer-planning.png)
 
-</details>
-
 *The saved-printer image shows planning options. This capture session did not produce a compatible saved-printer assignment for the example project.*
 
 ### Keep several projects open
@@ -131,9 +123,7 @@ Planning does not connect to printers or start prints. Stages organize work; the
 - **Save All and conflict checks.** Save open work together, detect externally changed files, and prevent one open project from overwriting another's file.
 - **Startup restoration and recovery.** Reopen saved projects after quitting, or recover unsaved projects independently from local checkpoints. Recovery does not resume printing or restore the full undo history.
 
-
-<details>
-<summary>See multiple projects open together</summary>
+#### See multiple projects open together
 
 **Keep a small slicing study beside a larger project**
 
@@ -153,8 +143,6 @@ Planning does not connect to printers or start prints. Stages organize work; the
 
 *The preferences capture shows restoration and backup controls; it does not demonstrate recovery from a crash.*
 
-</details>
-
 ### Slice, inspect and compare
 
 - **Choose the slicing scope.** Slice or reslice one plate, a named stage or the project. Reuse valid results, see scoped progress, and retain completed results if a later job fails.
@@ -163,9 +151,7 @@ Planning does not connect to printers or start prints. Stages organize work; the
 - **A clearer Preview.** Navigate stages and plates, inspect time, weight and cost, and break down consumption into models, supports, flushing and towers. Expand print settings directly beside the preview.
 - **Full-file G-code inspection.** Open a collapsible source drawer, follow the selected toolpath line, and scroll large files without loading every line into the display.
 
-
-<details>
-<summary>See slicing, estimates, source inspection and comparison</summary>
+#### See slicing, estimates, source inspection and comparison
 
 **Choose plate, stage or project slicing**
 
@@ -211,8 +197,6 @@ Planning does not connect to printers or start prints. Stages organize work; the
 
 ![Scrub the comparison height and inspect changed settings](docs/demos/compare-slices.gif)
 
-</details>
-
 ### Manage and monitor saved printers
 
 - **Scan, add and manage printers together.** Discover supported LAN printers or enter an address, choose the actual profile and nozzle, and add several printers without reopening the dialog. Adding a printer creates a plate; adding it again reuses an assigned plate.
@@ -224,8 +208,7 @@ Planning does not connect to printers or start prints. Stages organize work; the
 
 Discovery and status checks do not establish print readiness. Native controls and connection ownership vary by integration; see [device control coverage](docs/HLSD/device-control-coverage.md). Offline checks do not qualify live firmware or physical print delivery.
 
-<details>
-<summary>See printer selection and search</summary>
+#### See printer selection and search
 
 **Browse printer presets with model pictures**
 
@@ -241,10 +224,7 @@ Discovery and status checks do not establish print readiness. Native controls an
 
 *Search uses the existing printer list. The displayed status is captured app state; this demo does not establish fresh telemetry or print readiness.*
 
-</details>
-
-<details>
-<summary>Historical captures: adding and listing printers</summary>
+#### Historical captures: adding and listing printers
 
 **Add another printer without closing the dialog — October 12, 2026**
 
@@ -256,8 +236,6 @@ Discovery and status checks do not establish print readiness. Native controls an
 
 *These older development captures have connection addresses hidden. The add dialog includes test fixtures. The list predates the current Monitor layout and connection-state wording; its “connected” count does not prove simultaneous control sessions. Current camera, Monitor and live discovery behavior are not demonstrated in this gallery.*
 
-</details>
-
 ### Track usable parts through production
 
 - **Targets for each part.** Follow needed and usable quantities with visual part cards grouped by stage and plate.
@@ -265,9 +243,7 @@ Discovery and status checks do not establish print readiness. Native controls an
 - **Correct results.** Keep print history, revise accepted quantities and undo a specific mark-done action without erasing other runs.
 - **Carry progress with the project.** Save targets and results in the 3MF, with local journal recovery for unsaved production updates.
 
-
-<details>
-<summary>See production targets, results and history</summary>
+#### See production targets, results and history
 
 **Track how many usable parts are still needed**
 
@@ -289,8 +265,6 @@ Discovery and status checks do not establish print readiness. Native controls an
 
 ![Record a plate as done and update the part totals](docs/demos/production-progress.gif)
 
-</details>
-
 *These production examples use manually entered demo results. No printer was commanded to heat, move, upload or print during capture.*
 
 ### Combine and share projects
@@ -300,8 +274,7 @@ Discovery and status checks do not establish print readiness. Native controls an
 - **Broader project recognition.** Recognize Orca-family project containers from additional forks and recover supported PrusaSlicer multi-bed layouts. Recovering geometry does not imply equivalent print settings.
 - **Portable work, local credentials.** Save intended destinations without exporting connection addresses, passwords, access codes, API keys or certificate paths, including in embedded presets. A missing local printer does not prevent editing or erase the intended destination.
 
-<details>
-<summary>See project import and compatibility review</summary>
+#### See project import and compatibility review
 
 **Choose plates and settings, geometry only, or project replacement**
 
@@ -321,8 +294,6 @@ Discovery and status checks do not establish print readiness. Native controls an
 
 *The compatibility example deliberately contains an unknown setting and an unsupported infill value. This is the actual import dialog produced by that example file; either import choice can be canceled before changing the workspace.*
 
-</details>
-
 ### Make everyday editing clearer
 
 - **Porca's native appearance.** Coral accents, warm light and charcoal dark themes, updated typography, compact tools, and clearer printer and material controls.
@@ -331,8 +302,7 @@ Discovery and status checks do not establish print readiness. Native controls an
 - **Plate-aware Select All.** Select the active plate's models first; quickly repeat to select the whole project.
 - **Copilot host extensions.** Plugins can inspect live settings, geometry, materials and slice results, offer guarded setting edits, and point to relevant settings or calibrations. The Copilot plugin is a separate installation.
 
-<details>
-<summary>See appearance, camera options and the Copilot extension</summary>
+#### See appearance, camera options and the Copilot extension
 
 **Inspect parts with material lighting and workspace shadows**
 
@@ -355,8 +325,6 @@ Discovery and status checks do not establish print readiness. Native controls an
 ![The separately installed Copilot extension and its chat action](docs/screenshots/copilot-plugin.png)
 
 *Material rendering is an approximation. The Copilot screenshot shows the installed extension only; chat, suggested edits and model responses are not demonstrated here.*
-
-</details>
 
 ### Additional development work
 
