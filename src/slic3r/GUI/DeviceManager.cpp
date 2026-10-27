@@ -1405,7 +1405,7 @@ int MachineObject::command_get_version(bool with_retry)
     j["info"]["command"] = "get_version";
     if (with_retry)
         get_version_retry = GET_VERSION_RETRYS;
-    return this->publish_json(j, 1);
+    return this->publish_json(j, 1, 0, false);
 }
 
 int MachineObject::command_get_access_code() {
@@ -1414,7 +1414,7 @@ int MachineObject::command_get_access_code() {
     j["system"]["sequence_id"] = std::to_string(MachineObject::m_sequence_id++);
     j["system"]["command"] = "get_access_code";
 
-    return this->publish_json(j);
+    return this->publish_json(j, 0, 0, false);
 }
 
 int MachineObject::command_request_push_all(bool request_now)
@@ -2822,7 +2822,7 @@ bool MachineObject::is_camera_busy_off()
     return false;
 }
 
-int MachineObject::publish_json(const json& json_item, int qos, int flag)
+int MachineObject::publish_json(const json& json_item, int qos, int flag, bool show_unsupported)
 {
     int rtn = 0;
     if (is_lan_mode_printer()) {
@@ -2837,14 +2837,11 @@ int MachineObject::publish_json(const json& json_item, int qos, int flag)
         BOOST_LOG_TRIVIAL(error) << "publish_json: " << json_item.dump() << " code: " << rtn;
     }
 
-    // why: the agent is the only thing that knows what it can translate, so it reports
-    // not-supported in its return value and this - the single funnel every command_* builder
-    // passes through - is the one place that turns it into something the user sees. No list of
-    // unsupported commands is needed anywhere: an agent that has no case for a command says so.
-    if ((rtn == ORCA_NETWORK_ERR_CMD_NOT_SUPPORTED || rtn == ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE) &&
+    // Connection setup and automatic retries also request version/access-code data.
+    // Keep their errors in the log and return value; only user controls need a dialog.
+    if (show_unsupported &&
+        (rtn == ORCA_NETWORK_ERR_CMD_NOT_SUPPORTED || rtn == ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE) &&
         !json_item.contains("pushing")) {
-        // Status refresh requests run automatically. Their failure is represented
-        // by telemetry freshness, not a modal intended for user control actions.
         show_unsupported_dlg(rtn);
     }
 

@@ -1,6 +1,6 @@
 @echo off
 
-REM OrcaSlicer build script for Windows. Run with -h for the options.
+REM Porca build script for Windows. Run with -h for the options.
 
 REM ===========================================================================
 REM  Script setup
@@ -39,7 +39,7 @@ REM ===========================================================================
 
 call :add_section "Actions"
 call :add_arg build_deps bool d deps "Download and build the dependencies, needed before -s"
-call :add_arg build_slicer bool s slicer "Build OrcaSlicer"
+call :add_arg build_slicer bool s slicer "Build Porca"
 call :add_arg build_tests bool "" tests "Build the unit tests"
 call :add_arg run_tests bool "" run-tests "Build the unit tests and run them"
 call :add_arg pack_deps bool p pack "Bundle the built dependencies into a zip file"
@@ -677,7 +677,7 @@ if "%pack_deps%" == "ON" (
 
 if "%build_slicer%" == "ON" (
     set "stage=s"
-    echo Building OrcaSlicer...
+    echo Building Porca...
 
     if "%clean%" == "ON" (
         call :clean_tree "%build_dir%"
@@ -816,7 +816,7 @@ REM worked out the same way in either run.
     )
 
     if "%build_deps%" == "ON" echo   Dependencies  !dep_full!
-    if "%build_slicer%" == "ON" if "%linked%" == "ON" echo   OrcaSlicer    !slicer_full!
+    if "%build_slicer%" == "ON" if "%linked%" == "ON" echo   Porca         !slicer_full!
     if "%build_slicer%" == "ON" if not "%linked%" == "ON" echo   Target        %slicer_target%
     if "%build_slicer%" == "ON" if not "%using_ninja%" == "ON" echo   Solution      %build_full%\!solution!
     if "%pack_deps%" == "ON" if defined bundle echo   Bundle        !bundle!
@@ -907,7 +907,7 @@ REM get_str_len <string> -> length in %ret%
     set padding=
     for /L %%i in (0, 1, %max_len%) do set "padding=!padding! "
 
-    echo Builds OrcaSlicer and its dependencies on Windows.
+    echo Builds Porca and its dependencies on Windows.
     echo.
     echo Usage: %script_name% [options]
     set /A range_end = %argdefn% - 1

@@ -17,7 +17,6 @@ function OnInit()
         AppendTemplate(pluginTip, T("plugin_not_detected", "Bambu Network plug-in not detected. Click <a>here</a> to install it."),
                        pluginTip.querySelector("a"));
 
-	SendMsg_GetLoginInfo();
 	SendMsg_GetBambuLoginInfo();
 	SendMsg_GetRecentFile();
 	SendMsg_GetStaffPick();
@@ -97,10 +96,6 @@ function HandleStudio( pVal )
 	
 	if (strCmd == "get_recent_projects") {
     ShowRecentFileList(pVal["response"]);
-  } else if (strCmd == "orca_userlogin") {
-    SetOrcaLoginInfo(pVal["data"]["avatar"], pVal["data"]["name"], pVal["data"]["account"]);
-  } else if (strCmd == "orca_useroffline") {
-    SetOrcaUserOffline();
   } else if (strCmd == "studio_bambu_userlogin") {
     SetBambuLoginInfo(pVal["data"]["avatar"], pVal["data"]["name"]);
   } else if (strCmd == "studio_bambu_useroffline") {
@@ -121,11 +116,7 @@ function HandleStudio( pVal )
       $("#BambuCloudSection").hide();
     }
 
-    if (providers.indexOf("orca") >= 0) {
-      $("#LeftBoard").show();
-    } else {
-      $("#LeftBoard").hide();
-    }
+    $("#LoginArea").toggle(providers.indexOf("bbl") >= 0);
   } else if (strCmd == "network_plugin_installtip") {
     // Bambu Cloud is unreachable without the network plugin, so its row only carries the tip.
     let bMissing = pVal["show"] * 1 == 1;
@@ -172,10 +163,8 @@ function GotoMenu( strMenu )
 
 /*------Account rows------*/
 
-/*----Everything that differs between the two cloud providers lives here----*/
+/* Optional vendor account. */
 var AccountRows = {
-  orca:  { row: "#OrcaAccount",  name: "#UserName",      avatar: "#UserAvatarIcon",  dot: null,
-           loginCmd: "homepage_orca_login_or_register",  logoutCmd: "homepage_orca_logout" },
   bambu: { row: "#BambuAccount", name: "#BambuUserName", avatar: "#BambuAvatarIcon", dot: "#BambuStatusDot",
            loginCmd: "homepage_bambu_login_or_register", logoutCmd: "homepage_bambu_logout" }
 };
@@ -354,14 +343,6 @@ function ShowRecnetFileContextMenu()
 }
 
 /*-------RecentFile MX Message------*/
-function SendMsg_GetLoginInfo()
-{
-	var tSend={};
-	tSend['sequence_id']=Math.round(new Date() / 1000);
-	tSend['command']="get_login_info";
-	
-	SendWXMessage( JSON.stringify(tSend) );	
-}
 
 function SendSimpleCommand(command) {
   var tSend = {};
@@ -370,7 +351,6 @@ function SendSimpleCommand(command) {
   SendWXMessage(JSON.stringify(tSend));
 }
 
-function SendMsg_GetOrcaLoginInfo() { SendSimpleCommand("get_orca_login_info"); }
 
 
 function SendMsg_GetRecentFile()
@@ -487,8 +467,6 @@ function OnExploreRecentFile( )
 
 // --- Cloud providers ---
 
-function SetOrcaLoginInfo(strAvatar, strName, strAccount) { SetAccountSignedIn("orca", strAvatar, strName, strAccount); }
-function SetOrcaUserOffline() { SetAccountSignedOut("orca"); }
 function SetBambuLoginInfo(strAvatar, strName) { SetAccountSignedIn("bambu", strAvatar, strName, null); }
 function SetBambuUserOffline() { SetAccountSignedOut("bambu"); }
 

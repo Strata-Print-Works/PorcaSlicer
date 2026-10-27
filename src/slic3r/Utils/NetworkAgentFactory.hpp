@@ -5,7 +5,6 @@
 #include "ICloudServiceAgent.hpp"
 #include "IPrinterAgent.hpp"
 #include "NetworkAgent.hpp"
-#include "OrcaCloudServiceAgent.hpp"
 #include "BBLCloudServiceAgent.hpp"
 #include "BBLNetworkPlugin.hpp"
 #include "libslic3r/AppConfig.hpp"
@@ -141,15 +140,13 @@ public:
      * Create a cloud service agent based on provider type.
      * Handles authentication, project sync, and other cloud services.
      *
-     * @param provider Which implementation to use (Orca or BBL)
+     * @param provider Optional vendor cloud provider (BBL)
      * @param log_dir Directory for log files
      * @return Shared pointer to ICloudServiceAgent implementation
      */
     static std::shared_ptr<ICloudServiceAgent> create_cloud_agent(const std::string& provider, const std::string& log_dir)
     {
-        if (provider == ORCA_CLOUD_PROVIDER) {
-            return std::make_shared<OrcaCloudServiceAgent>(log_dir);
-        } else if (provider == BBL_CLOUD_PROVIDER) {
+        if (provider == BBL_CLOUD_PROVIDER) {
             auto& plugin = BBLNetworkPlugin::instance();
             if (!plugin.is_loaded()) {
                 return nullptr;
@@ -186,7 +183,7 @@ private:
  * Creates a NetworkAgent with cloud agent only. The printer agent is created
  * separately when a printer is selected, via create_printer_agent_by_id().
  *
- * Cloud provider: Always creates OrcaCloudServiceAgent as the primary provider.
+ * Cloud providers: Only explicitly enabled vendor services are created.
  * Third-party cloud agents (e.g., Bambu) are created from the cloud_providers
  * AppConfig setting and added via NetworkAgent::add_cloud_agent().
  *

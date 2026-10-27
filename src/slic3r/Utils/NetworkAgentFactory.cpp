@@ -237,32 +237,13 @@ std::unique_ptr<NetworkAgent> create_agent_from_config(const std::string& log_di
     if (!app_config)
         return std::make_unique<NetworkAgent>(nullptr, nullptr);
 
-    // Always create Orca cloud agent as the primary provider
-    auto cloud_agent = NetworkAgentFactory::create_cloud_agent(ORCA_CLOUD_PROVIDER, log_dir);
-    if (!cloud_agent) {
-        BOOST_LOG_TRIVIAL(error) << "Failed to create cloud agent";
-    }
-
-    auto agent = std::make_unique<NetworkAgent>(std::move(cloud_agent), nullptr);
-
-    if (agent) {
-        // create orca cloud agent first
-        auto* orca_cloud = dynamic_cast<OrcaCloudServiceAgent*>(agent->get_cloud_agent().get());
-        if (orca_cloud) {
-            orca_cloud->configure_urls(app_config);
-        }
-
-        // Initialize third-party cloud agents from config
-        auto providers = app_config->get_cloud_providers();
-        for (const auto& provider : providers) {
-            if (provider == ORCA_CLOUD_PROVIDER)
-                continue; // Primary agent already created above
-            auto third_party_agent = NetworkAgentFactory::create_cloud_agent(provider, log_dir);
-            if (third_party_agent) {
-                agent->add_cloud_agent(provider, std::move(third_party_agent));
-                BOOST_LOG_TRIVIAL(info) << "Initialized third-party cloud agent: " << provider;
-            }
-        }
+    // LAN printer sessions do not require an account. Only opt-in vendor clouds
+    // are constructed; saved Orca Cloud settings never start upstream services.
+    auto agent = std::make_unique<NetworkAgent>(nullptr, nullptr);
+    for (const auto& provider : app_config->get_cloud_providers()) {
+        auto cloud = NetworkAgentFactory::create_cloud_agent(provider, log_dir);
+        if (cloud)
+            agent->add_cloud_agent(provider, std::move(cloud));
     }
 
     return agent;

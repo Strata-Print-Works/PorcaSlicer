@@ -1,7 +1,9 @@
 #include "Plater.hpp"
 #include "slic3r/Utils/ElegooCanvas.hpp"
+#include "slic3r/Utils/ElegooCanvasPresets.hpp"
 #include "slic3r/Utils/ElegooLink.hpp"
 #include "slic3r/Utils/ElegooLinkProtocol.hpp"
+#include "slic3r/Utils/Moonraker.hpp"
 #include "PrinterScanDialog.hpp"
 #include "slic3r/Utils/PrinterConnectionStatus.hpp"
 #include "FilamentUsageReport.hpp"
@@ -329,7 +331,6 @@
 #include "CreatePresetsDialog.hpp"
 #include "FileArchiveDialog.hpp"
 #include "../Utils/Http.hpp"
-#include "../Utils/OrcaCloudServiceAgent.hpp"
 #include "StepMeshDialog.hpp"
 #include "FilamentMapDialog.hpp"
 #include "CloneDialog.hpp"
@@ -643,10 +644,12 @@ enum class ActionButtonType : int {
     abSendGCode
 };
 
+static wxColour sidebar_color(DesignSystem::ColorRole role);
+
 // Background for the extruder-group title chip and its edit buttons
 static wxColour extruder_group_chip_bg()
 {
-    return StateColor::darkModeColorFor(*wxWHITE);
+    return sidebar_color(DesignSystem::ColorRole::Surface);
 }
 
 // Interactive title row for the sidebar extruder cards: "<title> ( <count> ) [edit]". The count shows the
@@ -698,6 +701,7 @@ public:
         // which outranks best size in sizer allocation, so once the count is shown any ancestor
         // Layout() would shrink the row back and clip the trailing edit button.
         SetSizer(sizer);
+        sys_color_changed();
         Layout();
     }
 
@@ -741,10 +745,10 @@ public:
     void sys_color_changed()
     {
         SetBackgroundColour(extruder_group_chip_bg());
-        auto label_color = StateColor::darkModeColorFor(wxColour("#363636"));
-        m_label->SetForegroundColour(label_color);
-        for (wxStaticText *t : {m_brace_left, m_count, m_brace_right})
-            t->SetForegroundColour(label_color);
+        for (wxStaticText *t : {m_label, m_brace_left, m_count, m_brace_right}) {
+            t->SetForegroundColour(sidebar_color(DesignSystem::ColorRole::InkMuted));
+            t->SetBackgroundColour(GetBackgroundColour());
+        }
         m_hover_btn->SetBackgroundColour(extruder_group_chip_bg());
         Refresh();
     }
@@ -770,8 +774,6 @@ private:
     std::function<void()> m_hover_on_click;
     bool                  m_enabled{false};
 };
-
-static wxColour sidebar_color(DesignSystem::ColorRole role);
 
 static void style_nozzle_selector(ComboBox* combo)
 {
@@ -1461,7 +1463,7 @@ void Sidebar::priv::apply_design_icons()
     }
     if (m_printer_bbl_sync) {
         set_sidebar_icon(m_printer_bbl_sync, printer_info_synced ? "circle-check" : "rotate-cw", 16,
-                         printer_info_synced ? ColorRole::Success : ColorRole::InkMuted);
+                         printer_info_synced ? ColorRole::Accent : ColorRole::InkMuted);
         m_printer_bbl_sync->SetBackgroundColour(sidebar_color(ColorRole::Surface));
     }
     for (auto* combo : combos_filament) {
@@ -1610,7 +1612,7 @@ void Sidebar::priv::flush_printer_sync(bool restart)
     }
     //btn_sync_printer->SetBackgroundColorNormal((*counter_sync_printer & 1) ? "#F8F8F8" :"#009688");
     set_sidebar_icon(m_printer_bbl_sync, (*counter_sync_printer & 1) ? "rotate-cw" : "circle-check", 16,
-                     (*counter_sync_printer & 1) ? DesignSystem::ColorRole::InkMuted : DesignSystem::ColorRole::Success);
+                     (*counter_sync_printer & 1) ? DesignSystem::ColorRole::InkMuted : DesignSystem::ColorRole::Accent);
     if (--*counter_sync_printer <= 0)
         timer_sync_printer->Stop();
 }
@@ -2009,7 +2011,7 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
 
     // AMS
     auto ams_panel = new wxPanel(this, wxID_ANY);
-    ams_panel->SetBackgroundColour(*wxWHITE);
+    ams_panel->SetBackgroundColour(sidebar_color(DesignSystem::ColorRole::Surface));
 
     ams_label  = new wxStaticText(ams_panel, wxID_ANY, _L("AMS"));
     ams_label->SetFont(Label::Body_13);
@@ -2074,7 +2076,7 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
     ams_panel->SetSizer(hsizer_ams);
 
     btn_up = new ScalableButton(ams_panel, wxID_ANY, "page_up", "", {FromDIP(14), FromDIP(14)}, wxDefaultPosition, wxBU_EXACTFIT | wxNO_BORDER, false, 14);
-    btn_up->SetBackgroundColour(*wxWHITE);
+    btn_up->SetBackgroundColour(ams_panel->GetBackgroundColour());
     btn_up->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &evt) {
         if (page_cur > 0)
             --page_cur;
@@ -2082,7 +2084,7 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
     });
     btn_up->Hide();
     btn_down = new ScalableButton(ams_panel, wxID_ANY, "page_down", "", {FromDIP(14), FromDIP(14)}, wxDefaultPosition, wxBU_EXACTFIT | wxNO_BORDER, false, 14);
-    btn_down->SetBackgroundColour(*wxWHITE);
+    btn_down->SetBackgroundColour(ams_panel->GetBackgroundColour());
     btn_down->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &evt) {
         if (page_cur + 1 < page_num)
             ++page_cur;
@@ -2125,8 +2127,21 @@ void ExtruderGroup::apply_design_style()
     SetBackgroundColour(sidebar_color(ColorRole::Surface));
     SetBackgroundColor(StateColor::resolved(sidebar_color(ColorRole::Surface)));
     SetBorderWidth(0);
-    if (hover_label) hover_label->Show(group_index >= 0);
+    if (hover_label) {
+        hover_label->Show(group_index >= 0);
+        hover_label->sys_color_changed();
+    }
+    // Child windows retain their own backgrounds through the app-wide theme pass.
+    wxWindow* ams_panel = ams_label->GetParent();
+    ams_panel->SetBackgroundColour(GetBackgroundColour());
+    for (wxWindow* child : ams_panel->GetChildren())
+        child->SetBackgroundColour(GetBackgroundColour());
+    ams_label->SetForegroundColour(sidebar_color(ColorRole::InkMuted));
+    ams_not_installed_msg->SetForegroundColour(sidebar_color(ColorRole::InkMuted));
+    ams_panel->Refresh();
     style_nozzle_selector(combo_diameter);
+    if (group_index >= 0)
+        combo_diameter->SetMinSize(wxSize(FromDIP(64), combo_diameter->GetMinSize().y));
     for (const NozzleRow& row : rows) {
         row.prefix->SetFont(NozzleRow::prefix_font());
         row.diameter_label->SetFont(NozzleRow::diameter_font());
@@ -2176,7 +2191,7 @@ ExtruderGroup::NozzleRow ExtruderGroup::create_nozzle_row()
     auto row_sizer = new wxBoxSizer(wxHORIZONTAL);
     row_sizer->Add(row.prefix, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(3));
     if (row_index == 0)
-        row_sizer->Add(combo_diameter, 1, wxRIGHT, FromDIP(5));
+        row_sizer->Add(combo_diameter, 0, wxRIGHT, FromDIP(5));
     row_sizer->Add(row.diameter_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
     row_sizer->Add(row.flow, 1);
     // Single groups list tools vertically; dual/AMS groups retain their paired layout.
@@ -3213,7 +3228,7 @@ void Sidebar::priv::update_sync_status(const MachineObject *obj)
     //    btn_sync_printer->SetBorderColor(synced_colour);
     //    btn_sync_printer->SetIcon("ams_nozzle_sync");
         printer_info_synced = true;
-        set_sidebar_icon(m_printer_bbl_sync, "circle-check", 16, DesignSystem::ColorRole::Success);
+        set_sidebar_icon(m_printer_bbl_sync, "circle-check", 16, DesignSystem::ColorRole::Accent);
     }
     else {
     //    btn_sync_printer->SetBorderColor(not_synced_colour);
@@ -3410,8 +3425,9 @@ Sidebar::Sidebar(Plater *parent)
             m_scrolled_sizer->Layout();
         });
         // ORCA add bottom border for seperation wile sections folded
-        p->m_panel_printer_separator = new wxPanel(p->scrolled, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(2))); // ORCA staticline class not works without string
-        p->m_panel_printer_separator->SetBackgroundColour("#FFFFFF");
+        p->m_panel_printer_separator = new wxPanel(p->scrolled, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(1)));
+        p->m_panel_printer_separator->SetBackgroundColour(sidebar_color(DesignSystem::ColorRole::Line));
+        p->section_lines.push_back(p->m_panel_printer_separator);
         scrolled_sizer->Add(p->m_panel_printer_separator, 0, wxEXPAND);
 
         /*************************** 2. add printer content ************************/
@@ -3761,8 +3777,9 @@ Sidebar::Sidebar(Plater *parent)
     p->m_panel_filament_title->Layout();
     scrolled_sizer->Add(p->m_panel_filament_title, 0, wxEXPAND | wxALL, 0);
     // ORCA add bottom border for seperation wile sections folded
-    p->m_panel_filament_separator = new wxPanel(p->scrolled, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(2))); // ORCA staticline class not works without string
-    p->m_panel_filament_separator->SetBackgroundColour("#FFFFFF");
+    p->m_panel_filament_separator = new wxPanel(p->scrolled, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(1)));
+    p->m_panel_filament_separator->SetBackgroundColour(sidebar_color(DesignSystem::ColorRole::Line));
+    p->section_lines.push_back(p->m_panel_filament_separator);
     scrolled_sizer->Add(p->m_panel_filament_separator, 0, wxEXPAND);
 
     bSizer39->AddStretchSpacer(1);
@@ -7057,63 +7074,26 @@ void Sidebar::sync_elegoo_filaments()
         };
         if (!unchanged()) { show_info(this, _L("This plate changed while reading filaments. Sync again when you are ready.")); return; }
         if (!result->error.empty()) { show_error(this, _L(result->error.c_str())); return; }
-        if (result->slots.empty()) { show_info(this, _L("The printer did not report any connected CANVAS slots.")); return; }
-        class CanvasDialog final : public DPIDialog {
-        public:
-            explicit CanvasDialog(wxWindow* parent) : DPIDialog(parent, wxID_ANY, _L("Add CANVAS filaments"),
-                wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX) {}
-            std::function<void()> rescale;
-            void on_dpi_changed(const wxRect&) override {
-                if (rescale) rescale();
-                GetSizer()->SetSizeHints(this); Layout();
-            }
-        } dialog(this);
-        auto* layout = new wxBoxSizer(wxVERTICAL);
-        layout->Add(new wxStaticText(&dialog, wxID_ANY, _L("Review the presets, then add the filaments you want to use.")), 0, wxALL, FromDIP(16));
-        auto* rows = new wxScrolledWindow(&dialog);
-        rows->SetScrollRate(0, FromDIP(12));
-        rows->SetMinSize(FromDIP(wxSize(640, 280)));
-        auto* fields = new wxFlexGridSizer(2, FromDIP(8), FromDIP(12));
-        fields->AddGrowableCol(1);
-        std::vector<::ComboBox*> choices;
-        std::vector<std::vector<std::string>> names;
-        const auto& filaments = wxGetApp().preset_bundle->filaments;
-        for (const auto& slot : result->slots) {
-            const auto label = format_wxstr(_L("CANVAS %1%, slot %2%: %3% %4%"), slot.canvas, slot.tray,
-                slot.material.empty() ? _L("Unknown material") : from_u8(slot.material),
-                slot.color.empty() ? _L("Unknown color") : from_u8(slot.color));
-            fields->Add(new wxStaticText(rows, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
-            auto* choice = new ::ComboBox(rows, wxID_ANY, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(300, -1)), 0, nullptr, wxCB_READONLY);
-            choice->Append(_L("Do not add")); names.emplace_back(1, "");
-            int initial_selection = 0;
-            for (const auto& preset : filaments) {
-                // Offer the installed generic profile even when it is hidden
-                // from the regular picker. Its material and compatibility must
-                // still match; never infer a brand or tuned profile from CANVAS.
-                const bool generic = preset.is_system && boost::iequals(preset.name, "Generic " + slot.material + " @System");
-                if ((!preset.is_visible && !generic) || !preset.is_compatible || preset.is_default || slot.material.empty() || slot.color.empty()) continue;
-                if (!elegoo_canvas_material_matches(slot, preset.config.opt_string("filament_type", 0u))) continue;
-                choice->Append(from_u8(preset.name)); names.back().push_back(preset.name);
-                if (generic) initial_selection = int(names.back().size() - 1);
-            }
-            if (names.back().size() == 1) {
-                choice->SetString(0, _L("No compatible preset"));
-                choice->Enable(false);
-            }
-            choice->SetSelection(initial_selection); choice->SetName(label);
-            fields->Add(choice, 1, wxEXPAND); choices.push_back(choice);
+        if (result->slots.empty()) { show_info(this, _L("The printer did not report any loaded CANVAS filaments.")); return; }
+        auto& bundle = *wxGetApp().preset_bundle;
+        const auto& filaments = bundle.filaments;
+        std::vector<std::string> selected_presets(result->slots.size());
+        std::vector<size_t> unmatched;
+        for (size_t i = 0; i < result->slots.size(); ++i) {
+            const auto& slot = result->slots[i];
+            if (const auto* preset = match_elegoo_canvas_preset(slot, filaments))
+                selected_presets[i] = preset->name;
+            else
+                unmatched.push_back(i);
         }
-        rows->SetSizer(fields); rows->FitInside();
-        layout->Add(rows, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
         const auto selected_additions = [&] {
             std::vector<std::pair<std::string, std::string>> additions;
             const auto& bundle = *wxGetApp().preset_bundle;
             const auto* colors = bundle.project_config.option<ConfigOptionStrings>("filament_colour");
-            for (size_t i = 0; i < choices.size(); ++i) {
-                const auto selected = choices[i]->GetSelection();
-                if (selected <= 0 || size_t(selected) >= names[i].size()) continue;
-                const auto& name = names[i][size_t(selected)];
+            for (size_t i = 0; i < selected_presets.size(); ++i) {
+                const auto& name = selected_presets[i];
                 const auto& color = result->slots[i].color;
+                if (name.empty() || color.empty()) continue;
                 bool exists = false;
                 for (size_t n = 0; n < bundle.filament_presets.size(); ++n)
                     if (bundle.filament_presets[n] == name && colors && n < colors->values.size() && boost::iequals(colors->values[n], color)) exists = true;
@@ -7123,40 +7103,81 @@ void Sidebar::sync_elegoo_filaments()
             }
             return additions;
         };
-        auto* selection_message = new wxStaticText(&dialog, wxID_ANY, " ");
-        layout->Add(selection_message, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
-        auto* buttons = new DialogButtons(&dialog, {"OK", "Cancel"});
-        buttons->GetOK()->SetLabel(_L("Add selected filaments"));
-        const auto update_selection = [&] {
-            const bool can_add = !selected_additions().empty();
-            const bool has_selection = std::any_of(choices.begin(), choices.end(), [](const auto* choice) { return choice->GetSelection() > 0; });
-            buttons->GetOK()->Enable(can_add);
-            selection_message->SetLabel(has_selection && !can_add ? _L("The selected filaments are already on this plate.") : " ");
-            dialog.Layout();
-        };
-        for (auto* choice : choices)
-            choice->Bind(wxEVT_COMBOBOX, [update_selection](wxCommandEvent& event) { update_selection(); event.Skip(); });
-        buttons->GetOK()->Bind(wxEVT_BUTTON, [&dialog, selected_additions](wxCommandEvent&) {
-            if (!selected_additions().empty()) dialog.EndModal(wxID_OK);
-        });
-        buttons->GetCANCEL()->Bind(wxEVT_BUTTON, [&dialog](wxCommandEvent&) { dialog.EndModal(wxID_CANCEL); });
-        layout->Add(buttons, 0, wxEXPAND | wxALL, FromDIP(16));
-        dialog.rescale = [rows, choices, buttons] {
-            for (auto* choice : choices) { choice->Rescale(); choice->SetMinSize(choice->FromDIP(wxSize(300, -1))); }
-            buttons->GetOK()->Rescale(); buttons->GetCANCEL()->Rescale();
-            rows->SetMinSize(rows->FromDIP(wxSize(640, 280))); rows->FitInside();
-        };
-        update_selection();
-        dialog.SetSizerAndFit(layout); dialog.CentreOnParent(); wxGetApp().UpdateDlgDarkUI(&dialog);
-        if (dialog.ShowModal() != wxID_OK) return;
-        if (!unchanged()) {
-            show_info(this, _L("This plate changed while reviewing filaments. Sync again when you are ready.")); return;
+        if (!unmatched.empty()) {
+            class CanvasDialog final : public DPIDialog {
+            public:
+                explicit CanvasDialog(wxWindow* parent) : DPIDialog(parent, wxID_ANY, _L("Match CANVAS filaments"),
+                    wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX) {}
+                std::function<void()> rescale;
+                void on_dpi_changed(const wxRect&) override {
+                    if (rescale) rescale();
+                    GetSizer()->SetSizeHints(this); Layout();
+                }
+            } dialog(this);
+            const wxColour surface = sidebar_color(DesignSystem::ColorRole::Surface);
+            dialog.SetBackgroundColour(surface);
+            auto* layout = new wxBoxSizer(wxVERTICAL);
+            auto* hint = new Label(&dialog, _L("Choose a preset for the unmatched filaments, or skip them. Matched filaments will sync automatically."));
+            hint->Wrap(FromDIP(600));
+            layout->Add(hint, 0, wxALL, FromDIP(16));
+            auto* rows = new wxScrolledWindow(&dialog);
+            rows->SetBackgroundColour(surface);
+            rows->SetScrollRate(0, FromDIP(12));
+            rows->SetMinSize(FromDIP(wxSize(640, std::min(280, int(unmatched.size()) * 44))));
+            auto* fields = new wxFlexGridSizer(2, FromDIP(8), FromDIP(12));
+            fields->AddGrowableCol(1);
+            std::vector<::ComboBox*> choices;
+            for (size_t i : unmatched) {
+                const auto& slot = result->slots[i];
+                const auto label = format_wxstr(_L("CANVAS %1%, slot %2%: %3% %4%"), slot.canvas, slot.tray,
+                    slot.material.empty() ? _L("Unknown material") : from_u8(slot.material),
+                    slot.color.empty() ? _L("Unknown color") : from_u8(slot.color));
+                fields->Add(new Label(rows, label), 0, wxALIGN_CENTER_VERTICAL);
+                auto* choice = new ::ComboBox(rows, wxID_ANY, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(300, -1)), 0, nullptr, wxCB_READONLY);
+                choice->Append(_L("Skip"));
+                std::vector<std::string> names(1, "");
+                if (!slot.color.empty()) {
+                    for (const auto& preset : filaments) {
+                        if ((!preset.is_visible && !is_elegoo_canvas_generic(slot, preset)) || !preset.is_compatible || preset.is_default) continue;
+                        if (!slot.material.empty() && !elegoo_canvas_material_matches(slot, preset.config.opt_string("filament_type", 0u))) continue;
+                        choice->Append(from_u8(preset.name)); names.push_back(preset.name);
+                    }
+                }
+                choice->SetSelection(0); choice->SetName(label);
+                if (names.size() == 1) {
+                    choice->Enable(false);
+                    choice->SetToolTip(_L("Check the material and color on the printer and install a compatible preset, then sync again."));
+                }
+                choice->Bind(wxEVT_COMBOBOX, [&selected_presets, i, names = std::move(names)](wxCommandEvent& event) {
+                    const int selected = event.GetInt();
+                    selected_presets[i] = selected > 0 && size_t(selected) < names.size() ? names[size_t(selected)] : "";
+                    event.Skip();
+                });
+                fields->Add(choice, 1, wxEXPAND); choices.push_back(choice);
+            }
+            rows->SetSizer(fields); rows->FitInside();
+            layout->Add(rows, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
+            auto* buttons = new DialogButtons(&dialog, {"OK", "Cancel"});
+            buttons->GetOK()->SetLabel(_L("Sync filaments"));
+            buttons->GetOK()->Bind(wxEVT_BUTTON, [&dialog](wxCommandEvent&) { dialog.EndModal(wxID_OK); });
+            buttons->GetCANCEL()->Bind(wxEVT_BUTTON, [&dialog](wxCommandEvent&) { dialog.EndModal(wxID_CANCEL); });
+            layout->Add(buttons, 0, wxEXPAND | wxALL, FromDIP(16));
+            dialog.rescale = [rows, choices, buttons, hint, count = unmatched.size()] {
+                hint->Wrap(-1); hint->Wrap(hint->FromDIP(600));
+                for (auto* choice : choices) { choice->Rescale(); choice->SetMinSize(choice->FromDIP(wxSize(300, -1))); }
+                buttons->GetOK()->Rescale(); buttons->GetCANCEL()->Rescale();
+                rows->SetMinSize(rows->FromDIP(wxSize(640, std::min(280, int(count) * 44)))); rows->FitInside();
+            };
+            dialog.SetSizerAndFit(layout); dialog.CentreOnParent(); wxGetApp().UpdateDlgDarkUI(&dialog);
+            if (dialog.ShowModal() != wxID_OK) return;
         }
-        auto& bundle = *wxGetApp().preset_bundle;
+        if (!unchanged()) {
+            show_info(this, _L("This plate changed while syncing filaments. Sync again when you are ready.")); return;
+        }
         const auto additions = selected_additions();
         if (additions.empty()) return;
         if (bundle.filament_presets.size() + additions.size() > MAXIMUM_EXTRUDER_NUMBER) {
-            show_info(this, _L("This plate has no room for all selected filaments. Choose fewer filaments or remove unused ones.")); return;
+            show_info(this, _L("This plate has no room for the CANVAS filaments. Remove unused filaments from this plate, then sync again.")); return;
         }
         plater.take_snapshot(_u8L("Add CANVAS filaments"));
         for (const auto& entry : additions) add_custom_filament(wxColour(from_u8(entry.second)), entry.first);
@@ -14114,25 +14135,7 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
             wxGetApp().plater()->sidebar().auto_calc_flushing_volumes(idx);
 #endif
 
-        // Show shared profiles notification for the newly selected printer
-        if (wxGetApp().app_config->get_bool("show_shared_profiles_notification"))
-        {
-            std::string printer_name = wxGetApp().preset_bundle->printers.get_selected_preset_base().name;
-            std::string encoded_name = Http::url_encode(printer_name);
 
-            std::string cloud_url;
-            if (auto agent = wxGetApp().getAgent()) {
-                if (auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(agent->get_cloud_agent())) {
-                    cloud_url = orca_agent->get_cloud_base_url();
-                }
-            }
-            if (cloud_url.empty())
-                cloud_url = "https://cloud.orcaslicer.com";
-
-            std::string explore_url = cloud_url + "/app/bundles/explore?printers=" + encoded_name;
-
-            wxGetApp().plater()->get_notification_manager()->push_shared_profiles_notification(explore_url);
-        }
     }
 
 #ifdef __WXMSW__
@@ -14900,6 +14903,11 @@ void Plater::priv::on_action_print_plate(SimpleEvent&)
 
 void Plater::priv::open_machine_select_dialog(int plate_idx, PrintFromType print_type)
 {
+    const auto& config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    if (print_type == PrintFromType::FROM_NORMAL && Moonraker::is_snapmaker_u1_config(config) && !config.opt_string("print_host").empty()) {
+        q->send_gcode_legacy(plate_idx, nullptr);
+        return;
+    }
     // BBS
     if (!m_select_machine_dlg)
         m_select_machine_dlg = new SelectMachineDialog(q);
@@ -14993,6 +15001,11 @@ int Plater::priv::update_print_required_data(Slic3r::DynamicPrintConfig config, 
 
 void Plater::priv::on_action_send_to_printer(bool isall)
 {
+    const auto& config = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    if (Moonraker::is_snapmaker_u1_config(config) && !config.opt_string("print_host").empty()) {
+        q->send_gcode_legacy(isall ? PLATE_ALL_IDX : partplate_list.get_curr_plate_index(), nullptr);
+        return;
+    }
 	if (!m_send_to_sdcard_dlg) m_send_to_sdcard_dlg = new SendToPrinterDialog(q);
     if (isall) {
         m_send_to_sdcard_dlg->prepare(PLATE_ALL_IDX);
@@ -22914,10 +22927,13 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
     PrintHostJob upload_job(physical_printer_config);
     if (upload_job.empty())
         return;
+    auto* moonraker_host = dynamic_cast<Moonraker*>(upload_job.printhost.get());
+    const bool snapmaker_u1 = moonraker_host && moonraker_host->is_snapmaker_u1();
 
     // Orca: the use_3mf printer option makes us send a .gcode.3mf to the printer
     const auto* use_3mf_opt = physical_printer_config->option<ConfigOptionBool>("use_3mf");
-    const bool  use_3mf     = use_3mf_opt != nullptr && use_3mf_opt->value;
+    // U1's parameterized print command consumes a G-code file, not a sliced 3MF.
+    const bool  use_3mf     = !snapmaker_u1 && use_3mf_opt != nullptr && use_3mf_opt->value;
 
     upload_job.upload_data.use_3mf = use_3mf;
     // Orca: the concrete plate to export/send (PLATE_CURRENT_IDX resolves to the current plate).
@@ -22980,7 +22996,70 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
                                           ff_code_opt != nullptr && !ff_code_opt->value.empty();
 
         std::unique_ptr<PrintHostSendDialog> pDlg;
-        if (host_type == htElegooLink) {
+        if (snapmaker_u1) {
+            if (delivery_plate_idx != get_partplate_list().get_curr_plate_index()) {
+                show_error(this, _L("Select this plate before choosing its U1 toolheads and flow calibration."), false);
+                return;
+            }
+            const auto* slice = delivery_plate->is_slice_result_ready_for_print() ? delivery_plate->get_slice_result() : nullptr;
+            auto* print = delivery_plate->fff_print();
+            if (!slice || !print || plate_idx == PLATE_ALL_IDX) {
+                show_error(this, _L("Slice and send one plate at a time to choose U1 toolheads and flow calibration."), false);
+                return;
+            }
+            const auto& sliced_config = print->full_print_config();
+            const auto* types = sliced_config.option<ConfigOptionStrings>("filament_type");
+            const auto* colors = sliced_config.option<ConfigOptionStrings>("filament_colour");
+            const auto* diameters = sliced_config.option<ConfigOptionFloats>("nozzle_diameter");
+            const auto* temperatures = sliced_config.option<ConfigOptionInts>("nozzle_temperature");
+            const auto* filament_diameters = sliced_config.option<ConfigOptionFloats>("filament_diameter");
+            const auto* ratios = sliced_config.option<ConfigOptionFloats>("filament_flow_ratio");
+            const auto* speeds = sliced_config.option<ConfigOptionFloats>("filament_max_volumetric_speed");
+            const auto volumes = print->get_filament_volume_maps();
+            const auto* nozzle_volumes = sliced_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+            std::vector<SnapmakerPrintFilament> filaments;
+            for (const auto& used : slice->print_statistics.total_volumes_per_extruder) {
+                if (used.second <= 0.) continue;
+                SnapmakerPrintFilament f;
+                f.id = int(used.first);
+                f.default_toolhead = int(print->get_extruder_id(used.first));
+                if (types && !types->values.empty()) f.type = types->get_at(used.first);
+                if (colors && !colors->values.empty()) f.color = colors->get_at(used.first);
+                if (diameters && f.default_toolhead >= 0 && size_t(f.default_toolhead) < diameters->values.size())
+                    f.nozzle_diameter = diameters->values[f.default_toolhead];
+                if (temperatures && !temperatures->values.empty()) f.temperature = temperatures->get_at(used.first);
+                if (ratios && !ratios->values.empty()) f.flow_ratio = ratios->get_at(used.first);
+                if (speeds && !speeds->values.empty()) f.max_volumetric_speed = speeds->get_at(used.first);
+                if (used.first < volumes.size()) {
+                    if (volumes[used.first] == nvtStandard) f.volume_type = "standard";
+                    else if (volumes[used.first] == nvtHighFlow) f.volume_type = "high_flow";
+                } else if (nozzle_volumes && f.default_toolhead >= 0 && size_t(f.default_toolhead) < nozzle_volumes->values.size()) {
+                    if (nozzle_volumes->values[f.default_toolhead] == nvtStandard) f.volume_type = "standard";
+                    else if (nozzle_volumes->values[f.default_toolhead] == nvtHighFlow) f.volume_type = "high_flow";
+                }
+                if (filament_diameters && !filament_diameters->values.empty()) {
+                    const double diameter = filament_diameters->get_at(used.first);
+                    if (diameter > 0.) f.used_mm = used.second / (PI * diameter * diameter * 0.25);
+                }
+                filaments.push_back(std::move(f));
+            }
+            if (filaments.size() > 4) {
+                show_error(this, _L("Assign up to four filaments to this U1 plate, then slice again. Each filament needs its own loaded toolhead."), false);
+                return;
+            }
+            SnapmakerPrinterState state;
+            wxString error;
+            {
+                wxBusyCursor wait;
+                if (!moonraker_host->fetch_snapmaker_state(state, error)) {
+                    show_error(this, error, false);
+                    return;
+                }
+            }
+            pDlg = std::make_unique<SnapmakerPrintHostSendDialog>(default_output_file,
+                upload_job.printhost->get_post_upload_actions(), groups, storage_paths, storage_names,
+                config->get_bool("open_device_tab_post_upload"), std::move(state), std::move(filaments));
+        } else if (host_type == htElegooLink) {
             // CC2 starts remotely only with one filament; the sliced plate reports how many it uses.
             const auto* slice = delivery_plate->is_slice_result_valid() ? delivery_plate->get_slice_result() : nullptr;
             const int used_filaments = slice ? int(slice->print_statistics.total_volumes_per_extruder.size()) : 0;
@@ -25093,27 +25172,21 @@ bool Plater::refresh_missing_plugin_block(bool* block_toggled)
 
     const std::vector<MissingPlugin> missing_cloud = get_missing_cloud_plugins();
     const std::vector<MissingPlugin> missing_local = get_missing_local_plugins();
-    const std::vector<std::string> missing_cloud_refs = missing_refs(missing_cloud);
-    const std::vector<std::string> missing_local_refs = missing_refs(missing_local);
 
     update(NotificationType::OrcaCloudPluginMissingError, missing_cloud,
            &p->m_cloud_missing_shown_sig,
-           _u8L("OrcaCloud plugins required by the current preset are not installed:"),
+           _u8L("Install the plugins required by this preset to continue:"),
            _u8L("Install Plugins"),
-           [this, missing_cloud_refs](wxEvtHandler*) { install_missing_cloud_plugins(missing_cloud_refs); return false; });
-    // "Find on OrcaCloud" is only a suggestion: it opens the browser but cannot resolve the missing
-    // plugin in-session, so it never closes the notification or unblocks slicing. The user resolves a
-    // local plugin by installing it or by changing the setting that needs it.
+           [](wxEvtHandler*) { wxGetApp().install_local_plugin(); return false; });
     update(NotificationType::OrcaLocalPluginMissingError, missing_local,
            &p->m_local_missing_shown_sig,
            _u8L("Local plugins required by the current preset are missing:"),
-           _u8L("Find on OrcaCloud"),
-           [missing_local_refs](wxEvtHandler*) { open_missing_plugins_on_cloud(missing_local_refs); return false; });
+           _u8L("Open Plugins"),
+           [](wxEvtHandler*) { wxGetApp().open_plugins_dialog(); return false; });
 
     const std::vector<MissingPlugin> inactive      = get_inactive_plugins();
     const std::vector<MissingPlugin> broken        = get_broken_plugins();
     const std::vector<std::string>   inactive_refs = missing_refs(inactive);
-    const std::vector<std::string>   broken_refs   = missing_refs(broken);
 
     update(NotificationType::OrcaPluginInactiveError, inactive,
            &p->m_inactive_shown_sig,
@@ -25123,8 +25196,8 @@ bool Plater::refresh_missing_plugin_block(bool* block_toggled)
     update(NotificationType::OrcaPluginCapabilityUnavailableError, broken,
            &p->m_broken_shown_sig,
            _u8L("The installed plugin does not provide the required capability — it may be outdated:"),
-           _u8L("Find on OrcaCloud"),
-           [broken_refs](wxEvtHandler*) { open_missing_plugins_on_cloud(broken_refs); return false; });
+           _u8L("Open Plugins"),
+           [](wxEvtHandler*) { wxGetApp().open_plugins_dialog(); return false; });
 
     const bool blocked = has_missing_plugins() || has_inactive_plugins() || has_broken_plugins();
     if (block_toggled)

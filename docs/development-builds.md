@@ -14,6 +14,12 @@ The macOS build script selects an explicit SDK for dependencies and the applicat
 
 The macOS DMG contains `Porca.app` with bundle identifier `com.strataprintworks.porca`. Windows uses Porca's installer name, icon, install directory and uninstall registry identity. The internal executable names and Orca settings directory remain inherited. The legacy Flatpak and MSIX Store packages retain upstream identities and are excluded from Porca's build/release path.
 
+Application artifacts use `Porca_Mac_universal_*`, `Porca_Windows_*` and
+`Porca_Linux_ubuntu_*` names. DMG, portable ZIP and AppImage filenames also use
+Porca, and the Linux desktop entry displays Porca. Release assembly accepts these
+artifact names from a single build run. Internal CMake targets, intermediate app
+paths and executable names retain their inherited names.
+
 Start a build with:
 
 ```sh

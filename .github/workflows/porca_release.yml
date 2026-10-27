@@ -71,9 +71,9 @@ jobs:
         shell: bash
         run: |
           gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir release-artifacts \
-            -p 'OrcaSlicer_Windows_V*' \
-            -p 'OrcaSlicer_Mac_universal_*' \
-            -p 'OrcaSlicer_Linux_ubuntu_*'
+            -p 'Porca_Windows_V*' \
+            -p 'Porca_Mac_universal_*' \
+            -p 'Porca_Linux_ubuntu_*'
 
       - name: Assemble Porca downloads
         env:

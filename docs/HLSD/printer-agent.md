@@ -25,6 +25,19 @@ changing `DeviceManager`, the command callers, or the rest of the agent workflow
 
 ## Components
 
+Porca does not create an Orca Cloud service. Saved `orca` provider entries are
+ignored, including when automatic preset sync was enabled by an earlier build.
+Login, cloud preset sync, shared-profile links and cloud plugin downloads are
+absent from the application workflow. Bambu Cloud remains an explicitly enabled
+vendor account, separate from local printer sessions.
+
+The saved `preset_folder` continues to select the local preset directory without
+requiring authentication. Previously installed plugins in that user's local
+directory are still discovered, and their existing storage directory remains
+available. Startup does not clear, merge or move those files. Installing plugins
+and exporting preset bundles use local files; Bambu login does not switch the
+active preset directory.
+
 The system has four relevant layers:
 
 ```text
@@ -114,7 +127,7 @@ one-shot ElegooCanvas session; the latter sends one start command after a
 complete upload, under the limits in the
 [control matrix](device-control-coverage.md#cc2-upload-and-print).
 
-Cloud operations are selected separately using a provider key. `NetworkAgent` forwards a cloud request
+Optional vendor cloud operations are selected separately using a provider key. `NetworkAgent` forwards a cloud request
 to the matching `ICloudServiceAgent`, and forwards cloud camera operations with a device ID. The
 printer agent receives a cloud-agent pointer through `set_cloud_agent()` when it is created, allowing
 printer communication to obtain cloud tokens without depending on a concrete cloud implementation.
@@ -176,6 +189,11 @@ There are two low-level message paths:
 
 Both paths accept a JSON string, quality-of-service and flag values, and return the existing network
 status code domain. The agent owns the conversion from that JSON contract to its native transport.
+
+Automatic version, access-code and status requests retain failure codes and logging without
+opening unsupported-control dialogs. These requests run during connection setup, saved-printer
+monitoring and retries; rejection does not mean the user attempted a hardware control. Commands
+from interactive controls retain their unsupported-command feedback.
 
 The typed `command_*` methods are the application-facing convenience layer. The five generic defaults
 currently implemented by `IPrinterAgent` construct the existing JSON dialect and route through the
@@ -248,6 +266,11 @@ reports rejected credentials and stops polling. The saved-device owner controls 
 This path retains the HTTP wrapper's existing TLS policy and is not a WSS implementation.
 Print entry points without an implementation return Unsupported; they must not report
 successful delivery when no upload or print-start request took place.
+
+The [U1 send dialog](u1-print-delivery.md) uses the Moonraker print host separately
+from the monitoring agent. It snapshots the selected slice's filament assignments
+and flow-calibration choices, rechecks the physical toolheads after upload, then
+starts the job through the U1's parameterized SD-card command.
 
 The provider mapping is currently selected by `GUI_App`: the Bambu agent maps to the Bambu cloud
 provider and other agents map to the Orca cloud provider. The generation check protects that existing

@@ -1825,20 +1825,12 @@ std::vector<std::string> AppConfig::get_cloud_providers() const
 {
     std::vector<std::string> result;
     std::string providers = get(SETTING_CLOUD_PROVIDERS);
-    if (providers.empty()) {
-        result.push_back("orca");
-        return result;
-    }
 
     std::stringstream ss(providers);
     std::string provider;
     while (std::getline(ss, provider, ';')) {
-        if (!provider.empty())
+        if (!provider.empty() && provider != "orca")
             result.push_back(provider);
-    }
-    // Ensure "orca" is always present
-    if (std::find(result.begin(), result.end(), "orca") == result.end()) {
-        result.insert(result.begin(), "orca");
     }
     return result;
 }
@@ -1861,6 +1853,7 @@ bool AppConfig::has_cloud_provider(const std::string& provider) const
 
 void AppConfig::add_cloud_provider(const std::string& provider)
 {
+    if (provider == "orca") return;
     auto providers = get_cloud_providers();
     if (std::find(providers.begin(), providers.end(), provider) == providers.end()) {
         providers.push_back(provider);
@@ -1870,8 +1863,6 @@ void AppConfig::add_cloud_provider(const std::string& provider)
 
 void AppConfig::remove_cloud_provider(const std::string& provider)
 {
-    if (provider == "orca")
-        return; // Cannot remove orca
     auto providers = get_cloud_providers();
     providers.erase(std::remove(providers.begin(), providers.end(), provider), providers.end());
     set_cloud_providers(providers);

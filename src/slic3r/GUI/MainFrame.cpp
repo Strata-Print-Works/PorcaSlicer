@@ -396,7 +396,6 @@ static wxIcon main_frame_icon(GUI_App::EAppMode app_mode)
 #define BORDERLESS_FRAME_STYLE (wxMINIMIZE_BOX | wxMAXIMIZE_BOX | wxCLOSE_BOX)
 #endif
 
-wxDEFINE_EVENT(EVT_SYNC_CLOUD_PRESET,     SimpleEvent);
 
 MainFrame::MainFrame() :
 DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_STYLE, "mainframe")
@@ -607,7 +606,6 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
         m_tabpanel->SelectPageByName(evt.GetString());
     });
 
-    Bind(EVT_SYNC_CLOUD_PRESET, &MainFrame::on_select_default_preset, this);
 
 //    Bind(wxEVT_MENU,
 //        [this](wxCommandEvent&)
@@ -1602,7 +1600,7 @@ void MainFrame::init_tabpanel() {
     if (wxGetApp().is_editor()) {
         m_library_page = new LazyPage<ModelLibraryPanel>(m_tabpanel, TAB_ID_LIBRARY, 70);
         m_lazy_pages.push_back(m_library_page);
-        m_tabpanel->AddPage(TAB_ID_LIBRARY, m_library_page, _L("Library"), "tab_auxiliary_active");
+        // Keep Library out of the tab bar for now; unlisted lazy pages are not prebuilt.
     }
 
     m_project_page = new LazyPage<ProjectPanel>(m_tabpanel, TAB_ID_PROJECT, 60);
@@ -3669,23 +3667,6 @@ void MainFrame::init_menubar_as_editor()
         },
         "", nullptr, []() { return true; }, this);
 
-    append_menu_item(
-        top_menu, wxID_ANY, _L("Sync Presets"), _L("Pull and apply the latest presets from OrcaCloud"),
-        [this](wxCommandEvent&) {
-            if (!wxGetApp().is_user_login()) {
-                MessageDialog info_dlg(this, _L("You must be logged in to sync presets from cloud."),
-                    _L("Sync Presets"), wxOK | wxICON_INFORMATION);
-                info_dlg.ShowModal();
-                return;
-            }
-            if (m_plater)
-                m_plater->get_notification_manager()->push_notification(
-                    into_u8(_L("Syncing presets from cloud\u2026")));
-            wxGetApp().restart_sync_user_preset();
-        }, "", nullptr,
-        []() {
-            return wxGetApp().is_user_login() && !wxGetApp().app_config->get_stealth_mode();
-        }, this);
 
     top_menu->AppendSeparator();
     append_menu_item(
@@ -3773,23 +3754,6 @@ void MainFrame::init_menubar_as_editor()
         },
         "", nullptr, []() { return true; }, this);
 
-    append_menu_item(
-        fileMenu, wxID_ANY, _L("Sync Presets"), _L("Pull and apply the latest presets from OrcaCloud"),
-        [this](wxCommandEvent&) {
-            if (!wxGetApp().is_user_login()) {
-                MessageDialog info_dlg(this, _L("You must be logged in to sync presets from cloud."),
-                    _L("Sync Presets"), wxOK | wxICON_INFORMATION);
-                info_dlg.ShowModal();
-                return;
-            }
-            if (m_plater)
-                m_plater->get_notification_manager()->push_notification(
-                    into_u8(_L("Syncing presets from cloud\u2026")));
-            wxGetApp().restart_sync_user_preset();
-        }, "", nullptr,
-        []() {
-            return wxGetApp().is_user_login() && !wxGetApp().app_config->get_stealth_mode();
-        }, this);
 
     fileMenu->AppendSeparator();
     append_menu_item(
@@ -4834,12 +4798,6 @@ void MainFrame::update_ui_from_settings()
 }
 
 
-void MainFrame::show_sync_dialog()
-{
-    SimpleEvent* evt = new SimpleEvent(EVT_SYNC_CLOUD_PRESET);
-    wxQueueEvent(this, evt);
-}
-
 void MainFrame::update_side_preset_ui()
 {
     // select last preset
@@ -4855,41 +4813,6 @@ void MainFrame::update_side_preset_ui()
     //take off multi machine
     if (MultiMachinePage* multi_machine = MultiMachinePage::if_built())
         multi_machine->clear_page();
-}
-
-void MainFrame::on_select_default_preset(SimpleEvent& evt)
-{
-    MessageDialog dialog(this,
-                    _L("Do you want to synchronize your personal data from Orca Cloud?\n"
-                        "It contains the following information:\n"
-                        "1. The Process presets\n"
-                        "2. The Filament presets\n"
-                        "3. The Printer presets"),
-                    _L("Synchronization"),
-                    wxCENTER |
-                    wxYES_DEFAULT | wxYES_NO |
-                    wxICON_INFORMATION);
-
-    /* get setting list */
-    NetworkAgent* agent = wxGetApp().getAgent();
-    switch ( dialog.ShowModal() )
-    {
-        case wxID_YES: {
-            wxGetApp().app_config->set_bool("sync_user_preset", true);
-            wxGetApp().start_sync_user_preset(true);
-            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " sync_user_preset: true";
-            break;
-        }
-        case wxID_NO:
-            wxGetApp().app_config->set_bool("sync_user_preset", false);
-            wxGetApp().stop_sync_user_preset();
-            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " sync_user_preset: false";
-            break;
-        default:
-            break;
-    }
-
-    update_side_preset_ui();
 }
 
 std::string MainFrame::get_base_name(const wxString &full_name, const char *extension) const

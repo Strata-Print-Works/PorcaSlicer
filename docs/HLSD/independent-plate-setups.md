@@ -310,9 +310,13 @@ normal project persistence without additional metadata.
 
 CC2 filament synchronization captures the active plate's identity and full edited
 setup before its read-only request. Results are discarded after a plate, setup or
-connection change. The user reviews reported CANVAS materials against compatible
-local presets; selected known-color entries are appended without replacing
-existing assignments. Unrelated plates retain their material lists. Explicit
+connection change. Known materials and colors sync automatically using an installed,
+compatible plain generic preset. Printer-specific generics take precedence over
+the library fallback, including when hidden from the normal picker. Equally preferred
+matches, unknown materials and missing colors require review; the dialog lists only
+unmatched slots and allows skipping them. Explicitly empty trays are ignored.
+Synced entries are appended without replacing existing assignments, and repeated
+syncs do not duplicate the same preset and color. Unrelated plates retain their material lists. Explicit
 same-model nozzle correction changes only the affected destination's nozzle and
 preset identity, preserving process edits and placement while invalidating its
 incompatible slice.

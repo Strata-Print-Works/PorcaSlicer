@@ -2,6 +2,8 @@
 # sources. Keep the full suites' copies for integration coverage. Do not link
 # libslic3r or libslic3r_gui here: either would bring back the expensive rebuild.
 add_executable(porca_unit_tests
+    ../slic3rutils/test_snapmaker_print_task.cpp
+    ../../src/slic3r/Utils/SnapmakerPrintTask.cpp
     ../libslic3r/test_project_slice_queue.cpp
     ../libslic3r/test_project_backup_state.cpp
     ../slic3rutils/test_model_library.cpp

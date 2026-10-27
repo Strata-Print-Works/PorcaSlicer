@@ -19,13 +19,13 @@ class PorcaReleaseTests(unittest.TestCase):
         self.tag = "porca-preview-test"
         self.commit = "a" * 40
         self.run = "https://github.com/Strata-Print-Works/PorcaSlicer/actions/runs/123"
-        self.put("OrcaSlicer_Mac_universal_V2.5.0-dev", "app.dmg", b"macOS payload")
+        self.put("Porca_Mac_universal_V2.5.0-dev", "app.dmg", b"macOS payload")
         for arch in ("x64", "arm64"):
-            self.put(f"OrcaSlicer_Windows_V2.5.0-dev_{arch}", f"Porca_Windows_Installer_V2.5.0-dev_{arch}.exe", b"installer " + arch.encode())
-            self.put(f"OrcaSlicer_Windows_V2.5.0-dev_{arch}_portable", "orca-slicer.exe", b"application " + arch.encode())
-            self.put(f"OrcaSlicer_Windows_V2.5.0-dev_{arch}_portable", "resources/LICENSE.txt", b"license")
-        self.put("OrcaSlicer_Linux_ubuntu_2404_V2.5.0-dev", "app.AppImage", b"x86_64 payload")
-        self.put("OrcaSlicer_Linux_ubuntu_2404_aarch64_V2.5.0-dev", "app.AppImage", b"aarch64 payload")
+            self.put(f"Porca_Windows_V2.5.0-dev_{arch}", f"Porca_Windows_Installer_V2.5.0-dev_{arch}.exe", b"installer " + arch.encode())
+            self.put(f"Porca_Windows_V2.5.0-dev_{arch}_portable", "orca-slicer.exe", b"application " + arch.encode())
+            self.put(f"Porca_Windows_V2.5.0-dev_{arch}_portable", "resources/LICENSE.txt", b"license")
+        self.put("Porca_Linux_ubuntu_2404_V2.5.0-dev", "app.AppImage", b"x86_64 payload")
+        self.put("Porca_Linux_ubuntu_2404_aarch64_V2.5.0-dev", "app.AppImage", b"aarch64 payload")
 
     def put(self, artifact, name, data):
         path = self.source / artifact / name
@@ -49,13 +49,13 @@ class PorcaReleaseTests(unittest.TestCase):
         self.assertEqual(json.loads((self.output / "build-manifest.json").read_text())["commit"], self.commit)
 
     def test_missing_platform_does_not_leave_partial_release(self):
-        (self.source / "OrcaSlicer_Mac_universal_V2.5.0-dev" / "app.dmg").unlink()
+        (self.source / "Porca_Mac_universal_V2.5.0-dev" / "app.dmg").unlink()
         with self.assertRaises(ValueError):
             self.build()
         self.assertFalse(self.output.exists())
 
     def test_duplicate_platform_is_rejected(self):
-        self.put("OrcaSlicer_Mac_universal_other", "other.dmg", b"other build")
+        self.put("Porca_Mac_universal_other", "other.dmg", b"other build")
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             self.build()
 

@@ -554,12 +554,15 @@ std::string PluginManager::get_storage_dir(const std::string& plugin_key) const
     }
 
     auto agent = m_cloud_service.get_cloud_agent();
-    if (!agent)
-        throw std::runtime_error("Cloud plugin storage is unavailable before networking is initialized");
-
-    const std::string user_id = agent->get_user_id();
+    std::string user_id;
+    if (agent)
+        user_id = agent->get_user_id();
+    else {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        user_id = m_cloud_user_id;
+    }
     if (user_id.empty())
-        throw std::runtime_error("Cloud plugin storage is unavailable without a logged-in user");
+        throw std::runtime_error("The saved plugin storage folder is unavailable.");
 
     if (!is_valid_plugin_id(plugin_key))
         throw std::runtime_error("The current cloud plugin key is not a valid folder name");

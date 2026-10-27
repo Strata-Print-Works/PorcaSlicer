@@ -902,8 +902,8 @@ public:
 
     /* Msg for display MsgFn */
     typedef std::function<void(std::string topic, std::string payload)> MsgFn;
-    int publish_json(const nlohmann::json& json_item, int qos = 0, int flag = 0) ;
-    int publish_json(const std::string& json_str, int qos = 0, int flag = 0) = delete;
+    int publish_json(const nlohmann::json& json_item, int qos = 0, int flag = 0, bool show_unsupported = true);
+    int publish_json(const std::string& json_str, int qos = 0, int flag = 0, bool show_unsupported = true) = delete;
     int cloud_publish_json(std::string json_str, int qos = 0, int flag = 0);
     int local_publish_json(std::string json_str, int qos = 0, int flag = 0);
     int parse_json(std::string tunnel, std::string payload, bool key_filed_only = false);

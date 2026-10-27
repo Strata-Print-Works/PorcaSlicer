@@ -130,7 +130,6 @@ struct PluginDialogItem
     PluginAvailableActions available_actions;
 };
 
-constexpr bool kFetchCloudMeta      = true;
 constexpr bool kUseCurrentCloudMeta = false;
 
 // The type of a package's first loaded capability. A package that is not loaded has no type.
@@ -236,21 +235,6 @@ std::string to_string(PluginUpdateStatus status)
     return "normal";
 }
 
-PluginSource derive_plugin_source(const PluginDescriptor& descriptor)
-{
-    const bool has_cloud_meta = descriptor.cloud.has_value();
-    const bool is_cloud       = descriptor.is_cloud_plugin();
-    const bool is_mine        = is_cloud && has_cloud_meta && descriptor.cloud->is_mine;
-
-    if (is_cloud && has_cloud_meta && descriptor.cloud->orphaned)
-        return PluginSource::Orphaned;
-    if (is_mine)
-        return PluginSource::Mine;
-    if (is_cloud)
-        return PluginSource::Subscribed;
-    return PluginSource::Local;
-}
-
 PluginAvailableActions evaluate_action_policy(const PluginDialogItem& item)
 {
     PluginAvailableActions available_actions;
@@ -333,14 +317,14 @@ PluginDialogItem build_plugin_dialog_item(const PluginDescriptor& descriptor)
     }
     for (const PluginChangelog& entry : descriptor.changelog)
         item.changelog.push_back({entry.version, entry.changelog, entry.created_time});
-    item.source                = derive_plugin_source(descriptor);
-    item.update_status         = descriptor.get_update_status();
+    item.source                = PluginSource::Local;
+    item.update_status         = PluginUpdateStatus::Normal;
     item.error_text            = descriptor.normalized_error();
     item.has_error             = descriptor.has_error();
-    item.is_cloud_plugin       = descriptor.is_cloud_plugin();
-    item.orphaned              = descriptor.cloud.has_value() && descriptor.cloud->orphaned;
+    item.is_cloud_plugin       = false;
+    item.orphaned              = false;
     item.has_local_package     = descriptor.has_local_package();
-    item.unauthorized          = descriptor.is_unauthorized();
+    item.unauthorized          = false;
     item.is_loaded             = manager.is_plugin_loaded(descriptor.plugin_key);
     item.loading               = manager.is_plugin_load_in_progress(descriptor.plugin_key);
     item.has_script_capability = false;
@@ -350,7 +334,8 @@ PluginDialogItem build_plugin_dialog_item(const PluginDescriptor& descriptor)
             item.has_script_capability = true;
     }
     item.sharing_token = descriptor.sharing_token;
-    item.thumbnail_url = descriptor.thumbnail_url;
+    // Cloud thumbnails may reference upstream services; installed packages use local text.
+    item.thumbnail_url.clear();
 
     item.status = resolve_plugin_status(item.loading, item.has_error, item.is_loaded);
 
@@ -466,20 +451,7 @@ void refresh_plugin_metadata_blocking(bool fetch_cloud)
 
 void open_plugin_hub()
 {
-    std::string cloud_base_url = "https://cloud.orcaslicer.com";
-
-    if (wxGetApp().getAgent()) {
-        auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(wxGetApp().getAgent()->get_cloud_agent());
-        if (orca_agent && !orca_agent->get_cloud_base_url().empty())
-            cloud_base_url = orca_agent->get_cloud_base_url();
-    }
-
-    while (!cloud_base_url.empty() && cloud_base_url.back() == '/')
-        cloud_base_url.pop_back();
-    if (cloud_base_url.empty())
-        cloud_base_url = "https://cloud.orcaslicer.com";
-
-    wxLaunchDefaultBrowser(wxString::FromUTF8(cloud_base_url + "/app/plugins/plugin-hub"));
+    wxGetApp().install_local_plugin();
 }
 
 bool install_local_plugin_package(const boost::filesystem::path& package_file, wxWindow* parent, wxString& message)
@@ -659,7 +631,6 @@ nlohmann::json PluginsDialog::localized_strings() const
         {"config_no_capabilities", _u8L("This plugin exposes no capabilities")},
         {"config_activate", _u8L("Activate this plugin to configure its capabilities")},
         {"invalid_json", _u8L("Invalid JSON")},
-        {"view_on_cloud", _u8L("View on OrcaCloud <a>here</a>")},
         {"status_activated", _u8L("Activated")},
         {"status_loading", _u8L("Loading")},
         {"status_error", _u8L("Error")},
@@ -671,7 +642,6 @@ nlohmann::json PluginsDialog::localized_strings() const
         {"status_runtime_error_desc", _u8L("This plugin is loaded but a capability reported an error.")},
         {"status_inactive_desc", _u8L("This plugin is inactive. Activate it to install or load it.")},
         {"select_plugin", _u8L("Select a plugin to view its status and details.")},
-        {"orphaned_note", _u8L("Orphaned: This plugin is no longer subscribed or available in OrcaCloud. The local copy remains installed and can still be used.")},
         {"newer_version_note", _u8L("A newer plugin version is available.")},
         {"unauthorized_note", _u8L("Cloud updates are unavailable because this plugin is unauthorized for updates.")},
     };
@@ -750,10 +720,7 @@ void PluginsDialog::handle_web_command(const nlohmann::json& payload)
         run_script_plugin_capability(payload.value("plugin_key", ""), payload.value("capability_name", ""));
     } else if (command == "open_terminal") {
         m_open_terminal_dlg_fn();
-    } else if (command == "update_plugin") {
-        update_plugin(payload.value("plugin_key", ""));
-    } else if (command == "open_plugin_on_cloud") {
-        open_plugin_on_cloud(payload.value("sharing_token", ""));
+
     } else if (command == "open_plugin_hub") {
         open_plugin_hub();
     } else if (command == "set_plugin_sort") {
@@ -804,8 +771,10 @@ nlohmann::json PluginsDialog::build_plugins_payload() const
     std::vector<PluginDialogItem> items;
     items.reserve(rows.size());
 
-    for (const PluginDescriptor& row : rows)
-        items.push_back(build_plugin_dialog_item(row));
+    for (const PluginDescriptor& row : rows) {
+        if (!row.is_cloud_plugin() || row.has_local_package())
+            items.push_back(build_plugin_dialog_item(row));
+    }
 
     sort_plugin_items_for_dialog(items, m_plugin_sort_key, m_plugin_sort_order);
 
@@ -860,7 +829,7 @@ void PluginsDialog::refresh_plugins()
 {
     BOOST_LOG_TRIVIAL(info) << "Refreshing plugins from Plugins dialog";
 
-    refresh_plugin_metadata_async(_L("Refreshing"), _L("Refreshing plugins data"), kFetchCloudMeta);
+    refresh_plugin_metadata_async(_L("Refreshing"), _L("Refreshing plugins data"), false);
 }
 
 void PluginsDialog::toggle_plugin(const std::string& plugin_key, bool enabled)

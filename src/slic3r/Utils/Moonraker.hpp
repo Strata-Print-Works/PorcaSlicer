@@ -2,10 +2,12 @@
 #define slic3r_Moonraker_hpp_
 
 #include <string>
+#include <functional>
 #include <wx/string.h>
 #include <wx/arrstr.h>
 
 #include "PrintHost.hpp"
+#include "SnapmakerPrintTask.hpp"
 
 class wxArrayString;
 
@@ -49,16 +51,22 @@ public:
     bool get_storage(wxArrayString &storage_path, wxArrayString &storage_name) const override;
     const std::string& get_apikey() const { return m_apikey; }
     const std::string& get_cafile() const { return m_cafile; }
+    bool is_snapmaker_u1() const { return m_snapmaker_u1; }
+    static bool is_snapmaker_u1_config(const DynamicPrintConfig& config);
+    bool fetch_snapmaker_state(SnapmakerPrinterState& state, wxString& error) const;
 
 protected:
     std::string m_host;
     std::string m_apikey;
     std::string m_cafile;
     bool        m_ssl_revoke_best_effort;
+    bool        m_snapmaker_u1 = false;
 
     void set_auth(Http &http) const;
     std::string make_url(const std::string &path) const;
     bool start_print(wxString &error_msg, const std::string &filename) const;
+    bool start_snapmaker_print(const std::string& filename, const SnapmakerPrintTask& task,
+                               const std::function<bool()>& cancelled, wxString& error) const;
 };
 
 }

@@ -1,6 +1,8 @@
 #include "PrintHostDialogs.hpp"
 
 #include <algorithm>
+#include <exception>
+#include <wx/bitmap.h>
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/predicate.hpp>
@@ -40,6 +42,7 @@
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
+#include <wx/statbmp.h>
 #include <wx/string.h>
 #include <wx/textctrl.h>
 #include <wx/checkbox.h>
@@ -78,6 +81,9 @@
 #include "../Utils/CrealityPrint.hpp"
 #include "../Utils/PrinterConnectionStatus.hpp"
 #include "BitmapComboBox.hpp"
+#include "Widgets/ComboBox.hpp"
+#include "Widgets/DropDown.hpp"
+#include "FilamentBitmapUtils.hpp"
 #include "libslic3r_version.h"
 #include "wxExtensions.hpp"
 
@@ -486,6 +492,138 @@ PrintHostSendDialog::PrintHostSendDialog(const fs::path &path, PrintHostPostUplo
     txt_filename->OSXDisableAllSmartSubstitutions();
 #endif
 }
+SnapmakerPrintHostSendDialog::SnapmakerPrintHostSendDialog(const fs::path& path, PrintHostPostUploadActions actions,
+    const wxArrayString& groups, const wxArrayString& paths, const wxArrayString& names, bool switch_tab,
+    SnapmakerPrinterState state, std::vector<SnapmakerPrintFilament> filaments)
+    : PrintHostSendDialog(path, actions, groups, paths, names, switch_tab), m_state(std::move(state))
+{
+    m_task.filaments = std::move(filaments);
+    m_task.calibrate_flow = m_state.flow_calibration && m_state.supports_flow_calibration;
+    m_task.calibrate_toolheads = m_state.calibrate_toolheads;
+    for (size_t i = 0; i < m_state.toolheads.size(); ++i)
+        m_task.toolhead_colors[i] = m_state.toolheads[i].color;
+}
+
+void SnapmakerPrintHostSendDialog::init()
+{
+    PrintHostSendDialog::init();
+    SetTitle(_L("Send to Snapmaker U1"));
+    auto* heading = new Label(this, _L("Assign filaments"));
+    heading->SetFont(Label::Head_14);
+    content_sizer->Add(heading, 0, wxTOP | wxBOTTOM, FromDIP(8));
+    auto* grid = new wxFlexGridSizer(2, FromDIP(8), FromDIP(12));
+    grid->AddGrowableCol(1);
+    const auto swatch = [this](const std::string& value) {
+        std::string rgb = value;
+        if (!rgb.empty() && rgb.front() == '#') rgb.erase(0, 1);
+        if (rgb.size() == 8) rgb.resize(6);
+        wxColour color;
+        if (rgb.size() != 6 || !color.Set(from_u8("#" + rgb))) return wxNullBitmap;
+        return create_filament_bitmap({color}, FromDIP(wxSize(16, 16)));
+    };
+    for (const auto& filament : m_task.filaments) {
+        auto* filament_label = new wxBoxSizer(wxHORIZONTAL);
+        const wxBitmap bitmap = swatch(filament.color);
+        if (bitmap.IsOk())
+            filament_label->Add(new wxStaticBitmap(this, wxID_ANY, bitmap), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+        filament_label->Add(new Label(this, format_wxstr(_L("Filament %1%: %2%"), filament.id + 1, from_u8(filament.type))),
+                            0, wxALIGN_CENTER_VERTICAL);
+        grid->Add(filament_label, 0, wxALIGN_CENTER_VERTICAL);
+        auto* combo = new ::ComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
+        combo->SetMinSize(FromDIP(wxSize(240, 32)));
+        combo->SetKeepDropArrow(true);
+        combo->GetDropDown().SetUseContentWidth(true);
+        combo->Append(_L("Choose a toolhead"), swatch(filament.color));
+        for (size_t i = 0; i < m_state.toolheads.size(); ++i) {
+            const auto& head = m_state.toolheads[i];
+            wxString text = format_wxstr(_L("Toolhead %1%: %2%"), i + 1,
+                head.loaded ? from_u8(head.type) : _L("No filament"));
+            text += wxString::Format(" (%.1f mm)", head.nozzle_diameter);
+            combo->Append(text, swatch(head.color));
+        }
+        const int head = filament.default_toolhead;
+        combo->SetSelection(head >= 0 && head < 4 && snapmaker_toolhead_matches(filament, m_state.toolheads[head]) &&
+            snapmaker_colors_match(filament.color, m_state.toolheads[head].color) ? head + 1 : 0);
+        combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent& e) { update_choices(); e.Skip(); });
+        m_assignments.push_back(combo);
+        grid->Add(combo, 1, wxEXPAND);
+    }
+    content_sizer->Add(grid, 0, wxEXPAND | wxBOTTOM, FromDIP(12));
+    auto* calibration = new wxBoxSizer(wxHORIZONTAL);
+    m_calibrate = new ::CheckBox(this);
+    m_calibrate->SetValue(m_task.calibrate_flow);
+    m_calibrate->Enable(m_state.supports_flow_calibration);
+    m_calibrate->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent& e) { update_choices(); e.Skip(); });
+    calibration->Add(m_calibrate, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+    calibration->Add(new Label(this, _L("Calibrate flow before printing")), 1, wxALIGN_CENTER_VERTICAL);
+    content_sizer->Add(calibration, 0, wxEXPAND | wxBOTTOM, FromDIP(8));
+    auto* heads = new wxWrapSizer(wxHORIZONTAL);
+    for (size_t i = 0; i < 4; ++i) {
+        auto* row = new wxBoxSizer(wxHORIZONTAL);
+        m_calibrate_heads[i] = new ::CheckBox(this);
+        m_calibrate_heads[i]->SetValue(m_task.calibrate_toolheads[i]);
+        m_calibrate_heads[i]->Bind(wxEVT_TOGGLEBUTTON, [this](wxCommandEvent& e) { update_choices(); e.Skip(); });
+        row->Add(m_calibrate_heads[i], 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+        row->Add(new Label(this, format_wxstr(_L("Toolhead %1%"), i + 1)), 0, wxALIGN_CENTER_VERTICAL);
+        heads->Add(row, 0, wxRIGHT | wxBOTTOM, FromDIP(12));
+    }
+    content_sizer->Add(heads, 0, wxEXPAND);
+    m_assignment_warning = new wxStaticText(this, wxID_ANY, wxEmptyString);
+    content_sizer->Add(m_assignment_warning, 0, wxEXPAND | wxTOP, FromDIP(8));
+    auto* hint = new Label(this, _L("Assignments and calibration apply when you choose Upload and Print."));
+    hint->Wrap(FromDIP(480));
+    content_sizer->Add(hint, 0, wxTOP, FromDIP(8));
+    wxGetApp().UpdateDlgDarkUI(this);
+    update_choices();
+    GetSizer()->SetSizeHints(this);
+    CenterOnParent();
+}
+
+SnapmakerPrintTask SnapmakerPrintHostSendDialog::selected_task() const
+{
+    SnapmakerPrintTask task = m_task;
+    task.toolheads.clear();
+    for (const auto* combo : m_assignments) task.toolheads.push_back(combo->GetSelection() - 1);
+    task.calibrate_flow = m_calibrate->GetValue();
+    for (size_t i = 0; i < 4; ++i) task.calibrate_toolheads[i] = m_calibrate_heads[i]->GetValue();
+    return task;
+}
+
+void SnapmakerPrintHostSendDialog::update_choices()
+{
+    const auto task = selected_task();
+    for (size_t i = 0; i < 4; ++i) {
+        const bool used = std::find(task.toolheads.begin(), task.toolheads.end(), int(i)) != task.toolheads.end();
+        m_calibrate_heads[i]->Enable(task.calibrate_flow && used);
+    }
+    std::string reason;
+    const bool valid = validate_snapmaker_print_task(task, m_state, reason);
+    if (auto* print_button = get_button(wxID_YES)) print_button->Enable(valid);
+    m_assignment_warning->SetLabel(valid ? wxString() : _L(reason.c_str()));
+    m_assignment_warning->Wrap(FromDIP(480));
+    GetSizer()->SetSizeHints(this);
+    Layout();
+}
+
+void SnapmakerPrintHostSendDialog::EndModal(int result)
+{
+    if (result == wxID_OK && post_action() == PrintHostPostUploadAction::StartPrint) {
+        std::string reason;
+        if (!validate_snapmaker_print_task(selected_task(), m_state, reason)) {
+            show_error(this, _L(reason.c_str()));
+            return;
+        }
+        try { snapmaker_start_command(filename().generic_string(), selected_task()); }
+        catch (const std::exception& e) { show_error(this, _L(e.what())); return; }
+    }
+    PrintHostSendDialog::EndModal(result);
+}
+
+std::map<std::string, std::string> SnapmakerPrintHostSendDialog::extendedInfo() const
+{
+    return {{"snapmaker_u1_task", encode_snapmaker_print_task(selected_task())}};
+}
+
 void PrintHostSendDialog::init()
 {
     const auto& path = m_path;

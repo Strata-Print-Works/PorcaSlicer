@@ -405,9 +405,7 @@ public:
 
     void        update_ui_from_settings();
     //BBS
-    void        show_sync_dialog();
     void        update_side_preset_ui();
-    void        on_select_default_preset(SimpleEvent& evt);
 
     bool        is_loaded() const { return m_loaded; }
     bool        is_last_input_file() const  { return !m_qs_last_input_file.IsEmpty(); }

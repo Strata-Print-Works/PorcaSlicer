@@ -1068,20 +1068,6 @@ void GUI_App::post_init()
         show_network_plugin_download_dialog(false);
     }
 
-    // Start preset sync after project opened, otherwise we could have preset change during project opening which could cause crash 
-    if (app_config->get("sync_user_preset") == "true") {
-        // BBS loading user preset
-        // Always async, not such startup step
-        // BOOST_LOG_TRIVIAL(info) << "Loading user presets...";
-        // scrn->SetText(_L("Loading user presets..."));
-        if (m_agent) {
-            start_sync_user_preset();
-        }
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " sync_user_preset: true";
-    } else {
-        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " sync_user_preset: false";
-    }
-
     // The extra CallAfter() is needed because of Mac, where this is the only way
     // to popup a modal dialog on start without screwing combo boxes.
     // This is ugly but I honestly found no better way to do it.
@@ -1104,33 +1090,6 @@ void GUI_App::post_init()
               // this->check_privacy_version(0);
               request_user_handle(0, cloud_provider);
             }
-        });
-    }
-
-    // Orca: notify users upgrading from a pre-2.4.0 version that profile syncing
-    // moved from Bambu Cloud to Orca Cloud.
-    if (is_editor() && m_last_config_version && m_last_config_version->valid()
-        && *m_last_config_version < Semver(2, 4, 0)) {
-        CallAfter([] {
-            const wxString wiki_url = "https://www.orcaslicer.com/wiki/user_profiles/user_profiles.html#profiles-missing-after-updating-from-bambu-cloud";
-            MessageDialog dlg(nullptr,
-                _L("Since version 2.4.0, Porca syncs user profiles through Orca Cloud instead of Bambu Cloud.\n\n"
-                   "To migrate your existing profiles, log in to Orca Cloud and they will be transferred automatically. "
-                   "To learn more about how Porca stores and syncs your profiles, or to migrate your presets manually, check out our wiki.\n\n"
-                   "If you did not use Bambu Cloud to sync profiles, this change does not affect you and you can safely ignore this message."),
-                _L("Profile syncing change"),
-                wxOK,
-                "",
-                _L("Learn more"),
-                [wiki_url](const wxString &) { wxLaunchDefaultBrowser(wiki_url); });
-            // Hack: the "Learn more" link renders the message in a wxHtmlWindow whose
-            // height is underestimated for multi-paragraph text, leaving a scrollbar.
-            // The html sits in a proportion-1 sizer chain, so grow the dialog (never
-            // shrink it below its content width) to give the text enough room.
-            const wxSize sz = dlg.GetSize();
-            dlg.SetSize(std::max(sz.x, dlg.FromDIP(280)), std::max(sz.y, dlg.FromDIP(200)));
-            dlg.CenterOnParent();
-            dlg.ShowModal();
         });
     }
 
@@ -1827,16 +1786,6 @@ void GUI_App::restart_networking()
         if (plater_)
             plater_->get_notification_manager()->bbl_close_plugin_install_notification();
 
-        if (m_agent->is_user_login()) {
-            remove_user_presets();
-            enable_user_preset_folder(true);
-            preset_bundle->load_user_presets(m_agent->get_user_id(), ForwardCompatibilitySubstitutionRule::Enable);
-            mainframe->update_side_preset_ui();
-        }
-
-        if (app_config->get("sync_user_preset") == "true") {
-            start_sync_user_preset();
-        }
         // if (mainframe && this->app_config->get("staff_pick_switch") == "true") {
         //     if (mainframe->m_webview) { mainframe->m_webview->SendDesignStaffpick(has_model_mall()); }
         // }
@@ -3530,33 +3479,10 @@ bool GUI_App::on_init_inner()
     copy_network_if_available();
     on_init_network();
 
-    if (m_agent)
-        plugin_mgr.set_cloud_agent(std::dynamic_pointer_cast<OrcaCloudServiceAgent>(m_agent->get_cloud_agent()));
-
-    if (m_agent && m_agent->is_user_login()) {
-        enable_user_preset_folder(true);
-        plugin_mgr.set_cloud_user(m_agent->get_user_id());
-        // If there is a user logged in we do an immediate sync.
-        std::vector<std::string> not_found, unauthorized;
-        plugin_mgr.fetch_plugins_from_cloud(&not_found, &unauthorized);
-        if (plater()) {
-            for (const auto& uuid : not_found) {
-                plater()->get_notification_manager()->push_notification(
-                    NotificationType::CustomNotification,
-                    NotificationManager::NotificationLevel::RegularNotificationLevel,
-                    format(_L("Plugin %s is no longer available."), uuid));
-            }
-            for (const auto& uuid : unauthorized) {
-                plater()->get_notification_manager()->push_notification(
-                    NotificationType::CustomNotification,
-                    NotificationManager::NotificationLevel::RegularNotificationLevel,
-                    format(_L("Plugin %s access is unauthorized."), uuid));
-            }
-        }
-    } else {
-        enable_user_preset_folder(false);
-        plugin_mgr.set_cloud_user("");
-    }
+    // Keep the selected preset/plugin folder even if it came from an old cloud
+    // account. Its files remain local and usable without logging in.
+    preset_bundle->update_user_presets_directory(
+        preset_folder.empty() ? DEFAULT_USER_FOLDER_NAME : preset_folder);
 
     // BBS if load user preset failed
     //if (loaded_preset_result != 0) {
@@ -4967,11 +4893,15 @@ void GUI_App::ShowDownNetPluginDlg() {
 
 void GUI_App::ShowUserLogin(bool show, const std::string& provider)
 {
-    // Show user Login Dialog for specified cloud
+    // Porca only offers explicitly enabled vendor accounts.
+    if (provider != BBL_CLOUD_PROVIDER || !m_agent ||
+        !app_config->has_cloud_provider(provider) || app_config->get_stealth_mode())
+        return;
     if (show) {
         try {
-            delete login_dlg;
             auto cloud_agent = m_agent->get_cloud_agent(provider);
+            if (!cloud_agent) return;
+            delete login_dlg;
             login_dlg        = new ZUserLogin(cloud_agent);
             login_dlg->ShowModal();
         } catch (std::exception &) {
@@ -5213,6 +5143,7 @@ void GUI_App::request_login(bool show_user_info, const std::string& provider/* =
 
 void GUI_App::get_login_info(const std::string& provider/* = ORCA_CLOUD_PROVIDER*/)
 {
+    if (provider != BBL_CLOUD_PROVIDER || !app_config->has_cloud_provider(provider)) return;
     if (m_agent) {
         if (m_agent->is_user_login(provider)) {
             std::string login_cmd = m_agent->build_login_cmd(provider);
@@ -5880,9 +5811,8 @@ void GUI_App::on_user_login_handle(wxCommandEvent &evt)
         return;
     }
 
-    int online_login = evt.GetInt();
     std::string provider = evt.GetString().ToStdString();
-    if (provider.empty()) provider = ORCA_CLOUD_PROVIDER;
+    if (provider != BBL_CLOUD_PROVIDER) return;
 
     // Reset 401 grace period so transient token-propagation 401s
     // during login warmup don't trigger immediate logout.
@@ -5896,37 +5826,6 @@ void GUI_App::on_user_login_handle(wxCommandEvent &evt)
     boost::thread update_thread = boost::thread([dev, provider] {
         dev->update_user_machine_list_info(provider);
     });
-
-    if (online_login && provider == ORCA_CLOUD_PROVIDER) {
-        // The steps below run synchronously on the UI thread (cloud plugin fetch and
-        // user-preset load both block on network/disk). Show an indeterminate progress
-        // dialog so the window isn't frozen without feedback. Percentages are cosmetic
-        // milestones, not measured progress.
-        ProgressDialog dlg(_L("Loading"), _L("Syncing your account…"), 100, mainframe, wxPD_AUTO_HIDE | wxPD_APP_MODAL);
-
-        dlg.Update(10, _L("Migrating presets…"));
-        maybe_migrate_user_presets_on_login();
-        remove_user_presets();
-        enable_user_preset_folder(true);
-
-        dlg.Update(40, _L("Fetching plugins…"));
-        PluginManager::instance().fetch_plugins_from_cloud();
-        if (m_plugins_dlg)
-            m_plugins_dlg->update_plugin_dialog_ui();
-
-        dlg.Update(70, _L("Loading user presets…"));
-        preset_bundle->load_user_presets(m_agent->get_user_id(provider), ForwardCompatibilitySubstitutionRule::Enable);
-        mainframe->update_side_preset_ui();
-
-        dlg.Update(100);
-        GUI::wxGetApp().mainframe->show_sync_dialog();
-    }
-
-    // Ensure sync thread starts after login completes (regardless of login type).
-    // Safe: start_sync_user_preset() has a dedup guard (m_user_sync_token) to prevent duplicate threads.
-    if (app_config->get("sync_user_preset") == "true") {
-        start_sync_user_preset();
-    }
 }
 
 
@@ -8629,12 +8528,12 @@ void GUI_App::open_plugins_dialog(size_t open_on_tab, const std::string& highlig
 
 void GUI_App::refresh_plugins()
 {
-    // The metadata refresh blocks on disc discovery and a cloud round-trip, so run it on a worker
+    // Discover installed packages on a worker
     // and report completion through the notification manager -- the speed dial needs no dialog.
     std::thread([]() {
         wxString error;
         try {
-            refresh_plugin_metadata_blocking(/*fetch_cloud=*/true);
+            refresh_plugin_metadata_blocking(/*fetch_cloud=*/false);
         } catch (const std::exception& ex) {
             error = from_u8(ex.what());
         } catch (...) {

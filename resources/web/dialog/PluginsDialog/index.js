@@ -1,9 +1,5 @@
 const pluginsById = new Map();
 const pluginInstallActions = {
-  "explore": {
-    label: T("install_plugin", "Install plugin"),
-    command: "open_plugin_hub"
-  },
   "install-local": {
     label: T("install_local_plugin", "Install local plugin"),
     command: "install_local_plugin"
@@ -18,7 +14,7 @@ let searchExpandOverride = new Map();
 let selectedPluginId = "";
 let contextPluginId = "";
 let activeDetailTab = "plugin-info";
-let selectedInstallAction = "explore";
+let selectedInstallAction = "install-local";
 // Config tab: the capability whose config is shown. Name and type together address it natively.
 let selectedCapabilityName = "";
 let selectedCapabilityType = "";
@@ -192,7 +188,7 @@ function StoreSplitRatio(ratio) {
 
 function NormalizeInstallAction(action) {
   const normalized = String(action || "");
-  return pluginInstallActions[normalized] ? normalized : "explore";
+  return pluginInstallActions[normalized] ? normalized : "install-local";
 }
 
 function SetSelectedInstallAction(action, notifyNative = false) {
@@ -1229,25 +1225,9 @@ function RenderDescription(plugin) {
 
   node.replaceChildren();
 
-  // Descriptions come from the plugin's Python header; a cloud plugin that is not installed yet has
-  // no header, so link to OrcaCloud instead.
   const description = String(plugin?.description || "").trim();
   if (description && description !== "No description.") {
     node.textContent = description;
-    return;
-  }
-
-  const isCloud = plugin && (plugin.source === "mine" || plugin.source === "subscribed" || plugin.source === "orphaned");
-  if (isCloud && String(plugin?.sharing_token || "")) {
-    const link = document.createElement("a");
-    link.href = "#";
-    link.className = "plugin-cloud-link";
-    link.title = T("open_in_browser", "Open this plugin in your browser");
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      sendOpenPluginOnCloud(String(plugin.plugin_key || ""));
-    });
-    AppendTemplate(node, T("view_on_cloud", "View on OrcaCloud <a>here</a>"), link);
     return;
   }
 
@@ -1391,13 +1371,6 @@ function RenderDetailSummary(container, plugin) {
   message.className = errorText ? "detail-description detail-error-text" : "detail-description";
   message.textContent = errorText || StatusDescription(plugin);
   container.appendChild(message);
-
-  if (plugin.orphaned === true) {
-    const warning = document.createElement("div");
-    warning.className = "detail-description detail-warning-text";
-    warning.textContent = T("orphaned_note", "Orphaned: This plugin is no longer subscribed or available in OrcaCloud. The local copy remains installed and can still be used.");
-    container.appendChild(warning);
-  }
 
   const updateStatus = GetUpdateStatus(plugin);
   if (updateStatus === "update_available") {

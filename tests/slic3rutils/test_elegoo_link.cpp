@@ -5,6 +5,9 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "slic3r/Utils/ElegooLink.hpp"
 #include "slic3r/Utils/ElegooLinkProtocol.hpp"
+#include "slic3r/Utils/ElegooCanvasPresets.hpp"
+#include "libslic3r/Config.hpp"
+#include "libslic3r/Preset.hpp"
 #include "slic3r/Utils/PrintHost.hpp"
 #include "slic3r/Utils/SavedPrinterConnection.hpp"
 #include <memory>
@@ -355,6 +358,83 @@ TEST_CASE("CANVAS review excludes unknown materials and rejects stale plate or r
     CHECK_FALSE(request == ElegooSyncTarget{12, "new-material-edits", "printer-a"});
     CHECK_FALSE(request == ElegooSyncTarget{12, "edited-plate-a", "printer-b"});
 }
+
+namespace {
+struct CanvasFilaments : PresetCollection {
+    CanvasFilaments() : PresetCollection(Preset::TYPE_FILAMENT, Preset::filament_options(),
+                                        static_cast<const PrintRegionConfig&>(FullPrintConfig::defaults())) {}
+
+    void add(const std::string& name, const std::string& type, bool targeted = false, bool compatible = true) {
+        DynamicPrintConfig config(default_preset().config);
+        config.set_key_value("filament_type", new ConfigOptionStrings({type}));
+        config.set_key_value("compatible_printers", new ConfigOptionStrings(targeted
+            ? std::vector<std::string>{"Elegoo Centauri Carbon 2 0.4 nozzle"} : std::vector<std::string>{}));
+        auto& preset = load_preset("", name, config, false);
+        preset.is_system = true;
+        preset.is_default = false;
+        preset.is_visible = false;
+        preset.is_compatible = compatible;
+    }
+};
+}
+
+TEST_CASE("CANVAS PLA automatically selects a hidden printer-specific generic over the library and branded presets", "[ElegooLink]")
+{
+    CanvasFilaments filaments;
+    filaments.add("Generic PLA @System", "PLA");
+    filaments.add("Generic PLA @Elegoo Centauri", "PLA", true);
+    filaments.add("Bambu PLA Basic @System", "PLA");
+    filaments.add("Generic PLA Silk @Elegoo Centauri", "PLA", true);
+    const auto* match = match_elegoo_canvas_preset({0, 0, "PLA", "#A03BF7"}, filaments);
+    REQUIRE(match);
+    CHECK(match->name == "Generic PLA @Elegoo Centauri");
+    for (const auto* color : {"#A03BF7", "#7C4C00", "#000000"}) {
+        const ElegooCanvasSlot slot{0, 1, "pla", color};
+        CHECK(match_elegoo_canvas_preset(slot, filaments) == match);
+    }
+}
+
+TEST_CASE("CANVAS falls back to the compatible library generic without inventing a filament brand or subtype", "[ElegooLink]")
+{
+    CanvasFilaments filaments;
+    filaments.add("Bambu PLA Basic @System", "PLA");
+    filaments.add("Generic PLA Silk @System", "PLA");
+    filaments.add("Generic PLA @Elegoo Centauri", "PLA", true, false);
+    const ElegooCanvasSlot slot{0, 0, "PLA", "#000000"};
+    CHECK_FALSE(match_elegoo_canvas_preset(slot, filaments));
+    filaments.add("Generic PLA @System", "PLA");
+    const auto* match = match_elegoo_canvas_preset(slot, filaments);
+    REQUIRE(match);
+    CHECK(match->name == "Generic PLA @System");
+    CHECK_FALSE(match_elegoo_canvas_preset({0, 0, "PLA-CF", "#000000"}, filaments));
+    CHECK_FALSE(match_elegoo_canvas_preset({0, 0, "", "#000000"}, filaments));
+    CHECK_FALSE(match_elegoo_canvas_preset({0, 0, "PLA", ""}, filaments));
+}
+
+TEST_CASE("CANVAS leaves equally preferred generic matches for review", "[ElegooLink]")
+{
+    CanvasFilaments filaments;
+    filaments.add("Generic PLA @System", "PLA");
+    filaments.add("Generic PLA @Elegoo Centauri", "PLA", true);
+    filaments.add("Generic PLA @Another tune", "PLA", true);
+    CHECK_FALSE(match_elegoo_canvas_preset({0, 0, "PLA", "#123456"}, filaments));
+}
+
+TEST_CASE("CANVAS ignores explicitly empty trays while retaining unknown loaded spools for review", "[ElegooLink]")
+{
+    auto data = canvas_fixture();
+    auto& trays = data["canvas_info"]["canvas_list"][0]["tray_list"];
+    trays[0]["status"] = 1;
+    trays[1]["status"] = 0;
+    trays[2]["status"] = 2;
+    const auto slots = parse_elegoo_canvas(data);
+    REQUIRE(slots.size() == 2);
+    CHECK(slots[0].color == "#AABBCC");
+    CHECK(slots[1].tray == 2);
+    CHECK(slots[1].color.empty());
+    CHECK(slots[1].material == "PETG");
+}
+
 TEST_CASE("CANVAS RGB color formats remain selectable without accepting malformed colors", "[ElegooLink]")
 {
     for (const auto* color : {"0xAABBCC", "0XaAbBcC", "#AABBCC", "aabbcc"}) {
@@ -398,7 +478,9 @@ TEST_CASE("Canceled CANVAS requests open no transport and empty slots retain no 
     auto data = canvas_fixture();
     data["canvas_info"]["canvas_list"][0]["tray_list"][0]["status"] = 0;
     const auto slots = parse_elegoo_canvas(nlohmann::json::parse(data.dump()));
-    REQUIRE(slots.size() == 3); CHECK(slots[0].material.empty()); CHECK(slots[0].color.empty());
+    REQUIRE(slots.size() == 2);
+    CHECK(slots[0].tray == 1);
+    CHECK(slots[1].tray == 2);
 }
 
 namespace {

@@ -520,12 +520,7 @@ std::vector<NativeCommand> build_command_catalog()
         wxGetApp().open_presetbundledialog();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
-    add_with_icon("sync_presets", L("Sync Presets"), L("Presets"), "printer_sync_ok", [](const std::string&) {
-        if (!wxGetApp().is_user_login())
-            return AppActionRunResult{AppActionRunResult::Level::Info, _L("Sign in to sync presets.")};
-        wxGetApp().restart_sync_user_preset();
-        return AppActionRunResult{AppActionRunResult::Level::Success};
-    });
+
 
     // ---- Import ----
     add_with_icon("import_file", L("Import 3MF/STL/STEP/SVG/OBJ/AMF"), L("Import"), "menu_open", [](const std::string&) {
@@ -633,7 +628,7 @@ std::vector<NativeCommand> build_command_catalog()
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
     add("install_plugin", L("Install Plugin"), L("Plugins"), [](const std::string&) {
-        open_plugin_hub();
+        wxGetApp().install_local_plugin();
         return AppActionRunResult{AppActionRunResult::Level::Success};
     });
     add("install_local_plugin", L("Install Local Plugin"), L("Plugins"), [](const std::string&) {

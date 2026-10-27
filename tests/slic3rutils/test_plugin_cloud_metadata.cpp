@@ -72,6 +72,35 @@ class stubpackage(orca.base):
 
 } // namespace
 
+TEST_CASE("Installed plugin storage remains available from the saved local user folder", "[LocalPluginStorage]")
+{
+    // Metadata registration and storage lookup do not initialize Python, discover
+    // packages, fetch manifests or start a transport.
+    ScopedDataDir data_dir_guard("saved-plugin-storage");
+    PluginManager& manager = PluginManager::instance();
+    struct ResetManager {
+        ~ResetManager() {
+            PluginManager::instance().set_cloud_user("");
+            PluginManager::instance().clear_cloud_plugin_metadata();
+        }
+    } reset;
+    const std::string key = "11111111-2222-3333-4444-555555555555";
+    PluginDescriptor descriptor;
+    descriptor.plugin_key = key;
+    descriptor.cloud = CloudPluginState{key, true, false, false, false};
+    manager.update_cloud_metadata({descriptor});
+    manager.set_cloud_agent(nullptr);
+    manager.set_cloud_user("saved-user");
+    const fs::path expected = fs::path(get_orca_plugins_dir()) / PLUGIN_DATA_DIR /
+                              PLUGIN_SUBSCRIBED_DIR / "saved-user" / key;
+    fs::create_directories(expected);
+    { std::ofstream saved((expected / "settings.txt").string()); saved << "retained"; }
+    CHECK(fs::path(manager.get_storage_dir(key)) == expected);
+    CHECK(fs::exists(expected / "settings.txt"));
+    manager.set_cloud_user("");
+    CHECK_THROWS(manager.get_storage_dir(key));
+}
+
 TEST_CASE("plugin latest version uses the authoritative catalog field", "[PluginDescriptor]")
 {
     PluginDescriptor descriptor;

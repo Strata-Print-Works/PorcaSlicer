@@ -1,7 +1,8 @@
 # Model library
 
-Porca's Library tab keeps reusable models and their supporting files beside the
-Prepare workspace. It is a native C++/wxWidgets page owned by MainFrame. Adding
+Porca's model-library page keeps reusable models and their supporting files beside
+the Prepare workspace. It is currently hidden from the tab bar. The native
+C++/wxWidgets page is owned by MainFrame. Adding
 geometry uses Plater's normal model-import path and an undo snapshot; opening a
 3MF project uses the existing project-open and compatibility review. Browsing,
 organizing and previewing the library do not change a plate's printer or settings.

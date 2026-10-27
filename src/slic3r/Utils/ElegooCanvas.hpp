@@ -80,6 +80,8 @@ inline std::vector<ElegooCanvasSlot> parse_elegoo_canvas(const nlohmann::json& r
                 throw std::runtime_error(L("The printer sent an unsupported CANVAS reply."));
             const auto tray = slot["tray_id"].get<unsigned>();
             if (!seen.insert({canvas, tray}).second) throw std::runtime_error(L("The printer reported duplicate filament slots."));
+            // Empty trays are not unknown spools and need no user decision.
+            if (slot.contains("status") && slot["status"].is_number_integer() && slot["status"] == 0) continue;
             std::string material, color;
             if (slot.contains("filament_type") && slot["filament_type"].is_string()) material = slot["filament_type"].get<std::string>();
             if (material.size() > 64 || std::any_of(material.begin(), material.end(), [](unsigned char c) { return c < 32; })) material.clear();

@@ -24,16 +24,16 @@ def select_artifacts(source):
         if not folder.is_dir():
             continue
         name = folder.name
-        if name.startswith("OrcaSlicer_Mac_universal_"):
+        if name.startswith("Porca_Mac_universal_"):
             key, pattern = "macOS_universal", "*.dmg"
-        elif name.startswith("OrcaSlicer_Windows_V"):
-            match = re.fullmatch(r"OrcaSlicer_Windows_V.+_(x64|arm64)(_portable)?", name)
+        elif name.startswith("Porca_Windows_V"):
+            match = re.fullmatch(r"Porca_Windows_V.+_(x64|arm64)(_portable)?", name)
             if not match:
                 raise ValueError(f"Unrecognized Windows artifact: {name}")
             arch, portable = match.groups()
             key = f"Windows_{arch}_{'portable' if portable else 'installer'}"
             pattern = None if portable else f"Porca_Windows_Installer_*_{arch}.exe"
-        elif name.startswith("OrcaSlicer_Linux_ubuntu_"):
+        elif name.startswith("Porca_Linux_ubuntu_"):
             key = "Linux_aarch64" if "_aarch64_" in name else "Linux_x86_64"
             pattern = "*.AppImage"
         else:

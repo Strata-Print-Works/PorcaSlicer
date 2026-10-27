@@ -200,7 +200,6 @@ NetworkAgent::NetworkAgent(std::shared_ptr<ICloudServiceAgent> cloud_agent, std:
     : m_printer_agent(std::move(printer_agent))
 {
     if (!cloud_agent) {
-        BOOST_LOG_TRIVIAL(warning) << "Null cloud agent provided, skipping agent initialization";
         return;
     }
     if (cloud_agent->get_id().empty()) {

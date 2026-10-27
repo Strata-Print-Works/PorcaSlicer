@@ -8,7 +8,7 @@ APPIMAGETOOL="${SCRIPT_DIR}/appimagetool.AppImage"
 RUNTIME="${SCRIPT_DIR}/runtime-$(uname -m)"
 
 
-APP_IMAGE="@SLIC3R_APP_KEY@_Linux_V@SoftFever_VERSION@.AppImage"
+APP_IMAGE="@SLIC3R_APP_DISPLAY_NAME@_Linux_V@SoftFever_VERSION@.AppImage"
 
 download() {
   local url="$1" destination="$2"
@@ -39,7 +39,7 @@ mkdir -p usr/share/icons/hicolor/192x192/apps
 cp resources/images/@SLIC3R_APP_KEY@_192px.png usr/share/icons/hicolor/192x192/apps/@SLIC3R_APP_KEY@.png
 cat <<EOF > com.orcaslicer.@SLIC3R_APP_KEY@.desktop
 [Desktop Entry]
-Name=@SLIC3R_APP_KEY@
+Name=@SLIC3R_APP_DISPLAY_NAME@
 Exec=AppRun %F
 Icon=@SLIC3R_APP_KEY@
 Type=Application
@@ -67,5 +67,5 @@ else
   "$APPIMAGETOOL" --runtime-file "$RUNTIME" . $([ -n "${container:-}" ] && echo '--appimage-extract-and-run')
 fi
 
-mv "@SLIC3R_APP_KEY@-$(uname -m).AppImage" "${APP_IMAGE}"
+mv "@SLIC3R_APP_DISPLAY_NAME@-$(uname -m).AppImage" "${APP_IMAGE}"
 chmod +x "${APP_IMAGE}"

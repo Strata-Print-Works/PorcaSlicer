@@ -16,6 +16,8 @@
 #include "GUI_Utils.hpp"
 #include "MsgDialog.hpp"
 #include "../Utils/PrintHost.hpp"
+#include "../Utils/SnapmakerPrintTask.hpp"
+#include <array>
 #include "../Utils/Flashforge.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/ProjectTask.hpp"
@@ -65,6 +67,27 @@ protected:
     wxArrayString m_storage_names;
 };
 
+
+class SnapmakerPrintHostSendDialog : public PrintHostSendDialog
+{
+public:
+    SnapmakerPrintHostSendDialog(const boost::filesystem::path& path, PrintHostPostUploadActions actions,
+        const wxArrayString& groups, const wxArrayString& paths, const wxArrayString& names, bool switch_tab,
+        SnapmakerPrinterState state, std::vector<SnapmakerPrintFilament> filaments);
+    void init() override;
+    void EndModal(int result) override;
+    std::map<std::string, std::string> extendedInfo() const override;
+
+private:
+    void update_choices();
+    SnapmakerPrintTask selected_task() const;
+    SnapmakerPrinterState m_state;
+    SnapmakerPrintTask m_task;
+    std::vector<ComboBox*> m_assignments;
+    CheckBox* m_calibrate = nullptr;
+    std::array<CheckBox*, 4> m_calibrate_heads {};
+    wxStaticText* m_assignment_warning = nullptr;
+};
 
 class PrintHostQueueDialog : public DPIDialog
 {

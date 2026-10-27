@@ -27,6 +27,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # Each entry is (suite, tag, reviewed test sources). Keep filters narrow; do not
 # add transport integration tests just because they use the same feature name.
 GROUPS = {
+    "accounts": [
+        ("slic3rutils", "LocalAccounts", ["tests/slic3rutils/test_device_manager_integration.cpp"]),
+        ("slic3rutils", "LocalPluginStorage", ["tests/slic3rutils/test_plugin_cloud_metadata.cpp"]),
+    ],
+    "u1": [("porca_unit", "SnapmakerPrintTask", ["tests/slic3rutils/test_snapmaker_print_task.cpp"])],
     "comparison": [
         ("porca_unit", "SliceComparison", ["tests/libslic3r/test_slice_comparison.cpp"]),
         ("libslic3r", "SliceComparisonSnapshot", ["tests/libslic3r/test_slice_comparison_snapshot.cpp"]),
@@ -44,6 +49,7 @@ GROUPS = {
         ("porca_unit", "PrinterSessions", ["tests/slic3rutils/test_printer_sessions.cpp"]),
         ("slic3rutils", "NetworkDeviceSessions", ["tests/slic3rutils/test_network_device_sessions.cpp"]),
         ("slic3rutils", "DeviceOwnership", ["tests/slic3rutils/test_device_manager_integration.cpp"]),
+        ("slic3rutils", "DeviceRequestFeedback", ["tests/slic3rutils/test_device_manager_integration.cpp"]),
         ("slic3rutils", "WebMediaController", ["tests/slic3rutils/test_web_media_controller.cpp"]),
         ("slic3rutils", "MoonrakerPrinterAgent", ["tests/slic3rutils/test_moonraker_printer_agent.cpp"]),
         ("slic3rutils", "Flashforge", ["tests/slic3rutils/test_printhost.cpp"]),
@@ -70,7 +76,8 @@ GROUPS = {
         ("libslic3r", "PlatePrintSetup", ["tests/libslic3r/test_plate_print_setup.cpp",
                                           "tests/libslic3r/test_model.cpp"]),
         ("libslic3r", "ProjectPlateImport", ["tests/libslic3r/test_project_plate_import.cpp",
-                                             "tests/libslic3r/test_plate_print_setup.cpp"]),
+                                             "tests/libslic3r/test_plate_print_setup.cpp",
+                                             "tests/libslic3r/test_config.cpp"]),
     ],
     "production": [
         ("libslic3r", "ProductionLedger", ["tests/libslic3r/test_production_ledger.cpp",

@@ -7,6 +7,7 @@
 #include "slic3r/Utils/IPrinterAgent.hpp"
 #include "slic3r/Utils/CloudProvider.hpp"
 #include <slic3r/Utils/NetworkAgent.hpp>
+#include <slic3r/Utils/NetworkAgentFactory.hpp>
 #include <slic3r/Utils/OrcaCloudServiceAgent.hpp>
 #include <slic3r/Utils/OrcaPrinterAgent.hpp>
 
@@ -16,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace Slic3r;
 using json = nlohmann::json;
@@ -53,6 +55,20 @@ private:
     AgentInfo m_info;
 };
 
+// OrcaPrinterAgent's connection/callback methods are inert stubs. These overrides
+// reject requests without opening a transport, starting workers or launching wx.
+class UnsupportedPrinterAgent final : public OrcaPrinterAgent
+{
+public:
+    explicit UnsupportedPrinterAgent(int error) : OrcaPrinterAgent(""), m_error(error) {}
+    AgentInfo get_agent_info() override { return {"unsupported", "Offline test", "1", ""}; }
+    int send_message(std::string, std::string, int, int) override { return m_error; }
+    int send_message_to_printer(std::string, std::string, int, int) override { return m_error; }
+
+private:
+    int m_error;
+};
+
 struct ScopedAppConfig
 {
     AppConfig config;
@@ -76,6 +92,61 @@ std::string machine_list_response(const std::string& provider, const std::string
 }
 
 } // namespace
+
+TEST_CASE("Cloud accounts are optional and legacy Orca entries are ignored", "[LocalAccounts]")
+{
+    AppConfig config;
+    CHECK(config.get_cloud_providers().empty());
+    config.set_cloud_providers({"orca", "bbl"});
+    CHECK(config.get_cloud_providers() == std::vector<std::string>{"bbl"});
+    CHECK_FALSE(config.has_cloud_provider("orca"));
+    config.remove_cloud_provider("bbl");
+    CHECK(config.get_cloud_providers().empty());
+    config.add_cloud_provider("orca");
+    CHECK(config.get_cloud_providers().empty());
+    config.add_cloud_provider("bbl");
+    CHECK(config.has_cloud_provider("bbl"));
+}
+
+TEST_CASE("Old cloud settings do not start Orca services or change the local preset folder", "[LocalAccounts]")
+{
+    AppConfig config;
+    config.set("preset_folder", "saved-local-presets");
+    config.set_cloud_providers({"orca"});
+    config.set_bool("sync_user_preset", true);
+    CHECK(NetworkAgentFactory::create_cloud_agent(ORCA_CLOUD_PROVIDER, "") == nullptr);
+    auto network = create_agent_from_config("", &config);
+    REQUIRE(network != nullptr);
+    CHECK(network->get_cloud_agent() == nullptr);
+    CHECK_FALSE(network->is_user_login());
+    CHECK(config.get("preset_folder") == "saved-local-presets");
+}
+
+TEST_CASE("Automatic printer requests preserve errors without opening control warnings", "[DeviceManager][DeviceRequestFeedback]")
+{
+    const int error = GENERATE(ORCA_NETWORK_ERR_CMD_NOT_SUPPORTED, ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE);
+    const std::string connection = GENERATE(std::string("lan"), std::string("cloud"));
+    const bool background = GENERATE(false, true);
+    auto printer = std::make_shared<UnsupportedPrinterAgent>(error);
+    NetworkAgent network(nullptr, printer);
+    PrinterConnectionParams params;
+    params.dev_id = "offline-device";
+    REQUIRE(network.connect_printer(params, printer) == 0);
+    if (background)
+        network.set_printer_agent(std::make_shared<TestPrinterAgent>("other-printer"));
+    MachineObject machine(nullptr, &network, "Offline printer", params.dev_id, "");
+    machine.dev_connection_type = connection;
+
+    // No wx application runs here: reaching show_unsupported_dlg would attempt to
+    // construct a window. A retained LAN session rejects credential requests in
+    // NetworkAgent before the fake transport is called.
+    CHECK(machine.command_get_version() == error);
+    CHECK(machine.command_get_version(false) == error);
+    const int access_error = background && connection == "lan" ? ORCA_NETWORK_ERR_CAP_NOT_AVAILABLE : error;
+    CHECK(machine.command_get_access_code() == access_error);
+    CHECK(machine.command_request_push_all(true) == error);
+    CHECK_FALSE(machine.m_unsupported_dlg_shown);
+}
 
 TEST_CASE("Network agent stamps user-machine responses with request context", "[DeviceManager][integration]")
 {

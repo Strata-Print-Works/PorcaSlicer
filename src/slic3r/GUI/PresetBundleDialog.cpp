@@ -123,57 +123,7 @@ bool PresetBundleDialog::CompareVer(const std::string& a, const std::string& b)
     return false;
 }
 
-bool PresetBundleDialog::CheckUpdateCloud()
-{
-    bool has_update = false;
-    if (!wxGetApp().getAgent() || !wxGetApp().getAgent()->is_user_login())
-        return false;
-    auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(wxGetApp().getAgent()->get_cloud_agent());
-    if (!orca_agent)
-        return false;
-
-    BOOST_LOG_TRIVIAL(info) << "Preset Bundle Dialog: checking for bundle updates";
-
-    // Fetch all subscribed bundles from cloud
-    std::vector<std::pair<std::string, std::string>> subscribed_bundles;
-    std::vector<std::string> notfound;
-    std::vector<std::string> unauthorized;
-    int result = orca_agent->get_subscribed_bundles(&subscribed_bundles, notfound, unauthorized);
-
-    if (result != 0) {
-        BOOST_LOG_TRIVIAL(warning) << "Preset Bundle Dialog: failed to fetch subscribed bundles, result=" << result;
-        return false;
-    }
-
-    // if unauthorized or not found it should be a warning icon to the ui shit
-
-    // check bundle copy with the subscribed bundles
-    for (auto& b : subscribed_bundles) {
-        if (bundle_copy.find(b.first) != bundle_copy.end()) {
-            if (CompareVer(bundle_copy[b.first].version, b.second)) {
-                bundle_copy[b.first].update_available = true;
-                bundle_copy[b.first].unauthorized     = false;
-                has_update                            = true;
-
-            } else {
-                // we count it as an update to the UI if we need to update the unauthorized state
-                if (bundle_copy[b.first].unauthorized) {
-                    bundle_copy[b.first].unauthorized = false;
-                    has_update                        = true;
-                }
-                bundle_copy[b.first].update_available = false;
-            }
-        }
-    }
-
-    for (auto& a : unauthorized) {
-        if (bundle_copy.find(a) != bundle_copy.end()) {
-            bundle_copy[a].unauthorized = true;
-            has_update                  = true;
-        }
-    }
-    return has_update;
-}
+bool PresetBundleDialog::CheckUpdateCloud() { return false; }
 
 void PresetBundleDialog::StopDialogWorker()
 {
@@ -348,7 +298,7 @@ void PresetBundleDialog::ListBundles()
         json temp;
         temp["id"]          = metadata.id;
         temp["name"]        = metadata.name;
-        temp["type"]        = metadata.bundle_type == Subscribed ? "Subscribed" : metadata.bundle_type == Local ? "Local" : "Default";
+        temp["type"]        = metadata.bundle_type == BundleType::Default ? "Default" : "Local";
         temp["author"]      = metadata.author;
         temp["version"]     = metadata.version;
         temp["description"] = metadata.description;
@@ -358,9 +308,9 @@ void PresetBundleDialog::ListBundles()
         temp["filaments"] = strip_prefix(metadata.filament_presets);
         temp["processes"]   = strip_prefix(metadata.print_presets);
 
-        temp["update_available"]   = metadata.update_available;
-        temp["unauthorized"]       = metadata.unauthorized;
-        res["auto_update_enabled"] = app_config->get_bool("preset_bundle_auto_update");
+        temp["update_available"]   = false;
+        temp["unauthorized"]       = false;
+        res["auto_update_enabled"] = false;
 
         res["data"].push_back(std::move(temp));
     }

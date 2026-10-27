@@ -6,6 +6,7 @@ endif ()
 
 get_filename_component(_TEST_NAME ${CMAKE_CURRENT_LIST_DIR} NAME)
 add_executable(${_TEST_NAME}_tests
+    test_snapmaker_print_task.cpp
     test_model_library.cpp
     ${_TEST_NAME}_tests_main.cpp
     test_bambu_filament_ids.cpp

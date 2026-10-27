@@ -16,7 +16,7 @@ assert '--runtime-file' in args, 'packaging must not download its own runtime'
 runtime = pathlib.Path(args[args.index('--runtime-file') + 1])
 assert runtime.read_bytes() == b'runtime fixture'
 assert pathlib.Path('usr/share/metainfo/com.orcaslicer.OrcaSlicer.metainfo.xml').read_text() == 'metadata fixture'
-pathlib.Path('OrcaSlicer-' + os.environ['FAKE_ARCH'] + '.AppImage').write_bytes(b'package fixture')
+pathlib.Path('Porca-' + os.environ['FAKE_ARCH'] + '.AppImage').write_bytes(b'package fixture')
 """
 
 
@@ -67,7 +67,7 @@ else:
     def render(self, name):
         text = (TEMPLATES / name).read_text()
         for key, value in {"CMAKE_SOURCE_DIR": str(self.source), "SLIC3R_APP_KEY": "OrcaSlicer",
-                           "SLIC3R_APP_CMD": "orca-slicer", "SoftFever_VERSION": "test"}.items():
+                           "SLIC3R_APP_CMD": "orca-slicer", "SLIC3R_APP_DISPLAY_NAME": "Porca", "SoftFever_VERSION": "test"}.items():
             text = text.replace("@" + key + "@", value)
         return text
 
@@ -92,7 +92,9 @@ else:
                 for iteration in range(2):
                     result, appdir = self.package(arch + str(iteration), env)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual((appdir / "OrcaSlicer_Linux_Vtest.AppImage").read_bytes(), b"package fixture")
+                    self.assertEqual((appdir / "Porca_Linux_Vtest.AppImage").read_bytes(), b"package fixture")
+                    desktop = (appdir / "com.orcaslicer.OrcaSlicer.desktop").read_text()
+                    self.assertIn("Name=Porca\n", desktop)
                 urls = (self.root / "downloads").read_text().splitlines()
                 self.assertEqual(sum(url.endswith("runtime-" + arch) for url in urls), 1)
                 self.assertEqual(sum(url.endswith("appimagetool-" + arch + ".AppImage") for url in urls), 1)
@@ -101,12 +103,12 @@ else:
         result, appdir = self.package("failed", {**self.env, "FAIL_DOWNLOAD": "1"})
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.build / "appimagetool.AppImage").exists())
-        self.assertFalse((appdir / "OrcaSlicer_Linux_Vtest.AppImage").exists())
+        self.assertFalse((appdir / "Porca_Linux_Vtest.AppImage").exists())
 
     def test_failed_release_redirect_gets_a_fresh_url(self):
         result, appdir = self.package("fresh redirect", {**self.env, "FAIL_FIRST_URL": "1"})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue((appdir / "OrcaSlicer_Linux_Vtest.AppImage").is_file())
+        self.assertTrue((appdir / "Porca_Linux_Vtest.AppImage").is_file())
         urls = (self.root / "downloads").read_text().splitlines()
         self.assertEqual(len(urls), 4)
         self.assertEqual(sum("?porca_download=" in url for url in urls), 2)
