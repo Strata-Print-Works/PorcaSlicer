@@ -261,6 +261,7 @@ TEST_CASE("Delayed discovery keeps its originating backend after another view is
     auto a = std::make_shared<FakeTransport>("first"), b = std::make_shared<FakeTransport>("second");
     Slic3r::NetworkAgent network(nullptr, a);
     std::string notice;
+    network.set_queue_on_main_fn([](std::function<void()> fn) { fn(); });
     network.set_on_ssdp_msg_fn([&](std::string payload) { notice = std::move(payload); });
     network.connect_printer(params("one"));
     auto pending_discovery = a->discovery;
@@ -277,6 +278,7 @@ TEST_CASE("Origin stamping keeps each payload intact and drops non-object payloa
     auto a = std::make_shared<FakeTransport>("first");
     Slic3r::NetworkAgent network(nullptr, a);
     std::vector<std::string> notices;
+    network.set_queue_on_main_fn([](std::function<void()> fn) { fn(); });
     network.set_on_ssdp_msg_fn([&](std::string payload) { notices.push_back(std::move(payload)); });
     network.connect_printer(params("one"));
     a->discovery(" { } ");

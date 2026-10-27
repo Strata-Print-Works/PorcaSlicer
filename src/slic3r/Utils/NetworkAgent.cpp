@@ -211,6 +211,7 @@ NetworkAgent::NetworkAgent(std::shared_ptr<ICloudServiceAgent> cloud_agent, std:
 
 NetworkAgent::~NetworkAgent()
 {
+    m_discovery_handler.reset();
     // Collect IDs first: a session snapshot would keep each transport alive here.
     std::vector<std::string> ids;
     for (const auto& session : m_printer_sessions.sessions()) ids.push_back(session.params.dev_id);
@@ -231,6 +232,7 @@ void NetworkAgent::set_printer_agent(std::shared_ptr<IPrinterAgent> printer_agen
     auto old_printer_agent = get_printer_agent();
     if (printer_agent == old_printer_agent) return;
     m_user_machine_list_generation.fetch_add(1);
+    m_discovery_session = std::make_shared<int>(0);
 
     std::atomic_store(&m_printer_agent, std::move(printer_agent));
 
@@ -294,13 +296,7 @@ void NetworkAgent::apply_printer_callbacks(const std::shared_ptr<IPrinterAgent>&
             if (PrinterSessions::accepts(session, id)) fn(id, message);
         };
     }
-    auto discovery = callbacks.on_ssdp_msg_fn;
-    // Stamp origin before GUI queuing; the selected backend may change before delivery.
-    // Discovery is only meaningful as an object, so an unattributable payload is dropped.
-    if (discovery) discovery = [fn = discovery, origin](std::string payload) {
-        if (stamp_printer_agent_origin(payload, origin)) fn(std::move(payload));
-    };
-    printer_agent->set_on_ssdp_msg_fn(discovery);
+    apply_discovery_callback(printer_agent, callbacks);
     printer_agent->set_on_printer_connected_fn(connected);
     printer_agent->set_on_subscribe_failure_fn(subscribe_failure);
     printer_agent->set_on_message_fn(cloud_message);
@@ -383,6 +379,32 @@ std::shared_ptr<IPrinterAgent> NetworkAgent::printer_agent_for(const std::string
     // Unknown LAN targets never fall through to the active transport. Cloud
     // APIs explicitly retain their separate, device-addressed dispatch below.
     return nullptr;
+}
+
+int NetworkAgent::apply_discovery_callback(const std::shared_ptr<IPrinterAgent>& printer_agent,
+                                          const PrinterCallbacks& callbacks)
+{
+    if (!callbacks.on_ssdp_msg_fn)
+        return printer_agent->set_on_ssdp_msg_fn(nullptr);
+
+    const auto origin = nlohmann::json(printer_agent->get_agent_info().id).dump();
+    const std::weak_ptr<int> session = m_discovery_session;
+    const std::weak_ptr<int> handler = m_discovery_handler;
+    std::shared_ptr<PrinterSessionToken> retained;
+    for (const auto& candidate : m_printer_sessions.sessions())
+        if (candidate.agent == printer_agent) { retained = candidate.token; break; }
+    const auto accepts = [session, handler, retained] {
+        return !handler.expired() && (!session.expired() || (retained && retained->valid));
+    };
+    return printer_agent->set_on_ssdp_msg_fn(
+        [accepts, origin, fn = callbacks.on_ssdp_msg_fn, queue = callbacks.queue_on_main_fn](std::string payload) {
+            if (!accepts() || !queue || !stamp_printer_agent_origin(payload, origin))
+                return;
+            queue([accepts, fn, payload = std::move(payload)] {
+                // A retained device keeps its original backend when the detail view changes.
+                if (accepts()) fn(payload);
+            });
+        });
 }
 
 std::shared_ptr<ICloudServiceAgent> NetworkAgent::get_cloud_agent(const std::string& provider) const
@@ -957,6 +979,8 @@ int NetworkAgent::get_mw_user_4ulist(int seed, int limit, std::function<void(std
 int NetworkAgent::set_on_ssdp_msg_fn(OnMsgArrivedFn fn)
 {
     const auto active_printer = get_printer_agent();
+    m_discovery_session = std::make_shared<int>(0);
+    m_discovery_handler = std::make_shared<int>(0);
     m_printer_callbacks.on_ssdp_msg_fn = fn;
     refresh_printer_callbacks();
     return active_printer ? 0 : -1;

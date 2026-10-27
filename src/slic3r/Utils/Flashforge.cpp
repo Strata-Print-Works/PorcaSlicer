@@ -184,14 +184,14 @@ bool Flashforge::validate_local_api_response(const std::string& response_body, w
             message = parsed["msg"].get<std::string>();
 
         if (message.empty())
-            message = "Request failed";
+            message = _u8L("Request failed");
 
         BOOST_LOG_TRIVIAL(warning) << boost::format("[Flashforge HTTP] printer refused the request: code %1%: %2%") % result_code % message;
         // Code 2 ("Printer is busy") refuses a new job, e.g. until a finished
         // print is cleared and confirmed on the printer's screen.
         error_msg = result_code == 2 ?
             _L("The printer is busy. If a print just finished, clear the bed and confirm on the printer's screen, then try again.") :
-            GUI::from_u8((boost::format("Flashforge local API error %1%: %2%") % result_code % message).str());
+            GUI::from_u8((boost::format(_u8L("Flashforge local API error %1%: %2%")) % result_code % message).str());
         return false;
     }
 

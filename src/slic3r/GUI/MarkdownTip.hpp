@@ -23,7 +23,7 @@ class MarkdownTip : public wxPopupTransientWindow
 public:
     // `anchor` is the screen rect the tip should sit beside — the hovered row,
     // spanning the width of its panel, so the tip never lands on the fields.
-    static bool ShowTip(std::string const &tip, std::string const &tooltip, wxRect const &anchor);
+    static bool ShowTip(std::string const &tip, std::string const &tooltip, wxRect const &anchor, const std::string& availability = {});
 
     static void ExitTip();
 
@@ -49,7 +49,7 @@ private:
 
     void LoadStyle();
 
-    bool ShowTip(wxRect const &anchor, std::string const &tip, std::string const & tooltip);
+    bool ShowTip(wxRect const &anchor, std::string const &tip, std::string const & tooltip, const std::string& availability);
 
     // Where a tip of `size` goes for the current anchor, kept on one display.
     wxPoint Place(wxSize const &size) const;
@@ -76,6 +76,8 @@ private:
 private:
     wxWebView * _tipView = nullptr;
     std::string _lastTip;
+    std::string _lastTooltip;
+    std::string _lastAvailability;
     std::string _pendingScript = " ";
     std::string _language;
     wxRect _anchor;

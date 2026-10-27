@@ -1,3 +1,4 @@
+#include "PartPlate.hpp"
 #include "ProjectTabs.hpp"
 
 #include "GUI_App.hpp"

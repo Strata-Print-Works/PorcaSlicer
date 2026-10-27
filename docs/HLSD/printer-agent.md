@@ -166,8 +166,14 @@ the selected agent instance, which represents one physical LAN printer connectio
 ## Agent registration and selection
 
 `NetworkAgentFactory` maintains the printer-agent registry. Each registry entry contains an agent ID,
-a display name, and a factory function. Built-in agents register during application initialization.
-Python printer-agent capabilities register dynamically and contribute an agent ID and factory entry.
+a display name, a factory function, and whether the native Device and Calibration tabs apply to the
+agent's printers. Built-in agents register during application initialization. Python printer-agent
+capabilities register dynamically and contribute an agent ID and factory entry.
+
+The tab flag is read from the registry rather than the live agent because the main window lays out its
+tabs before the newly selected preset's agent is installed. It defaults to true. An agent that clears
+it is one whose printers have their own web interface and nothing the Bambu-shaped Device and
+Calibration tabs can show; for those printers the web Device page takes the Device tab's place.
 
 The selected printer preset contains the printer-agent choice. If no explicit choice is stored, the
 application preserves the existing default behavior: Bambu presets select the Bambu agent and other
@@ -248,9 +254,11 @@ Reconnect and disconnect invalidate the previous generation immediately without 
 workers on the caller's thread. The connection worker joins the previous status worker before
 clearing its cache or starting another stream. It checks the generation after HTTP responses and
 before starting a stream; queued connection notifications check it again when delivered. Shutdown
-invalidates notifications and joins both workers, so neither can outlive the agent. WebSocket retry
-delays wake on cancellation. In-flight synchronous transport operations still depend on the
-transport returning; this ownership rule does not make those operations asynchronously cancellable.
+invalidates notifications and joins both workers, so neither can outlive the agent. WebSocket
+operations and retry delays wake on cancellation; closing a stream has a bounded deadline.
+HTTP requests check cancellation during progress callbacks and retain connection and total
+timeouts. Five consecutive unanswered WebSocket attempts report lost status to the saved-device
+owner. Pong frames keep the transport alive without republishing cached telemetry as a new reading.
 
 The shared Moonraker path (including its Snapmaker, Creality and Qidi subclasses)
 requires a recognizable `/server/info` result and a nonempty object-status snapshot

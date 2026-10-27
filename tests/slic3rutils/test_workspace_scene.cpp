@@ -796,3 +796,24 @@ TEST_CASE("Stage title controls are drawn and picked inside one title bar", "[Wo
     CHECK(area.contains(frame.min));
     CHECK_FALSE(WorkspaceStyle::stage_display_area(BoundingBoxf()).defined);
 }
+
+TEST_CASE("An inactive plate checks collision volumes from its own printer setup", "[WorkspaceScene][Regression]")
+{
+    Model model;
+    auto* object = model.add_object();
+    object->add_volume(make_cube(10., 10., 10.));
+    object->add_instance()->set_offset(Vec3d(20., 20., 0.));
+    const Pointfs bed{{0., 0.}, {200., 0.}, {200., 200.}, {0., 200.}};
+    Slic3r::GUI::PartPlateList plates(200, 200, 200., nullptr, &model, ptFFF);
+    plates.set_shapes(bed, {}, {}, {}, {}, "", 0.f, 0.f);
+    auto* plate = plates.get_plate(0);
+    plate->set_unselected();
+    auto& config = plate->print_setup().config;
+    config = DynamicPrintConfig::full_print_config();
+    config.set_key_value("bed_exclude_area", new ConfigOptionPoints());
+    config.set_key_value("bed_exclude_volume_mode", new ConfigOptionEnum<BedExcludeVolumeMode>(BedExcludeVolumeMode::Shared));
+    config.set_key_value("bed_exclude_volumes", new ConfigOptionString("0..20;15x15,40x15,40x40,15x40"));
+    CHECK(plate->check_outside(0, 0));
+    config.set_key_value("bed_exclude_volumes", new ConfigOptionString("30..40;15x15,40x15,40x40,15x40"));
+    CHECK_FALSE(plate->check_outside(0, 0));
+}

@@ -27,6 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # Each entry is (suite, tag, reviewed test sources). Keep filters narrow; do not
 # add transport integration tests just because they use the same feature name.
 GROUPS = {
+    "branding": [
+        ("slic3rutils", "Branding", ["tests/slic3rutils/test_branding.cpp"]),
+        ("slic3rutils", "DesignSystem", ["tests/slic3rutils/test_branding.cpp"]),
+    ],
     "accounts": [
         ("slic3rutils", "LocalAccounts", ["tests/slic3rutils/test_device_manager_integration.cpp"]),
         ("slic3rutils", "LocalPluginStorage", ["tests/slic3rutils/test_plugin_cloud_metadata.cpp"]),
@@ -47,11 +51,12 @@ GROUPS = {
         ("porca_unit", "PluginAgentOwner", ["tests/slic3rutils/test_plugin_agent_owner.cpp"]),
         ("slic3rutils", "BambuDeviceSessions", ["tests/slic3rutils/test_bambu_device_sessions.cpp"]),
         ("porca_unit", "PrinterSessions", ["tests/slic3rutils/test_printer_sessions.cpp"]),
+        ("slic3rutils", "NetworkDiscovery", ["tests/slic3rutils/test_network_discovery.cpp"]),
         ("slic3rutils", "NetworkDeviceSessions", ["tests/slic3rutils/test_network_device_sessions.cpp"]),
         ("slic3rutils", "DeviceOwnership", ["tests/slic3rutils/test_device_manager_integration.cpp"]),
         ("slic3rutils", "DeviceRequestFeedback", ["tests/slic3rutils/test_device_manager_integration.cpp"]),
         ("slic3rutils", "WebMediaController", ["tests/slic3rutils/test_web_media_controller.cpp"]),
-        ("slic3rutils", "MoonrakerPrinterAgent", ["tests/slic3rutils/test_moonraker_printer_agent.cpp"]),
+        ("slic3rutils", "MoonrakerOffline", ["tests/slic3rutils/test_moonraker_printer_agent.cpp"]),
         ("slic3rutils", "Flashforge", ["tests/slic3rutils/test_printhost.cpp"]),
     ],
     "layout": [
@@ -102,6 +107,14 @@ GROUPS = {
     ],
     "slicing": [
         ("libslic3r", "PlateSliceBatch", ["tests/libslic3r/test_plate_slice_batch.cpp"]),
+    ],
+    "formats": [("libslic3r", "3mf", ["tests/libslic3r/test_3mf.cpp", "tests/libslic3r/test_plate_print_setup.cpp"])],
+    "exclusions": [
+        ("libslic3r", "ExclusionVolume", ["tests/libslic3r/test_exclusion_volumes.cpp",
+                                         "tests/libslic3r/test_3mf.cpp", "tests/libslic3r/test_appconfig.cpp",
+                                         "tests/libslic3r/test_arrange.cpp"]),
+        ("fff_print", "ExclusionVolume", ["tests/fff_print/test_exclusion_volumes.cpp",
+                                         "tests/fff_print/test_print.cpp"]),
     ],
     "discovery": [
         ("libslic3r", "ElegooDiscovery", ["tests/libslic3r/test_elegoo_discovery.cpp"]),
