@@ -328,8 +328,6 @@ Discovery and status checks do not establish print readiness. Native controls an
 
 ### Additional development work
 
-The **native model library is currently hidden from the tab bar**. Its implementation includes collections, tags, favorites, search, previews, duplicate detection, versions, watched folders, print history and optional online enrichment. It is not presented as an available main-tab workflow.
-
 Current development also includes **Snapmaker U1 send-time toolhead assignments and selective flow calibration**, with checks against reported materials and nozzles, and **removal of the Orca Cloud dependency** while retaining local presets and installed plugins. These changes are not a promise of availability in an existing preview download; check the release's source revision and notes.
 
 CAD/Design, customizable keyboard shortcuts, section views and the advanced infill tools already in the imported Orca base remain inherited capabilities. They are not counted here as Porca-exclusive additions.
